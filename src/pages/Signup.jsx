@@ -2,12 +2,12 @@ import React, { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import Card from "../components/Card.jsx";
-import TextField from "../components/TextField.jsx";
 
 export default function Signup({ onSwitch }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -17,16 +17,16 @@ export default function Signup({ onSwitch }) {
     setBusy(true);
     try {
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-
-      await setDoc(
-        doc(db, "users", cred.user.uid),
-        {
-          email: cred.user.email,
-          createdAt: serverTimestamp(),
-          lastFetchAt: null
-        },
-        { merge: true }
-      );
+      
+      // Initialize the user document with root-level fields for easy iteration
+      await setDoc(doc(db, "users", cred.user.uid), {
+        email: cred.user.email,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        fullName: `${firstName.trim()} ${lastName.trim()}`,
+        createdAt: serverTimestamp(),
+        lastFetchAt: null
+      }, { merge: true });
     } catch (e2) {
       setErr(e2.message || "Signup failed");
     } finally {
@@ -35,53 +35,106 @@ export default function Signup({ onSwitch }) {
   }
 
   return (
-    <div className="grid lg:grid-cols-2 gap-6 items-start">
-      <Card>
-        <h1 className="text-2xl font-semibold">Create account</h1>
-        <p className="text-sm text-zinc-400 mt-1">Email + password.</p>
+    <div className="flex h-screen w-full overflow-hidden bg-white">
+      {/* Left Section: Centered Form Container */}
+      <div className="flex w-full flex-col justify-center px-4 py-12 sm:px-6 lg:w-[45%] lg:flex-none lg:px-20 xl:px-24">
+        <div className="mx-auto w-full max-w-sm">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight text-gray-900">
+              Create account
+            </h2>
+            <p className="mt-2 text-sm text-gray-500">
+              Already have an account?{' '}
+              <button 
+                onClick={onSwitch} 
+                className="font-semibold text-indigo-600 hover:text-indigo-500"
+              >
+                Sign in instead
+              </button>
+            </p>
+          </div>
 
-        <form onSubmit={onSubmit} className="mt-6 space-y-3">
-          <TextField
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-          <TextField
-            label="Password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={6}
-          />
+          <div className="mt-10">
+            <form onSubmit={onSubmit} className="space-y-6">
+              {/* Name Fields Row */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-900">First name</label>
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      required
+                      value={firstName}
+                      onChange={(e) => setFirstName(e.target.value)}
+                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-900">Last name</label>
+                  <div className="mt-2">
+                    <input
+                      type="text"
+                      required
+                      value={lastName}
+                      onChange={(e) => setLastName(e.target.value)}
+                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
 
-          {err ? <div className="text-red-400 text-sm">{err}</div> : null}
+              <div>
+                <label className="block text-sm font-medium text-gray-900">Email address</label>
+                <div className="mt-2">
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                  />
+                </div>
+              </div>
 
-          <button
-            disabled={busy}
-            className="w-full px-3 py-2 rounded-xl bg-zinc-100 text-black font-medium hover:bg-white transition disabled:opacity-50"
-          >
-            {busy ? "Creating…" : "Create account"}
-          </button>
-        </form>
+              <div>
+                <label className="block text-sm font-medium text-gray-900">Password</label>
+                <div className="mt-2">
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                  />
+                </div>
+              </div>
 
-        <button
-          onClick={onSwitch}
-          className="mt-4 text-sm text-zinc-400 hover:text-zinc-200 transition"
-        >
-          Already have an account? Login →
-        </button>
-      </Card>
+              {err && <div className="text-red-500 text-sm font-medium">{err}</div>}
 
-      <Card>
-        <h2 className="font-semibold">Next</h2>
-        <p className="mt-3 text-sm text-zinc-400">
-          After creating your account, add your Greenhouse links on the dashboard.
-          They’ll appear in your profile immediately after saving.
-        </p>
-      </Card>
+              <div>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="btn-primary w-full py-2.5 text-base"
+                >
+                  {busy ? "Creating account..." : "Register"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      {/* Right Section: Visual Panel */}
+      <div className="relative hidden w-0 flex-1 lg:block">
+        <img
+          alt="Clean workspace"
+          src="https://images.unsplash.com/photo-1496917756835-20cb06e75b4e?auto=format&fit=crop&w=1908&q=80"
+          className="absolute inset-0 size-full object-cover"
+        />
+      </div>
     </div>
   );
 }

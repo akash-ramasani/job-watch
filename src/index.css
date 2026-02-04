@@ -4,30 +4,55 @@
   color-scheme: light;
 }
 
-html, body, #root { 
+/* 1. Root & Layout Fixes: Essential for the split-screen login/signup */
+html, 
+body, 
+#root { 
   height: 100%; 
+  margin: 0;
 }
 
 body {
-  /* Set Ubuntu as the primary font */
+  /* Set Ubuntu as the primary font across the entire app */
   font-family: 'Ubuntu', ui-sans-serif, system-ui, -apple-system, sans-serif;
   @apply bg-white text-gray-900 antialiased;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Custom Utilities */
+/* 2. Descriptive Grid: Used for Profile and Dashboard sections */
 .section-grid {
   @apply grid grid-cols-1 gap-x-8 gap-y-10 border-b border-gray-900/10 pb-12 md:grid-cols-3;
 }
 
+/* 3. Form Elements: Professional SaaS styling with Indigo focus rings */
 .input-standard {
-  @apply block w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm shadow-sm transition-all focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10;
+  @apply block w-full rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm shadow-sm transition-all focus:border-indigo-500 focus:outline-none focus:ring-4 focus:ring-indigo-500/10 disabled:bg-gray-50 disabled:text-gray-500;
 }
 
+/* 4. Interactive Buttons: Optimized for the United States tech market look */
 .btn-primary {
   @apply flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 hover:shadow-lg active:scale-[0.98] disabled:opacity-50;
 }
 
 .btn-secondary {
-  @apply rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-all;
+  @apply rounded-lg bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-all active:scale-[0.98];
+}
+
+/* 5. Custom Utilities: For horizontal scrollable company filters */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none;    /* Firefox */
+}
+
+/* 6. Typography Helpers: Consistent with professional dashboard standards */
+.muted {
+  @apply text-gray-500;
+}
+
+.caps-label {
+  @apply text-[11px] font-bold uppercase tracking-widest text-gray-400;
 }
