@@ -2,18 +2,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
+  doc,
   getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   startAfter,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "../firebase";
+import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 const PAGE_SIZE = 100;
 
-// --- US states list for dropdown search ---
+// --- Helper Data & Formatters ---
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
   { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" },
@@ -42,8 +45,7 @@ function normalizeStateInputToCode(input) {
   if (byCode) return byCode.code;
   const lower = raw.toLowerCase();
   const byName = US_STATES.find((s) => s.name.toLowerCase() === lower);
-  if (byName) return byName.code;
-  return "";
+  return byName ? byName.code : "";
 }
 
 function stateCodeToLabel(code) {
@@ -78,6 +80,7 @@ function shortAgoFromISO(iso) {
   return "Now";
 }
 
+// --- Dropdown Component ---
 function OptionsDropdown({ buttonLabel = "Options", children }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -107,6 +110,8 @@ function OptionsDropdown({ buttonLabel = "Options", children }) {
 
 export default function Jobs({ user, userMeta }) {
   const profileCountry = userMeta?.country || "United States";
+  const { showToast } = useToast();
+
   const [companies, setCompanies] = useState([]);
   const [selectedCompanyKey, setSelectedCompanyKey] = useState(null);
   const [jobs, setJobs] = useState([]);
@@ -116,12 +121,12 @@ export default function Jobs({ user, userMeta }) {
   const [locationSearch, setLocationSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [stateInput, setStateInput] = useState("");
-  const [showRecentOnly, setShowRecentOnly] = useState(false); // New Filter State
+  const [showRecentOnly, setShowRecentOnly] = useState(false);
   const observer = useRef(null);
 
-  // 12 runs = 6 hours (based on 30m intervals)
   const RECENT_THRESHOLD_MS = 6 * 60 * 60 * 1000;
 
+  // 1. Fetch Companies
   useEffect(() => {
     const companiesRef = collection(db, "users", user.uid, "companies");
     const qCompanies = query(companiesRef, orderBy("lastSeenAt", "desc"), limit(50));
@@ -132,6 +137,7 @@ export default function Jobs({ user, userMeta }) {
     });
   }, [user.uid]);
 
+  // 2. Fetch Jobs
   useEffect(() => {
     if (!selectedCompanyKey) return;
     setLoading(true); setJobs([]); setLastDoc(null); setHasMore(true);
@@ -146,6 +152,7 @@ export default function Jobs({ user, userMeta }) {
     }, () => setLoading(false));
   }, [user.uid, selectedCompanyKey]);
 
+  // 3. Infinite Scroll Fetch
   const fetchMore = async () => {
     if (!selectedCompanyKey || !lastDoc || loading) return;
     setLoading(true);
@@ -169,80 +176,105 @@ export default function Jobs({ user, userMeta }) {
     if (node) observer.current.observe(node);
   }, [loading, hasMore, lastDoc]);
 
-  const filteredJobs = useMemo(() => {
+  // 4. Bookmark Toggle
+  const toggleBookmark = async (e, job) => {
+    e.preventDefault();
+    const jobRef = doc(db, "users", user.uid, "companies", selectedCompanyKey, "jobs", job.id);
+    try {
+      const newState = !job.saved;
+      await updateDoc(jobRef, { saved: newState });
+      showToast(newState ? "Job pinned" : "Pin removed", "info");
+    } catch (err) {
+      showToast("Error updating bookmark", "error");
+    }
+  };
+
+  // 5. Filter Logic
+  const { bookmarkedJobs, regularJobs } = useMemo(() => {
     const locTerms = locationSearch.trim().toLowerCase();
     const now = Date.now();
 
-    return jobs.filter((j) => {
-      // 1. Recent Only Filter (Past 12 Runs / 6 Hours)
+    const filtered = jobs.filter((j) => {
       if (showRecentOnly) {
         const firstSeen = j.firstSeenAt?.toDate ? j.firstSeenAt.toDate().getTime() : 0;
         if (now - firstSeen > RECENT_THRESHOLD_MS) return false;
       }
-
       const location = (j.locationName || j.raw?.location?.name || "").trim();
-      
-      // 2. Location Search
       if (locTerms && !location.toLowerCase().includes(locTerms)) return false;
-
-      // 3. State Filter
       if (profileCountry === "United States" && stateFilter) {
         const re = new RegExp(`(?:^|[\\s,•|/()\\-])${stateFilter}(?=$|[\\s,•|/()\\-])`);
         if (!re.test(location)) return false;
       }
       return true;
     });
+
+    return {
+      bookmarkedJobs: filtered.filter(j => j.saved),
+      regularJobs: filtered.filter(j => !j.saved)
+    };
   }, [jobs, locationSearch, stateFilter, profileCountry, showRecentOnly]);
 
   const selectedCompany = useMemo(() => companies.find((c) => c.id === selectedCompanyKey) || null, [companies, selectedCompanyKey]);
 
-  return (
-    <div className="py-8" style={{ fontFamily: "Ubuntu, sans-serif" }}>
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Opportunities</h1>
-          <p className="text-sm text-gray-500 mt-1">
-            {selectedCompany ? <>Company: <span className="font-semibold">{selectedCompany.companyName}</span></> : "Select a company"}
-            <span className="text-gray-300"> • </span> {filteredJobs.length} roles found
-          </p>
+  // Shared Job Item Component logic inside render
+  const renderJobItem = (job, ref = null) => (
+    <li key={job.id} ref={ref} className="group px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500">
+      <div className="flex items-center justify-between">
+        <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">{selectedCompany?.companyName || "Company"}</span>
+            <span className="text-gray-300">|</span>
+            <span className="text-xs text-gray-500 font-medium truncate">{job.locationName || "Remote"}</span>
+          </div>
+          <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">{job.title}</h3>
+          <div className="mt-1 text-xs text-gray-400">Fetched {timeAgoFromFirestore(job.firstSeenAt)}</div>
+        </a>
+        <div className="flex items-center gap-4 ml-4">
+          <button onClick={(e) => toggleBookmark(e, job)} className={`p-2 rounded-full transition-colors ${job.saved ? 'text-amber-500 bg-amber-50' : 'text-gray-300 hover:bg-gray-100 hover:text-gray-500'}`}>
+            <svg className="size-5" fill={job.saved ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
+          </button>
+          <div className="hidden sm:flex flex-col items-end">
+            <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">Updated</span>
+            <span className="text-sm font-bold text-gray-900">{shortAgoFromISO(job.updatedAtIso)}</span>
+          </div>
         </div>
       </div>
+    </li>
+  );
 
+  return (
+    <div className="py-8" style={{ fontFamily: "Ubuntu, sans-serif" }}>
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Opportunities</h1>
+        <p className="text-sm text-gray-500 mt-1">
+          {selectedCompany ? <>Company: <span className="font-semibold">{selectedCompany.companyName}</span></> : "Select a company"}
+          <span className="text-gray-300"> • </span> {bookmarkedJobs.length + regularJobs.length} roles found
+        </p>
+      </div>
+
+      {/* Controls Bar */}
       <div className="space-y-4 mb-8">
         <div className="flex flex-wrap items-center gap-4 p-4 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
           <div className="min-w-[240px] flex-1">
-            <label className="caps-label mb-2 block">Company</label>
+            <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-2 block">Company</label>
             <select value={selectedCompanyKey || ""} onChange={(e) => setSelectedCompanyKey(e.target.value)} className="input-standard !bg-gray-50 border-transparent focus:!bg-white">
               {companies.map((c) => <option key={c.id} value={c.id}>{c.companyName || c.id}</option>)}
             </select>
           </div>
-
           <div className="min-w-[240px] flex-1">
-            <label className="caps-label mb-2 block">Location contains</label>
+            <label className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-2 block">Location contains</label>
             <input placeholder="e.g. San Francisco" className="input-standard !bg-gray-50 border-transparent focus:!bg-white" value={locationSearch} onChange={(e) => setLocationSearch(e.target.value)} />
           </div>
-
-          {/* New Toggle Filter Button */}
           <div className="pt-6">
-            <button
-              onClick={() => setShowRecentOnly(!showRecentOnly)}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all shadow-sm ring-1 ring-inset ${
-                showRecentOnly 
-                ? "bg-indigo-600 text-white ring-indigo-600 hover:bg-indigo-700" 
-                : "bg-white text-gray-900 ring-gray-300 hover:bg-gray-50"
-              }`}
-            >
-              <svg className={`size-4 ${showRecentOnly ? "text-indigo-200" : "text-gray-400"}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-              </svg>
+            <button onClick={() => setShowRecentOnly(!showRecentOnly)} className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all shadow-sm ring-1 ring-inset ${showRecentOnly ? "bg-indigo-600 text-white ring-indigo-600 hover:bg-indigo-700" : "bg-white text-gray-900 ring-gray-300 hover:bg-gray-50"}`}>
+              <svg className={`size-4 ${showRecentOnly ? "text-indigo-200" : "text-gray-400"}`} fill="none" viewBox="0 0 24 24" strokeWidth="2" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
               {showRecentOnly ? "Latest (Past 12 Runs)" : "All History"}
             </button>
           </div>
-
           <div className="pt-6">
             <OptionsDropdown buttonLabel="Filters">
               <div className="px-4 py-2">
-                <div className="text-xs font-bold uppercase tracking-widest text-gray-400">Regional Filters</div>
+                <div className="text-xs font-bold uppercase tracking-widest text-gray-400">Regional</div>
                 <div className="mt-3">
                   <div className="text-sm font-semibold text-gray-900">US State</div>
                   <input list="us-states" value={stateInput} onChange={(e) => { setStateInput(e.target.value); const code = normalizeStateInputToCode(e.target.value); if(code || !e.target.value) setStateFilter(code); }} onBlur={() => { const code = normalizeStateInputToCode(stateInput); setStateFilter(code); setStateInput(stateCodeToLabel(code)); }} placeholder="e.g. CA" className="input-standard mt-2 !bg-gray-50" />
@@ -253,50 +285,36 @@ export default function Jobs({ user, userMeta }) {
             </OptionsDropdown>
           </div>
         </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          {showRecentOnly && (
-            <span className="inline-flex items-center gap-2 rounded-full bg-amber-50 text-amber-700 px-3 py-1 text-xs font-semibold ring-1 ring-inset ring-amber-100 animate-in fade-in zoom-in duration-200">
-              ⚡ Showing past 12 runs only
-              <button onClick={() => setShowRecentOnly(false)} className="hover:text-amber-900">✕</button>
-            </span>
-          )}
-          {stateFilter && (
-            <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-semibold ring-1 ring-inset ring-indigo-100">
-              State: {stateFilter}
-              <button onClick={() => setStateFilter("")} className="hover:text-indigo-900">✕</button>
-            </span>
-          )}
-        </div>
       </div>
 
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden">
+        {/* Bookmarked Section */}
+        {bookmarkedJobs.length > 0 && (
+          <>
+            <div className="bg-amber-50/50 px-6 py-3 border-b border-amber-100 flex items-center gap-2">
+              <svg className="size-4 text-amber-600" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4a2 2 0 012-2h6a2 2 0 012 2v14l-5-2.5L5 18V4z" /></svg>
+              <span className="text-xs font-bold uppercase tracking-widest text-amber-700">Pinned for Review</span>
+            </div>
+            <ul className="divide-y divide-gray-100">
+              {bookmarkedJobs.map((job) => renderJobItem(job))}
+            </ul>
+            <div className="relative py-4 bg-white flex items-center px-6">
+              <div className="flex-grow border-t border-dashed border-gray-200"></div>
+              <span className="flex-shrink mx-4 text-[10px] font-black uppercase tracking-[0.3em] text-gray-300">End of Pinned</span>
+              <div className="flex-grow border-t border-dashed border-gray-200"></div>
+            </div>
+          </>
+        )}
+
+        {/* Regular Section */}
         <ul className="divide-y divide-gray-100">
-          {filteredJobs.map((job, index) => (
-            <li key={job.id} ref={index === filteredJobs.length - 1 ? lastElementRef : null} className="group px-6 py-5 hover:bg-gray-50/80 transition-all">
-              <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="flex items-center justify-between">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">{selectedCompany?.companyName || "Company"}</span>
-                    <span className="text-gray-300">|</span>
-                    <span className="text-xs text-gray-500 font-medium truncate">{job.locationName || "Remote"}</span>
-                  </div>
-                  <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">{job.title || "Untitled role"}</h3>
-                  <div className="mt-1 text-xs text-gray-400">Fetched {timeAgoFromFirestore(job.firstSeenAt)}</div>
-                </div>
-                <div className="flex items-center gap-4 ml-4">
-                  <div className="flex flex-col items-end">
-                    <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">Updated</span>
-                    <span className="text-sm font-bold text-gray-900">{shortAgoFromISO(job.updatedAtIso)}</span>
-                  </div>
-                  <div className="h-8 w-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all">→</div>
-                </div>
-              </a>
-            </li>
-          ))}
+          {regularJobs.map((job, index) => renderJobItem(job, index === regularJobs.length - 1 ? lastElementRef : null))}
         </ul>
+
         {loading && <div className="p-8 text-center text-xs text-gray-400 animate-pulse uppercase tracking-widest">Loading...</div>}
-        {!loading && !filteredJobs.length && <div className="p-10 text-center text-sm text-gray-500">No jobs match your filters.</div>}
+        {!loading && bookmarkedJobs.length === 0 && regularJobs.length === 0 && (
+          <div className="p-10 text-center text-sm text-gray-500">No roles match your filters.</div>
+        )}
       </div>
     </div>
   );
