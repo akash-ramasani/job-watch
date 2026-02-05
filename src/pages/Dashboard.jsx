@@ -1,15 +1,16 @@
+// src/pages/Dashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   addDoc,
   collection,
-  deleteDoc,
   doc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
   limit,
-  getDoc,
+  getDocs,
+  updateDoc,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { motion, AnimatePresence } from "framer-motion";
@@ -19,25 +20,30 @@ import Card from "../components/Card.jsx";
 export default function Dashboard({ user }) {
   const [url, setUrl] = useState("");
   const [feeds, setFeeds] = useState([]);
+  const [archivedFeeds, setArchivedFeeds] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [userMeta, setUserMeta] = useState(null);
   const [busyNow, setBusyNow] = useState(false);
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
+    // Active feeds
     const feedsRef = collection(db, "users", user.uid, "feeds");
     const qFeeds = query(feedsRef, orderBy("createdAt", "desc"));
     const unsubFeeds = onSnapshot(qFeeds, (snap) => {
-      setFeeds(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setFeeds(all.filter((f) => !f.archivedAt));
+      setArchivedFeeds(all.filter((f) => !!f.archivedAt));
     });
 
+    // Jobs
     const jobsRef = collection(db, "users", user.uid, "jobs");
     const qJobs = query(jobsRef, orderBy("firstSeenAt", "desc"), limit(100));
     const unsubJobs = onSnapshot(qJobs, (snap) => {
       setJobs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
 
-    // listen for user doc metadata (lastFetchAt etc)
+    // User meta
     const userRef = doc(db, "users", user.uid);
     const unsubUser = onSnapshot(userRef, (snap) => {
       setUserMeta(snap.exists() ? snap.data() : null);
@@ -71,20 +77,29 @@ export default function Dashboard({ user }) {
       createdAt: serverTimestamp(),
       lastCheckedAt: null,
       lastError: null,
+      archivedAt: null,
     });
 
     setUrl("");
   }
 
-  async function removeFeed(id) {
-    await deleteDoc(doc(db, "users", user.uid, "feeds", id));
+  async function archiveFeed(id) {
+    await updateDoc(doc(db, "users", user.uid, "feeds", id), {
+      archivedAt: serverTimestamp(),
+    });
+  }
+
+  async function unarchiveFeed(id) {
+    await updateDoc(doc(db, "users", user.uid, "feeds", id), {
+      archivedAt: null,
+    });
   }
 
   // Manual trigger: calls the cloud function pollNow
   async function fetchNow() {
     setBusyNow(true);
     try {
-      const functions = getFunctions(); // uses default app
+      const functions = getFunctions();
       const callFn = httpsCallable(functions, "pollNow");
 
       const resp = await callFn({});
@@ -107,7 +122,7 @@ export default function Dashboard({ user }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold">Your Profile</h1>
+          <h1 className="text-2xl font-semibold">Dashboard</h1>
           <div className="text-xs text-zinc-500">
             Last fetched:{" "}
             {userMeta?.lastFetchAt?.toDate ? userMeta.lastFetchAt.toDate().toLocaleString() : "Never"}
@@ -129,54 +144,70 @@ export default function Dashboard({ user }) {
         <Card>
           <Header
             title="Profile links"
-            subtitle="Add all your Greenhouse job feed links. They’ll show here after saving."
+            subtitle="Add all your Greenhouse job feed links. They’ll show here after adding."
           />
 
-          <form onSubmit={addFeed} className="mt-5 flex gap-2">
+          {/* Form (Add button moved BELOW the input) */}
+          <form onSubmit={addFeed} className="mt-5 space-y-3">
             <input
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               placeholder="https://boards-api.greenhouse.io/v1/boards/…/jobs?content=true"
-              className="flex-1 px-3 py-2 rounded-xl bg-black border border-zinc-800 focus:outline-none focus:border-zinc-600 transition"
+              className="w-full px-3 py-2 rounded-xl bg-black border border-zinc-800 focus:outline-none focus:border-zinc-600 transition"
             />
-            <button className="px-4 py-2 rounded-xl bg-zinc-100 text-black font-medium hover:bg-white transition">
-              Add
+
+            <button
+              type="submit"
+              className="w-full px-4 py-2 rounded-xl bg-zinc-100 text-black font-medium hover:bg-white transition"
+            >
+              Add Feed
             </button>
           </form>
 
           <div className="mt-2 text-xs text-zinc-600">Preview: {hint}</div>
 
-          <div className="mt-6 space-y-2">
-            <AnimatePresence>
-              {feeds.map((f) => (
-                <motion.div
-                  key={f.id}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -8 }}
-                  transition={{ duration: 0.18 }}
-                  className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-900"
-                >
-                  <div className="min-w-0">
-                    <div className="text-sm truncate">{f.url}</div>
-                    <div className="text-xs text-zinc-600">
-                      {f.lastCheckedAt?.toDate
-                        ? `Last checked: ${f.lastCheckedAt.toDate().toLocaleString()}`
-                        : "Not checked yet"}
-                      {f.lastError ? <span className="text-red-400"> • {f.lastError}</span> : null}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => removeFeed(f.id)}
-                    className="text-sm text-zinc-400 hover:text-zinc-200 transition"
-                  >
-                    Remove
-                  </button>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+          {/* Active Feeds */}
+          <div className="mt-6">
+            <div className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
+              Active feeds
+            </div>
 
-            {!feeds.length ? <div className="text-sm text-zinc-500 mt-2">No links yet.</div> : null}
+            <div className="space-y-2">
+              <AnimatePresence>
+                {feeds.map((f) => (
+                  <motion.div
+                    key={f.id}
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -8 }}
+                    transition={{ duration: 0.18 }}
+                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-900"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm truncate">{f.url}</div>
+                      <div className="text-xs text-zinc-600">
+                        {f.lastCheckedAt?.toDate
+                          ? `Last checked: ${f.lastCheckedAt.toDate().toLocaleString()}`
+                          : "Not checked yet"}
+                        {f.lastError ? <span className="text-red-400"> • {f.lastError}</span> : null}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => archiveFeed(f.id)}
+                      className="text-sm text-zinc-400 hover:text-zinc-200 transition"
+                      title="Archive this feed"
+                    >
+                      Archive
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+
+              {!feeds.length ? (
+                <div className="text-sm text-zinc-500 mt-2">No active links yet.</div>
+              ) : null}
+            </div>
           </div>
         </Card>
 
@@ -191,7 +222,7 @@ export default function Dashboard({ user }) {
               {jobs.map((j) => (
                 <motion.a
                   key={j.id}
-                  href={j.absolute_url || "#"}
+                  href={j.absolute_url || j.raw?.absolute_url || "#"}
                   target="_blank"
                   rel="noreferrer"
                   initial={{ opacity: 0, y: 8 }}
@@ -202,11 +233,11 @@ export default function Dashboard({ user }) {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="font-medium truncate">{j.title || "Untitled role"}</div>
+                      <div className="font-medium truncate">{j.title || j.raw?.title || "Untitled role"}</div>
                       <div className="text-xs text-zinc-500 truncate">
-                        {(j.location && (j.location.name || j.location)) || "Location unknown"}
+                        {(j.locationName || j.raw?.location?.name || "Location unknown")}
                         {" • "}
-                        {j.source ? "feed" : "source"}
+                        {(j.companyName || j.raw?.company_name || "Company")}
                       </div>
                     </div>
                     <span className="text-xs text-zinc-600 whitespace-nowrap">
@@ -221,6 +252,49 @@ export default function Dashboard({ user }) {
           </div>
         </Card>
       </div>
+
+      {/* Archived feeds shown at bottom of page */}
+      <Card className="mt-4">
+        <Header
+          title="Archived feeds"
+          subtitle="Archived feeds are hidden from active monitoring. You can restore them anytime."
+        />
+
+        <div className="mt-5 space-y-2">
+          <AnimatePresence>
+            {archivedFeeds.map((f) => (
+              <motion.div
+                key={f.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.18 }}
+                className="flex items-center justify-between gap-3 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-900"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm truncate">{f.url}</div>
+                  <div className="text-xs text-zinc-600">
+                    Archived:{" "}
+                    {f.archivedAt?.toDate ? f.archivedAt.toDate().toLocaleString() : "—"}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => unarchiveFeed(f.id)}
+                  className="text-sm text-zinc-400 hover:text-zinc-200 transition"
+                  title="Restore this feed"
+                >
+                  Restore
+                </button>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+
+          {!archivedFeeds.length ? (
+            <div className="text-sm text-zinc-500 mt-2">No archived feeds.</div>
+          ) : null}
+        </div>
+      </Card>
 
       {/* toast */}
       <AnimatePresence>

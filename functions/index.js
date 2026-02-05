@@ -30,7 +30,6 @@ async function fetchJson(url) {
   const res = await fetch(url, {
     method: "GET",
     headers: { "user-agent": "job-watch-bot/1.0" },
-    // Add a reasonable timeout via AbortController if you like (omitted for brevity)
   });
   if (!res.ok) {
     throw new Error(`Fetch failed ${res.status} for ${url}`);
@@ -38,10 +37,106 @@ async function fetchJson(url) {
   return await res.json();
 }
 
+/**
+ * Robust location parsing:
+ * - Avoid missing ANY US jobs by using multiple US signals:
+ *   - explicit "United States", "USA", "US", "U.S."
+ *   - any US state code anywhere in the string
+ *   - any US state full name anywhere in the string
+ * - Extract ALL states found (important for multi-office jobs)
+ * - For your supported profile countries, also detect explicitly:
+ *   United States, Canada, Ireland, United Kingdom
+ */
+function parseLocationFields(locationNameRaw) {
+  const locationName = String(locationNameRaw || "").trim();
+  const s = locationName.toLowerCase();
+
+  const SUPPORTED_COUNTRIES = ["United States", "Canada", "Ireland", "United Kingdom"];
+
+  const US_MARKERS = [
+    "united states",
+    "united states of america",
+    "u.s.",
+    "u.s",
+    "usa",
+    "u.s.a",
+  ];
+
+  const US_STATE_CODES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD",
+    "MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC",
+    "SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+  ];
+
+  const US_STATE_NAMES_TO_CODE = {
+    "alabama":"AL","alaska":"AK","arizona":"AZ","arkansas":"AR","california":"CA","colorado":"CO",
+    "connecticut":"CT","delaware":"DE","florida":"FL","georgia":"GA","hawaii":"HI","idaho":"ID",
+    "illinois":"IL","indiana":"IN","iowa":"IA","kansas":"KS","kentucky":"KY","louisiana":"LA","maine":"ME",
+    "maryland":"MD","massachusetts":"MA","michigan":"MI","minnesota":"MN","mississippi":"MS","missouri":"MO",
+    "montana":"MT","nebraska":"NE","nevada":"NV","new hampshire":"NH","new jersey":"NJ","new mexico":"NM",
+    "new york":"NY","north carolina":"NC","north dakota":"ND","ohio":"OH","oklahoma":"OK","oregon":"OR",
+    "pennsylvania":"PA","rhode island":"RI","south carolina":"SC","south dakota":"SD","tennessee":"TN",
+    "texas":"TX","utah":"UT","vermont":"VT","virginia":"VA","washington":"WA","west virginia":"WV",
+    "wisconsin":"WI","wyoming":"WY","district of columbia":"DC",
+  };
+
+  // Extract all US state codes found as standalone-ish tokens
+  const stateCodeRegex = new RegExp(
+    `(?:^|[\\s,•|/()\\-])(${US_STATE_CODES.join("|")})(?=$|[\\s,•|/()\\-])`,
+    "gi"
+  );
+
+  const statesSet = new Set();
+  let m;
+  while ((m = stateCodeRegex.exec(locationName)) !== null) {
+    if (m[1]) statesSet.add(m[1].toUpperCase());
+  }
+
+  // If no state codes found, try full state names (can appear in office strings)
+  if (statesSet.size === 0) {
+    const stateNames = Object.keys(US_STATE_NAMES_TO_CODE).sort((a, b) => b.length - a.length);
+    for (const name of stateNames) {
+      if (s.includes(name)) {
+        statesSet.add(US_STATE_NAMES_TO_CODE[name]);
+        // don't break: could be multi-location with multiple state names
+      }
+    }
+  }
+
+  const states = Array.from(statesSet);
+
+  // country detection: explicit supported-country match
+  let country = null;
+  for (const c of SUPPORTED_COUNTRIES) {
+    if (s.includes(c.toLowerCase())) {
+      country = c;
+      break;
+    }
+  }
+
+  // high-recall US detection
+  const hasUsMarker =
+    US_MARKERS.some((mk) => s.includes(mk)) ||
+    /\b(us|u\.s\.|usa|u\.s\.a)\b/i.test(locationName);
+
+  const hasRemoteUs =
+    /remote\s*[-–—]?\s*(us|u\.s\.|usa|united states)/i.test(locationName) ||
+    /(anywhere|nationwide|across)\s+the\s+(us|u\.s\.|usa)/i.test(locationName);
+
+  const hasUsStateSignal = states.length > 0;
+
+  if (!country && (hasUsMarker || hasRemoteUs || hasUsStateSignal)) {
+    country = "United States";
+  }
+
+  return { locationName, country, states };
+}
+
 // Poll feeds for single user -> writes new jobs into users/{uid}/jobs
 async function pollForUser(uid) {
   const userRef = db.collection("users").doc(uid);
   const feedsSnap = await userRef.collection("feeds").get();
+
   if (feedsSnap.empty) {
     // update lastFetchAt even if there are no feeds
     await userRef.set({ lastFetchAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
@@ -71,25 +166,38 @@ async function pollForUser(uid) {
         let ops = 0;
         let newCount = 0;
 
-        // For small feeds this per-doc existence check is fine.
         for (const job of jobs) {
           const jobKey = safeJobKey(url, job);
           const jobRef = jobsCol.doc(jobKey);
 
+          // IMPORTANT: do not overwrite old jobs
           const existing = await jobRef.get();
           if (existing.exists) continue;
 
+          const companyName = job.company_name || null;
+          const rawLocationName = job?.location?.name || job?.location_name || job?.location || "";
+          const { locationName, country, states } = parseLocationFields(rawLocationName);
+
           // pick fields to store (store entire job object as well)
           const payload = {
+            // normalized fields (easy UI + filtering)
             title: job.title || job.name || job.position || null,
             absolute_url: job.absolute_url || job.url || job.apply_url || null,
-            location: job.location || job.location_name || job.location?.name || null,
+            companyName,
+            locationName,
+            country,
+            states, // array of US state codes if detected (e.g., ["CA","NY"])
+
+            // metadata
             source: url,
             raw: job,
+
+            // timestamps
             firstSeenAt: admin.firestore.FieldValue.serverTimestamp(),
           };
 
-          batch.set(jobRef, payload);
+          // batch.create() guarantees we NEVER overwrite even if called concurrently
+          batch.create(jobRef, payload);
           ops++;
           newCount++;
 

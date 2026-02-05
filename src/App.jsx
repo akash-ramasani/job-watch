@@ -43,7 +43,7 @@ export default function App() {
       if (mode === "forgot") return <ForgotPassword onBack={() => setMode("login")} />;
     }
 
-    if (page === "jobs") return <Jobs user={user} />;
+    if (page === "jobs") return <Jobs user={user} userMeta={userMeta} />;
     if (page === "profile") return <Profile user={user} userMeta={userMeta} />;
     return <Home user={user} userMeta={userMeta} />;
   }, [loading, user, mode, page, userMeta]);
