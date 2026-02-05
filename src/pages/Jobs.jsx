@@ -68,7 +68,7 @@ const US_STATES = [
   { code: "DC", name: "District of Columbia" },
 ];
 
-// If you have older jobs without normalized country/states, keep a fallback US detector
+// Fallback US detection for older jobs (no country/states)
 function looksLikeUnitedStates(locationName) {
   const loc = String(locationName || "");
   if (/\b(united states|u\.s\.|usa)\b/i.test(loc)) return true;
@@ -90,7 +90,6 @@ function normalizeStateInputToCode(input) {
   const byName = US_STATES.find((s) => s.name.toLowerCase() === lower);
   if (byName) return byName.code;
 
-  // Accept "CA - California" or "California (CA)" etc
   for (const st of US_STATES) {
     const a = `${st.code.toLowerCase()} - ${st.name.toLowerCase()}`;
     if (lower === a) return st.code;
@@ -106,28 +105,38 @@ function stateCodeToLabel(code) {
   return `${st.code} - ${st.name}`;
 }
 
-function formatUpdatedAt(iso) {
+function timeAgoFromFirestore(ts) {
+  if (!ts?.toDate) return "";
+  const d = ts.toDate();
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / (1000 * 60));
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (mins > 0) return `${mins}m ago`;
+  return "just now";
+}
+
+function shortAgoFromISO(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return String(iso);
-  // concise, readable
-  return d.toLocaleString(undefined, { month: "short", day: "2-digit", year: "numeric" });
+  if (Number.isNaN(d.getTime())) return "—";
+  const diffMs = Date.now() - d.getTime();
+  if (diffMs < 0) return "Now"; // clock skew
+
+  const mins = Math.floor(diffMs / (1000 * 60));
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d`;
+  if (hours > 0) return `${hours}h`;
+  if (mins > 0) return `${mins}m`;
+  return "Now";
 }
 
-function UpdatedAtRight({ iso }) {
-  return (
-    <div className="flex flex-col items-end">
-      <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
-        Updated
-      </span>
-      <span className="text-sm font-bold text-gray-900" title={String(iso || "")}>
-        {formatUpdatedAt(iso)}
-      </span>
-    </div>
-  );
-}
-
-// Tailwind dropdown (React implementation) styled to match your snippet
+// Tailwind dropdown (React) styled like your snippet
 function OptionsDropdown({ buttonLabel = "Options", children }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
@@ -156,12 +165,7 @@ function OptionsDropdown({ buttonLabel = "Options", children }) {
         className="inline-flex w-full justify-center gap-x-1.5 rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-xs inset-ring-1 inset-ring-gray-300 hover:bg-gray-50"
       >
         {buttonLabel}
-        <svg
-          viewBox="0 0 20 20"
-          fill="currentColor"
-          aria-hidden="true"
-          className="-mr-1 size-5 text-gray-400"
-        >
+        <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="-mr-1 size-5 text-gray-400">
           <path
             d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z"
             clipRule="evenodd"
@@ -193,7 +197,6 @@ export default function Jobs({ user, userMeta }) {
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [companySearch, setCompanySearch] = useState("");
 
-  // State filter stored as canonical code (e.g. "CA")
   const [stateFilter, setStateFilter] = useState("");
   const [stateInput, setStateInput] = useState("");
 
@@ -202,7 +205,7 @@ export default function Jobs({ user, userMeta }) {
   const profileCountry = userMeta?.country || "United States";
   const profileRegion = userMeta?.region || "";
 
-  // ✅ Default sort by updated_at (from Greenhouse JSON), newest first
+  // ✅ Default sort by updated_at (Greenhouse), newest first
   useEffect(() => {
     setLoading(true);
     const jobsRef = collection(db, "users", user.uid, "jobs");
@@ -226,7 +229,6 @@ export default function Jobs({ user, userMeta }) {
     return () => unsub();
   }, [user.uid]);
 
-  // keep stateInput in sync if stateFilter is programmatically cleared
   useEffect(() => {
     if (!stateFilter) setStateInput("");
     else setStateInput(stateCodeToLabel(stateFilter));
@@ -249,7 +251,7 @@ export default function Jobs({ user, userMeta }) {
       const company = (j.companyName || j.raw?.company_name || "").trim();
       const location = (j.locationName || j.raw?.location?.name || "").trim();
 
-      // 1) Country enforcement (high recall for US)
+      // Country enforcement (high recall for US)
       const jobCountry = j.country || null;
       const matchesCountry =
         (jobCountry && jobCountry === profileCountry) ||
@@ -260,27 +262,26 @@ export default function Jobs({ user, userMeta }) {
 
       if (!matchesCountry) return false;
 
-      // 2) State filter (US only)
+      // State filter (US only)
       if (profileCountry === "United States" && stateFilter) {
         const states = Array.isArray(j.states) ? j.states : [];
         const stateMatches =
           states.includes(stateFilter) ||
-          // fallback for older docs:
           location.includes(`, ${stateFilter}`) ||
           new RegExp(`(?:^|[\\s,•|/()\\-])${stateFilter}(?=$|[\\s,•|/()\\-])`).test(location);
 
         if (!stateMatches) return false;
       }
 
-      // 3) Company pill
+      // Company pill
       if (selectedCompany && company !== selectedCompany) return false;
 
-      // 4) Company search
+      // Company search
       if (companyTerms) {
         if (!company.toLowerCase().includes(companyTerms)) return false;
       }
 
-      // 5) Location search
+      // Location search
       if (locTerms) {
         if (!location.toLowerCase().includes(locTerms)) return false;
       }
@@ -383,12 +384,9 @@ export default function Jobs({ user, userMeta }) {
             />
           </div>
 
-          {/* ✅ Use the dropdown snippet (React version) for state filter */}
           <OptionsDropdown buttonLabel="Options">
             <div className="px-4 py-2">
-              <div className="text-xs font-bold uppercase tracking-widest text-gray-400">
-                Filters
-              </div>
+              <div className="text-xs font-bold uppercase tracking-widest text-gray-400">Filters</div>
 
               <div className="mt-3">
                 <div className="text-sm font-semibold text-gray-900">State (US only)</div>
@@ -454,7 +452,7 @@ export default function Jobs({ user, userMeta }) {
           </OptionsDropdown>
         </div>
 
-        {/* Active filter chips */}
+        {/* Chips */}
         <div className="flex flex-wrap items-center gap-2">
           {profileCountry === "United States" && stateFilter ? (
             <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 text-indigo-700 px-3 py-1 text-xs font-semibold ring-1 ring-inset ring-indigo-100">
@@ -516,7 +514,12 @@ export default function Jobs({ user, userMeta }) {
             const title = job.title || job.raw?.title || "Untitled role";
             const location = job.locationName || job.raw?.location?.name || "Remote";
             const href = job.absolute_url || job.raw?.absolute_url || "#";
-            const updatedAt = job.raw?.updated_at || null;
+
+            // ✅ updated_at (ISO string from Greenhouse)
+            const updatedAtISO = job.raw?.updated_at || null;
+
+            // ✅ fetched time (Firestore server timestamp)
+            const fetchedTs = job.firstSeenAt || null;
 
             return (
               <li
@@ -539,11 +542,23 @@ export default function Jobs({ user, userMeta }) {
                     <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
                       {title}
                     </h3>
+
+                    {/* ✅ Add "Fetched Xh ago" under job title */}
+                    <div className="mt-1 text-xs text-gray-400">
+                      Fetched {timeAgoFromFirestore(fetchedTs)}
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-4 ml-4">
-                    {/* ✅ Right side shows updated_at now */}
-                    <UpdatedAtRight iso={updatedAt} />
+                    {/* ✅ Right side: Updated _h ago (NOT date) */}
+                    <div className="flex flex-col items-end">
+                      <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
+                        Updated
+                      </span>
+                      <span className="text-sm font-bold text-gray-900" title={String(updatedAtISO || "")}>
+                        {shortAgoFromISO(updatedAtISO)}
+                      </span>
+                    </div>
 
                     <div className="h-8 w-8 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-all">
                       →

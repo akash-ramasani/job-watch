@@ -79,6 +79,9 @@ export default function Home({ user }) {
       await updateDoc(doc(db, "users", user.uid, "feeds", feedId), {
         archivedAt: serverTimestamp(),
       });
+    } catch (err) {
+      setToast({ text: "Archive failed: " + (err?.message || err), error: true });
+      setTimeout(() => setToast(null), 8000);
     } finally {
       setBusyArchiveId(null);
     }
@@ -90,6 +93,9 @@ export default function Home({ user }) {
       await updateDoc(doc(db, "users", user.uid, "feeds", feedId), {
         archivedAt: null,
       });
+    } catch (err) {
+      setToast({ text: "Restore failed: " + (err?.message || err), error: true });
+      setTimeout(() => setToast(null), 8000);
     } finally {
       setBusyArchiveId(null);
     }
@@ -97,13 +103,16 @@ export default function Home({ user }) {
 
   return (
     <div className="space-y-12 py-10">
-      {/* ===== TOP GRID (LEFT INFO + RIGHT FORM) ===== */}
+      {/* ===== TOP GRID ===== */}
       <div className="section-grid">
         {/* LEFT COLUMN */}
         <div>
-          <h2 className="text-base font-semibold text-gray-900">Job Board Sources</h2>
+          <h2 className="text-base font-semibold text-gray-900">
+            Job Board Sources
+          </h2>
           <p className="mt-1 text-sm text-gray-600">
-            Connect Greenhouse job boards. Our system will automatically monitor these for new opportunities.
+            Connect Greenhouse job boards. Our system will automatically monitor
+            these for new opportunities.
           </p>
 
           <div className="mt-6">
@@ -117,7 +126,7 @@ export default function Home({ user }) {
           </div>
         </div>
 
-        {/* RIGHT COLUMN (FORM ONLY) */}
+        {/* RIGHT COLUMN (FORM) */}
         <div className="md:col-span-2">
           <form onSubmit={addFeed} className="space-y-4">
             <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-6">
@@ -146,7 +155,7 @@ export default function Home({ user }) {
               </div>
             </div>
 
-            {/* Button below the form */}
+            {/* Button below form */}
             <button type="submit" className="btn-primary w-full sm:w-auto">
               Add Feed
             </button>
@@ -154,13 +163,15 @@ export default function Home({ user }) {
         </div>
       </div>
 
-      {/* ===== CENTERED FEEDS (ACTIVE + ARCHIVED BELOW) ===== */}
+      {/* ===== CENTERED FEEDS ===== */}
       <div className="mx-auto max-w-3xl space-y-10">
-        {/* ACTIVE FEEDS */}
+        {/* ACTIVE FEEDS (SUBTLE COLOR HEADER ONLY) */}
         <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">Active Feeds</h3>
-            <p className="text-xs text-gray-500 mt-1">
+          <div className="px-6 py-4 border-b bg-indigo-50/60 border-indigo-100">
+            <h3 className="text-sm font-semibold text-indigo-900">
+              Active Feeds
+            </h3>
+            <p className="text-xs text-indigo-700 mt-1">
               These feeds are monitored for new jobs.
             </p>
           </div>
@@ -172,8 +183,12 @@ export default function Home({ user }) {
                 className="flex items-center justify-between gap-x-6 px-6 py-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">{feed.company || "Company"}</p>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {feed.company || "Company"}
+                  </p>
+                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">
+                    {feed.url}
+                  </p>
                   {feed.lastError ? (
                     <p className="mt-1 text-xs text-red-600">{feed.lastError}</p>
                   ) : null}
@@ -197,10 +212,12 @@ export default function Home({ user }) {
           </ul>
         </div>
 
-        {/* ARCHIVED FEEDS (BELOW ACTIVE, CENTERED LIKE BEFORE) */}
+        {/* ARCHIVED FEEDS (NEUTRAL HEADER; COLOR ONLY ON TOP BAR) */}
         <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-900">Archived Feeds</h3>
+          <div className="px-6 py-4 border-b bg-indigo-50/60 border-indigo-100">
+            <h3 className="text-sm font-semibold text-indigo-900">
+              Archived Feeds
+            </h3>
             <p className="text-xs text-gray-500 mt-1">
               Archived feeds are not monitored. You can restore them anytime.
             </p>
@@ -213,8 +230,12 @@ export default function Home({ user }) {
                 className="flex items-center justify-between gap-x-6 px-6 py-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">{feed.company || "Company"}</p>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {feed.company || "Company"}
+                  </p>
+                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">
+                    {feed.url}
+                  </p>
                   {feed.archivedAt?.toDate ? (
                     <p className="mt-1 text-xs text-gray-400">
                       Archived on {feed.archivedAt.toDate().toLocaleString()}

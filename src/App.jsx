@@ -1,3 +1,4 @@
+// src/App.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
@@ -11,6 +12,7 @@ import ForgotPassword from "./pages/ForgotPassword.jsx";
 import Home from "./pages/Home.jsx";
 import Jobs from "./pages/Jobs.jsx";
 import Profile from "./pages/Profile.jsx";
+import FetchHistory from "./pages/FetchHistory.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -45,13 +47,14 @@ export default function App() {
 
     if (page === "jobs") return <Jobs user={user} userMeta={userMeta} />;
     if (page === "profile") return <Profile user={user} userMeta={userMeta} />;
-    return <Home user={user} userMeta={userMeta} />;
+    if (page === "history") return <FetchHistory user={user} />;
+    return <Home user={user} />;
   }, [loading, user, mode, page, userMeta]);
 
   return (
     <div className="h-full">
       {user && <TopBar user={user} userMeta={userMeta} page={page} setPage={setPage} onLogout={() => signOut(auth)} />}
-      
+
       {!user ? (
         <div className="h-full">{content}</div>
       ) : (
