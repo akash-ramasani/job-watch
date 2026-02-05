@@ -1,19 +1,20 @@
 // src/pages/Jobs.jsx
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
+  doc,
+  getDocs,
+  limit,
   onSnapshot,
   orderBy,
   query,
-  limit,
   startAfter,
-  getDocs,
 } from "firebase/firestore";
 import { db } from "../firebase";
 
 const PAGE_SIZE = 100;
 
-// US states: code + name (for searchable picker inside dropdown)
+// --- US states list for dropdown search ---
 const US_STATES = [
   { code: "AL", name: "Alabama" },
   { code: "AK", name: "Alaska" },
@@ -68,16 +69,6 @@ const US_STATES = [
   { code: "DC", name: "District of Columbia" },
 ];
 
-// Fallback US detection for older jobs (no country/states)
-function looksLikeUnitedStates(locationName) {
-  const loc = String(locationName || "");
-  if (/\b(united states|u\.s\.|usa)\b/i.test(loc)) return true;
-
-  const stateCodeRegex =
-    /(?:^|[\s,•|/()\-])(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC)(?=$|[\s,•|/()\-])/i;
-  return stateCodeRegex.test(loc);
-}
-
 function normalizeStateInputToCode(input) {
   const raw = String(input || "").trim();
   if (!raw) return "";
@@ -124,7 +115,7 @@ function shortAgoFromISO(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   const diffMs = Date.now() - d.getTime();
-  if (diffMs < 0) return "Now"; // clock skew
+  if (diffMs < 0) return "Now";
 
   const mins = Math.floor(diffMs / (1000 * 60));
   const hours = Math.floor(mins / 60);
@@ -188,31 +179,57 @@ function OptionsDropdown({ buttonLabel = "Options", children }) {
 }
 
 export default function Jobs({ user, userMeta }) {
+  const profileCountry = userMeta?.country || "United States";
+
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompanyKey, setSelectedCompanyKey] = useState(null);
+
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [lastDoc, setLastDoc] = useState(null);
   const [hasMore, setHasMore] = useState(true);
+  const observer = useRef(null);
 
   const [locationSearch, setLocationSearch] = useState("");
-  const [selectedCompany, setSelectedCompany] = useState(null);
-  const [companySearch, setCompanySearch] = useState("");
-
   const [stateFilter, setStateFilter] = useState("");
   const [stateInput, setStateInput] = useState("");
 
-  const observer = useRef(null);
-
-  const profileCountry = userMeta?.country || "United States";
-  const profileRegion = userMeta?.region || "";
-
-  // ✅ Default sort by updated_at (Greenhouse), newest first
+  // 1) Load companies; default select the most recently seen company
   useEffect(() => {
+    const companiesRef = collection(db, "users", user.uid, "companies");
+    const qCompanies = query(companiesRef, orderBy("lastSeenAt", "desc"), limit(50));
+
+    return onSnapshot(qCompanies, (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      setCompanies(list);
+
+      if (!selectedCompanyKey && list.length) {
+        setSelectedCompanyKey(list[0].id);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user.uid]);
+
+  // keep stateInput synced
+  useEffect(() => {
+    if (!stateFilter) setStateInput("");
+    else setStateInput(stateCodeToLabel(stateFilter));
+  }, [stateFilter]);
+
+  // 2) Subscribe to jobs for selected company
+  useEffect(() => {
+    if (!selectedCompanyKey) return;
+
     setLoading(true);
-    const jobsRef = collection(db, "users", user.uid, "jobs");
-    const q = query(jobsRef, orderBy("raw.updated_at", "desc"), limit(PAGE_SIZE));
+    setJobs([]);
+    setLastDoc(null);
+    setHasMore(true);
+
+    const jobsRef = collection(db, "users", user.uid, "companies", selectedCompanyKey, "jobs");
+    const qJobs = query(jobsRef, orderBy("updatedAtIso", "desc"), limit(PAGE_SIZE));
 
     const unsub = onSnapshot(
-      q,
+      qJobs,
       (snap) => {
         const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setJobs(docs);
@@ -227,77 +244,17 @@ export default function Jobs({ user, userMeta }) {
     );
 
     return () => unsub();
-  }, [user.uid]);
+  }, [user.uid, selectedCompanyKey]);
 
-  useEffect(() => {
-    if (!stateFilter) setStateInput("");
-    else setStateInput(stateCodeToLabel(stateFilter));
-  }, [stateFilter]);
-
-  const companies = useMemo(() => {
-    const set = new Set();
-    jobs.forEach((j) => {
-      const c = (j.companyName || j.raw?.company_name || "").trim();
-      if (c) set.add(c);
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [jobs]);
-
-  const filteredJobs = useMemo(() => {
-    const locTerms = locationSearch.trim().toLowerCase();
-    const companyTerms = companySearch.trim().toLowerCase();
-
-    return jobs.filter((j) => {
-      const company = (j.companyName || j.raw?.company_name || "").trim();
-      const location = (j.locationName || j.raw?.location?.name || "").trim();
-
-      // Country enforcement (high recall for US)
-      const jobCountry = j.country || null;
-      const matchesCountry =
-        (jobCountry && jobCountry === profileCountry) ||
-        (!jobCountry &&
-          profileCountry === "United States" &&
-          (Array.isArray(j.states) ? j.states.length > 0 : false)) ||
-        (!jobCountry && profileCountry === "United States" && looksLikeUnitedStates(location));
-
-      if (!matchesCountry) return false;
-
-      // State filter (US only)
-      if (profileCountry === "United States" && stateFilter) {
-        const states = Array.isArray(j.states) ? j.states : [];
-        const stateMatches =
-          states.includes(stateFilter) ||
-          location.includes(`, ${stateFilter}`) ||
-          new RegExp(`(?:^|[\\s,•|/()\\-])${stateFilter}(?=$|[\\s,•|/()\\-])`).test(location);
-
-        if (!stateMatches) return false;
-      }
-
-      // Company pill
-      if (selectedCompany && company !== selectedCompany) return false;
-
-      // Company search
-      if (companyTerms) {
-        if (!company.toLowerCase().includes(companyTerms)) return false;
-      }
-
-      // Location search
-      if (locTerms) {
-        if (!location.toLowerCase().includes(locTerms)) return false;
-      }
-
-      return true;
-    });
-  }, [jobs, locationSearch, companySearch, selectedCompany, stateFilter, profileCountry]);
-
+  // infinite scroll fetchMore (same company)
   const fetchMore = async () => {
-    if (!lastDoc || loading) return;
+    if (!selectedCompanyKey || !lastDoc || loading) return;
     setLoading(true);
     try {
-      const jobsRef = collection(db, "users", user.uid, "jobs");
+      const jobsRef = collection(db, "users", user.uid, "companies", selectedCompanyKey, "jobs");
       const nextQ = query(
         jobsRef,
-        orderBy("raw.updated_at", "desc"),
+        orderBy("updatedAtIso", "desc"),
         startAfter(lastDoc),
         limit(PAGE_SIZE)
       );
@@ -322,7 +279,7 @@ export default function Jobs({ user, userMeta }) {
       });
       if (node) observer.current.observe(node);
     },
-    [loading, hasMore, lastDoc]
+    [loading, hasMore, lastDoc, selectedCompanyKey]
   );
 
   const statePickerDisabled = profileCountry !== "United States";
@@ -349,107 +306,150 @@ export default function Jobs({ user, userMeta }) {
     }
   };
 
+  const filteredJobs = useMemo(() => {
+    const locTerms = locationSearch.trim().toLowerCase();
+
+    return jobs.filter((j) => {
+      const location = (j.locationName || j.raw?.location?.name || "").trim();
+
+      // Location contains
+      if (locTerms && !location.toLowerCase().includes(locTerms)) return false;
+
+      // State filter (US profiles only)
+      if (profileCountry === "United States" && stateFilter) {
+        // robust match: accepts "San Francisco, CA" and also "CA • United States"
+        const re = new RegExp(`(?:^|[\\s,•|/()\\-])${stateFilter}(?=$|[\\s,•|/()\\-])`);
+        if (!re.test(location)) return false;
+      }
+
+      return true;
+    });
+  }, [jobs, locationSearch, stateFilter, profileCountry]);
+
+  const selectedCompany = useMemo(() => {
+    if (!selectedCompanyKey) return null;
+    return companies.find((c) => c.id === selectedCompanyKey) || null;
+  }, [companies, selectedCompanyKey]);
+
   return (
     <div className="py-8" style={{ fontFamily: "Ubuntu, sans-serif" }}>
-      <div className="mb-2">
+      <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">Opportunities</h1>
         <p className="text-sm text-gray-500 mt-1">
-          Showing jobs for: <span className="font-semibold">{profileCountry}</span>
-          {profileRegion ? <span className="text-gray-400"> • Profile region: {profileRegion}</span> : null}
+          {selectedCompany?.companyName ? (
+            <>
+              Company: <span className="font-semibold">{selectedCompany.companyName}</span>
+            </>
+          ) : (
+            "Select a company to view jobs"
+          )}
+          <span className="text-gray-300"> • </span>
+          {filteredJobs.length} roles found
         </p>
       </div>
 
-      <div className="mb-6">
-        <p className="text-sm text-gray-500">{filteredJobs.length} roles found</p>
-      </div>
-
-      {/* Filters row */}
+      {/* Top controls */}
       <div className="space-y-4 mb-8">
         <div className="flex flex-wrap items-center gap-4 p-4 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
-          <div className="flex-1 min-w-[260px]">
-            <input
-              placeholder="Search company..."
+          {/* Company selector */}
+          <div className="min-w-[260px] flex-1">
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
+              Company
+            </label>
+            <select
+              value={selectedCompanyKey || ""}
+              onChange={(e) => setSelectedCompanyKey(e.target.value)}
               className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
-              value={companySearch}
-              onChange={(e) => setCompanySearch(e.target.value)}
-            />
+            >
+              {companies.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.companyName || c.id}
+                </option>
+              ))}
+              {!companies.length ? <option value="">No companies yet</option> : null}
+            </select>
           </div>
 
-          <div className="flex-1 min-w-[260px]">
+          {/* Location contains */}
+          <div className="min-w-[260px] flex-1">
+            <label className="block text-xs font-bold uppercase tracking-widest text-gray-400 mb-2">
+              Location contains
+            </label>
             <input
-              placeholder="Location contains..."
+              placeholder="e.g. San Francisco"
               className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
               value={locationSearch}
               onChange={(e) => setLocationSearch(e.target.value)}
             />
           </div>
 
-          <OptionsDropdown buttonLabel="Options">
-            <div className="px-4 py-2">
-              <div className="text-xs font-bold uppercase tracking-widest text-gray-400">Filters</div>
+          {/* Options dropdown */}
+          <div className="pt-6">
+            <OptionsDropdown buttonLabel="Options">
+              <div className="px-4 py-2">
+                <div className="text-xs font-bold uppercase tracking-widest text-gray-400">Filters</div>
 
-              <div className="mt-3">
-                <div className="text-sm font-semibold text-gray-900">State (US only)</div>
-                <div className="mt-2">
-                  <input
-                    list="us-states"
-                    value={stateInput}
-                    onChange={(e) => onStateInputChange(e.target.value)}
-                    onBlur={onStateInputBlur}
-                    disabled={statePickerDisabled}
-                    placeholder={statePickerDisabled ? "Disabled (non-US profile)" : "Type CA or California"}
-                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
-                    title={statePickerDisabled ? "State filtering is only for United States jobs" : ""}
-                  />
-                  <datalist id="us-states">
-                    {US_STATES.map((s) => (
-                      <option key={s.code} value={`${s.code} - ${s.name}`} />
-                    ))}
-                  </datalist>
-                </div>
-
-                <div className="mt-2 flex items-center justify-between">
-                  <div className="text-xs text-gray-500">
-                    {stateFilter ? (
-                      <>
-                        Active: <span className="font-semibold text-gray-800">{stateFilter}</span>
-                      </>
-                    ) : (
-                      "No state filter"
-                    )}
+                <div className="mt-3">
+                  <div className="text-sm font-semibold text-gray-900">State (US only)</div>
+                  <div className="mt-2">
+                    <input
+                      list="us-states"
+                      value={stateInput}
+                      onChange={(e) => onStateInputChange(e.target.value)}
+                      onBlur={onStateInputBlur}
+                      disabled={statePickerDisabled}
+                      placeholder={statePickerDisabled ? "Disabled (non-US profile)" : "Type CA or California"}
+                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                      title={statePickerDisabled ? "State filtering is only for United States jobs" : ""}
+                    />
+                    <datalist id="us-states">
+                      {US_STATES.map((s) => (
+                        <option key={s.code} value={`${s.code} - ${s.name}`} />
+                      ))}
+                    </datalist>
                   </div>
 
-                  {stateFilter ? (
-                    <button
-                      type="button"
-                      onClick={() => setStateFilter("")}
-                      className="text-sm font-semibold text-gray-700 hover:text-gray-900"
-                    >
-                      Clear
-                    </button>
-                  ) : null}
-                </div>
-              </div>
+                  <div className="mt-2 flex items-center justify-between">
+                    <div className="text-xs text-gray-500">
+                      {stateFilter ? (
+                        <>
+                          Active: <span className="font-semibold text-gray-800">{stateFilter}</span>
+                        </>
+                      ) : (
+                        "No state filter"
+                      )}
+                    </div>
 
-              <div className="mt-4 border-t border-gray-100 pt-3 flex items-center justify-between">
-                <div className="text-xs text-gray-500">
-                  Sorting: <span className="font-semibold text-gray-800">updated_at</span>
+                    {stateFilter ? (
+                      <button
+                        type="button"
+                        onClick={() => setStateFilter("")}
+                        className="text-sm font-semibold text-gray-700 hover:text-gray-900"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCompanySearch("");
-                    setLocationSearch("");
-                    setSelectedCompany(null);
-                    setStateFilter("");
-                  }}
-                  className="text-sm font-semibold text-indigo-600 hover:text-indigo-700"
-                >
-                  Clear all
-                </button>
+
+                <div className="mt-4 border-t border-gray-100 pt-3 flex items-center justify-between">
+                  <div className="text-xs text-gray-500">
+                    Sorting: <span className="font-semibold text-gray-800">updated_at</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLocationSearch("");
+                      setStateFilter("");
+                    }}
+                    className="text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+                  >
+                    Clear all
+                  </button>
+                </div>
               </div>
-            </div>
-          </OptionsDropdown>
+            </OptionsDropdown>
+          </div>
         </div>
 
         {/* Chips */}
@@ -467,58 +467,18 @@ export default function Jobs({ user, userMeta }) {
               </button>
             </span>
           ) : null}
-
-          {selectedCompany ? (
-            <span className="inline-flex items-center gap-2 rounded-full bg-gray-100 text-gray-700 px-3 py-1 text-xs font-semibold ring-1 ring-inset ring-gray-200">
-              Company: {selectedCompany}
-              <button
-                type="button"
-                onClick={() => setSelectedCompany(null)}
-                className="text-gray-600 hover:text-gray-900"
-                aria-label="Remove company filter"
-              >
-                ✕
-              </button>
-            </span>
-          ) : null}
-        </div>
-
-        {/* Company pills */}
-        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-2">
-          {companies.map((c) => {
-            const isSelected = selectedCompany === c;
-            return (
-              <button
-                key={c}
-                onClick={() => setSelectedCompany(isSelected ? null : c)}
-                className={`flex items-center gap-2 px-4 py-1.5 rounded-full border text-xs font-medium whitespace-nowrap transition-all ${
-                  isSelected
-                    ? "bg-indigo-600 border-indigo-600 text-white shadow-sm"
-                    : "bg-white border-gray-200 text-gray-600 hover:border-indigo-400"
-                }`}
-              >
-                {c}
-                {isSelected && <span className="text-[10px] opacity-80">✕</span>}
-              </button>
-            );
-          })}
-          {!companies.length ? <div className="text-xs text-gray-400 px-2">No companies yet.</div> : null}
         </div>
       </div>
 
-      {/* Job List */}
+      {/* Job list */}
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden">
         <ul className="divide-y divide-gray-100">
           {filteredJobs.map((job, index) => {
-            const company = job.companyName || job.raw?.company_name || "Company";
             const title = job.title || job.raw?.title || "Untitled role";
             const location = job.locationName || job.raw?.location?.name || "Remote";
             const href = job.absolute_url || job.raw?.absolute_url || "#";
 
-            // ✅ updated_at (ISO string from Greenhouse)
-            const updatedAtISO = job.raw?.updated_at || null;
-
-            // ✅ fetched time (Firestore server timestamp)
+            const updatedAtISO = job.updatedAtIso || job.raw?.updated_at || null;
             const fetchedTs = job.firstSeenAt || null;
 
             return (
@@ -531,26 +491,24 @@ export default function Jobs({ user, userMeta }) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
-                        {company}
+                        {selectedCompany?.companyName || job.companyName || "Company"}
                       </span>
                       <span className="text-gray-300">|</span>
-                      <span className="text-xs text-gray-500 font-medium truncate">
-                        {location}
-                      </span>
+                      <span className="text-xs text-gray-500 font-medium truncate">{location}</span>
                     </div>
 
                     <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
                       {title}
                     </h3>
 
-                    {/* ✅ Add "Fetched Xh ago" under job title */}
+                    {/* fetched time under title */}
                     <div className="mt-1 text-xs text-gray-400">
                       Fetched {timeAgoFromFirestore(fetchedTs)}
                     </div>
                   </div>
 
                   <div className="flex items-center gap-4 ml-4">
-                    {/* ✅ Right side: Updated _h ago (NOT date) */}
+                    {/* right side updated _h */}
                     <div className="flex flex-col items-end">
                       <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
                         Updated
