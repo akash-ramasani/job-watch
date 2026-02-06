@@ -72,7 +72,8 @@ export default function Jobs({ user, userMeta }) {
   const [companies, setCompanies] = useState([]);
   const [selectedKeys, setSelectedKeys] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(true); 
   const [lastDoc, setLastDoc] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [titleSearch, setTitleSearch] = useState("");
@@ -90,9 +91,8 @@ export default function Jobs({ user, userMeta }) {
   }, [user.uid]);
 
   const fetchJobs = useCallback(async (isFirstPage = true) => {
-    if (loading) return;
     setLoading(true);
-
+    setIsProcessing(true);
     try {
       const jobsQueryBase = collectionGroup(db, "jobs");
       let constraints = [
@@ -124,9 +124,13 @@ export default function Jobs({ user, userMeta }) {
       console.error("Fetch jobs error:", err);
       showToast("Error loading jobs.", "error");
     } finally {
-      setLoading(false);
+      // Artificial delay to prevent UI pop-in while React filters results
+      setTimeout(() => {
+        setLoading(false);
+        setIsProcessing(false);
+      }, 150);
     }
-  }, [user.uid, selectedKeys, lastDoc, loading, showToast]);
+  }, [user.uid, selectedKeys, lastDoc, showToast]);
 
   useEffect(() => {
     setLastDoc(null);
@@ -137,16 +141,11 @@ export default function Jobs({ user, userMeta }) {
   const lastElementRef = useCallback((node) => {
     if (loading || !hasMore) return;
     if (observer.current) observer.current.disconnect();
-
     observer.current = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting && hasMore && !loading) {
         fetchJobs(false);
       }
-    }, { 
-      rootMargin: '400px', 
-      threshold: 0 
-    });
-
+    }, { rootMargin: '400px', threshold: 0 });
     if (node) observer.current.observe(node);
   }, [loading, hasMore, fetchJobs]);
 
@@ -170,7 +169,6 @@ export default function Jobs({ user, userMeta }) {
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
     const now = Date.now();
-    
     return jobs.filter((j) => {
       if (timeframe !== "all") {
         const hoursMap = { '24h': 24, '12h': 12, '6h': 6, '1h': 1 };
@@ -178,33 +176,22 @@ export default function Jobs({ user, userMeta }) {
         const firstSeen = j.firstSeenAt?.toDate ? j.firstSeenAt.toDate().getTime() : 0;
         if (now - firstSeen > thresholdMs) return false;
       }
-
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
-
       if (stateFilter) {
         const location = (j.locationName || "").trim().toUpperCase();
         const stateRegex = new RegExp(`(?:^|[^A-Z])${stateFilter}(?:$|[^A-Z])`);
         if (!stateRegex.test(location)) return false;
       }
-
       return true;
     });
   }, [jobs, titleSearch, stateFilter, timeframe]);
 
   const { bookmarkedJobs, regularJobs } = useMemo(() => {
     const showPinnedSeparately = selectedKeys.length === 0 && timeframe === "all";
-
     if (showPinnedSeparately) {
-      return {
-        bookmarkedJobs: filteredJobs.filter(j => j.saved),
-        regularJobs: filteredJobs.filter(j => !j.saved)
-      };
-    } else {
-      return {
-        bookmarkedJobs: [],
-        regularJobs: filteredJobs
-      };
+      return { bookmarkedJobs: filteredJobs.filter(j => j.saved), regularJobs: filteredJobs.filter(j => !j.saved) };
     }
+    return { bookmarkedJobs: [], regularJobs: filteredJobs };
   }, [filteredJobs, selectedKeys, timeframe]);
 
   const renderJobItem = (job) => (
@@ -233,25 +220,26 @@ export default function Jobs({ user, userMeta }) {
     </li>
   );
 
+  const renderSkeleton = () => (
+    <div className="px-6 py-8 border-b border-gray-100 animate-pulse">
+      <div className="h-3 w-24 bg-gray-200 rounded mb-3" />
+      <div className="h-6 w-3/4 bg-gray-200 rounded mb-3" />
+      <div className="h-3 w-40 bg-gray-100 rounded" />
+    </div>
+  );
+
   return (
-    <div className="py-8 px-4 md:px-0" style={{ fontFamily: "Ubuntu, sans-serif" }}>
+    <div className="py-8 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
       {/* HEADER SECTION */}
-      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="text-center md:text-left">
+      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 text-center md:text-left">
+        <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Opportunities</h1>
           <p className="text-sm text-gray-500 mt-1">{selectedKeys.length === 0 ? "Viewing all companies" : `Filtering ${selectedKeys.length} source(s)`}</p>
         </div>
-        
         <div className="flex justify-center w-full md:w-auto overflow-hidden">
           <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth">
             {['all', '24h', '12h', '6h', '1h'].map((id) => (
-              <button 
-                key={id} 
-                onClick={() => setTimeframe(id)} 
-                className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${
-                  timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
-              >
+              <button key={id} onClick={() => setTimeframe(id)} className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
                 {id === 'all' ? 'All Jobs' : `Last ${id}`}
               </button>
             ))}
@@ -259,104 +247,46 @@ export default function Jobs({ user, userMeta }) {
         </div>
       </div>
 
-      {/* SEARCH BAR (With Centered Height Matching Button) */}
+      {/* SEARCH BAR & FILTER TOGGLE */}
       <div className="flex flex-wrap items-center gap-4 p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
         <div className="min-w-[240px] flex-1 flex items-end gap-3 h-fit">
           <div className="flex-1">
-            <label className="caps-label mb-2 block px-1 text-gray-400">JOB TITLE SEARCH</label>
-            <input 
-              placeholder="e.g. Software Engineer" 
-              className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11" 
-              value={titleSearch} 
-              onChange={(e) => setTitleSearch(e.target.value)} 
-            />
+            <label className="caps-label mb-2 block px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">Job Title Search</label>
+            <input placeholder="e.g. Software Engineer" className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full" value={titleSearch} onChange={(e) => setTitleSearch(e.target.value)} />
           </div>
-          
-          <button 
-            onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-            className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${
-              isFilterExpanded ? "bg-indigo-50 border-indigo-200 text-indigo-600" : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
-            }`}
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 flex-none transition-transform duration-300">
-              <path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" clipRule="evenodd" fillRule="evenodd" />
-            </svg>
+          <button onClick={() => setIsFilterExpanded(!isFilterExpanded)} className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner" : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"}`}>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300"><path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" /></svg>
           </button>
         </div>
-
         <div className="pt-6">
-          <button 
-            onClick={() => { setTitleSearch(""); setStateFilter(""); setTimeframe("all"); setSelectedKeys([]); }} 
-            className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2"
-          >
-            Reset All
-          </button>
+          <button onClick={() => { setTitleSearch(""); setStateFilter(""); setTimeframe("all"); setSelectedKeys([]); }} className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2">Reset All</button>
         </div>
       </div>
 
+      {/* EXPANDABLE FILTER PANEL */}
       <AnimatePresence>
         {isFilterExpanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="overflow-hidden mb-8"
-          >
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3, ease: "easeInOut" }} className="overflow-hidden mb-8">
             <div className="space-y-8 py-4 px-1">
               <div className="space-y-4">
-                <label className="caps-label px-1 text-gray-400">FILTER BY STATE</label>
+                <label className="caps-label px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by State</label>
                 <div className="flex w-full overflow-hidden">
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
-                    <button
-                      onClick={() => setStateFilter("")}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                        stateFilter === "" ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"
-                      }`}
-                    >
-                      All States
-                    </button>
+                    <button onClick={() => setStateFilter("")} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === "" ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}>All States</button>
                     {US_STATES.map((s) => (
-                      <button
-                        key={s.code}
-                        onClick={() => setStateFilter(s.code)}
-                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                          stateFilter === s.code ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-                        }`}
-                      >
-                        {s.code} - {s.name}
-                      </button>
+                      <button key={s.code} onClick={() => setStateFilter(s.code)} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === s.code ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"}`}>{s.code} - {s.name}</button>
                     ))}
                   </div>
                 </div>
               </div>
-
               <div className="space-y-4">
-                <label className="caps-label px-1 text-gray-400">FILTER BY COMPANY</label>
+                <label className="caps-label px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by Company</label>
                 <div className="flex w-full overflow-hidden">
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
-                    <button
-                      onClick={() => setSelectedKeys([])}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                        selectedKeys.length === 0 ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"
-                      }`}
-                    >
-                      All Companies
-                    </button>
-                    {companies.map((c) => {
-                      const isSelected = selectedKeys.includes(c.id);
-                      return (
-                        <button
-                          key={c.id}
-                          onClick={() => toggleCompany(c.id)}
-                          className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                            isSelected ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-                          }`}
-                        >
-                          {c.companyName || c.id}
-                        </button>
-                      );
-                    })}
+                    <button onClick={() => setSelectedKeys([])} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.length === 0 ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}>All Companies</button>
+                    {companies.map((c) => (
+                      <button key={c.id} onClick={() => toggleCompany(c.id)} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.includes(c.id) ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"}`}>{c.companyName || c.id}</button>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -365,40 +295,49 @@ export default function Jobs({ user, userMeta }) {
         )}
       </AnimatePresence>
 
-      <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden pb-4">
-        {bookmarkedJobs.length > 0 && (
-          <>
-            <div className="bg-amber-50/40 px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">📌 Pinned for Review</span>
-            </div>
-            <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
-            <div className="relative py-4 bg-white flex items-center px-6">
-              <div className="flex-grow border-t border-dashed border-gray-200"></div>
-              <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">Recent Postings</span>
-              <div className="flex-grow border-t border-dashed border-gray-200"></div>
-            </div>
-          </>
-        )}
-        
-        <ul className="divide-y divide-gray-100">
-          {regularJobs.map((job) => renderJobItem(job))}
-        </ul>
-
-        <div ref={lastElementRef} className="h-10 w-full flex items-center justify-center">
-            {loading && hasMore && (
-                <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest animate-pulse">Scanning...</span>
+      {/* JOB LISTINGS SECTION: STABLE CONTAINER */}
+      <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
+        {(loading || isProcessing) && jobs.length === 0 ? (
+          <div className="flex-grow divide-y divide-gray-100">
+            {Array.from({ length: 6 }).map((_, i) => <React.Fragment key={i}>{renderSkeleton()}</React.Fragment>)}
+          </div>
+        ) : filteredJobs.length === 0 ? (
+          <div className="flex-grow flex flex-col items-center justify-center py-32 text-center bg-gray-50/10">
+            <svg viewBox="0 0 20 20" fill="currentColor" className="size-12 text-gray-200 mb-4 animate-pulse"><path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" /></svg>
+            <p className="text-sm font-semibold text-gray-900 tracking-tight">No positions found</p>
+            <p className="text-xs text-gray-400 mt-1 max-w-[200px] leading-relaxed">Adjust filters to see more roles.</p>
+          </div>
+        ) : (
+          <div className="flex-grow">
+            {bookmarkedJobs.length > 0 && (
+              <div className="bg-amber-50/30">
+                <div className="px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">📌 Pinned for Review</span>
+                </div>
+                <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
+                <div className="relative py-4 bg-white flex items-center px-6">
+                  <div className="flex-grow border-t border-dashed border-gray-200" />
+                  <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">Recent Postings</span>
+                  <div className="flex-grow border-t border-dashed border-gray-200" />
+                </div>
+              </div>
             )}
-        </div>
-        
-        {!loading && filteredJobs.length === 0 && (
-          <div className="p-10 text-center text-sm text-gray-500 italic">No roles found matching these filters.</div>
-        )}
-        
-        {!hasMore && filteredJobs.length > 0 && (
-          <div className="p-4 text-center border-t border-gray-50 mt-4">
-             <span className="text-[10px] font-black text-gray-200 uppercase tracking-widest">End of Feed</span>
+            <ul className="divide-y divide-gray-100">{regularJobs.map((job) => renderJobItem(job))}</ul>
           </div>
         )}
+
+        {/* BOTTOM SENTINEL */}
+        <div ref={lastElementRef} className="h-20 flex items-center justify-center border-t border-gray-50">
+          {(loading || isProcessing) && jobs.length > 0 ? (
+            <div className="flex gap-1.5">
+              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce [animation-delay:-0.3s]" />
+              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce [animation-delay:-0.15s]" />
+              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce" />
+            </div>
+          ) : !hasMore && jobs.length > 0 && (
+            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">End of Feed</span>
+          )}
+        </div>
       </div>
     </div>
   );
