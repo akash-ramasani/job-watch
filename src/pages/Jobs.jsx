@@ -78,7 +78,10 @@ export default function Jobs({ user, userMeta }) {
   const [hasMore, setHasMore] = useState(true);
   const [titleSearch, setTitleSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
-  const [timeframe, setTimeframe] = useState("all"); 
+  
+  // Set default timeframe to "1h" on load
+  const [timeframe, setTimeframe] = useState("1h"); 
+  
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
   const observer = useRef(null);
 
@@ -124,8 +127,6 @@ export default function Jobs({ user, userMeta }) {
       console.error("Fetch jobs error:", err);
       showToast("Error loading jobs.", "error");
     } finally {
-      // 150ms buffer ensures React has finished computing the filteredJobs useMemo
-      // before we remove the Skeleton loaders, preventing the "flicker"
       setTimeout(() => {
         setLoading(false);
         setIsProcessing(false);
@@ -174,13 +175,12 @@ export default function Jobs({ user, userMeta }) {
       if (timeframe !== "all") {
         const hoursMap = { '24h': 24, '12h': 12, '6h': 6, '1h': 1 };
         const thresholdMs = hoursMap[timeframe] * 60 * 60 * 1000;
-        const firstSeen = j.firstSeenAt?.toDate ? j.firstSeenAt.toDate().getTime() : 0;
-        if (now - firstSeen > thresholdMs) return false;
+        const updatedTime = j.updatedAtIso ? new Date(j.updatedAtIso).getTime() : 0;
+        if (now - updatedTime > thresholdMs) return false;
       }
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
       if (stateFilter) {
         const location = (j.locationName || "").trim().toUpperCase();
-        // Regex ensures we match the state code correctly even in complex location strings
         const stateRegex = new RegExp(`(?:^|[^A-Z])${stateFilter}(?:$|[^A-Z])`);
         if (!stateRegex.test(location)) return false;
       }
@@ -189,6 +189,7 @@ export default function Jobs({ user, userMeta }) {
   }, [jobs, titleSearch, stateFilter, timeframe]);
 
   const { bookmarkedJobs, regularJobs } = useMemo(() => {
+    // We only show pinned separately if viewing "All Jobs" and no specific company is selected
     const showPinnedSeparately = selectedKeys.length === 0 && timeframe === "all";
     if (showPinnedSeparately) {
       return { bookmarkedJobs: filteredJobs.filter(j => j.saved), regularJobs: filteredJobs.filter(j => !j.saved) };
@@ -257,11 +258,11 @@ export default function Jobs({ user, userMeta }) {
             <input placeholder="e.g. Software Engineer" className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full" value={titleSearch} onChange={(e) => setTitleSearch(e.target.value)} />
           </div>
           <button onClick={() => setIsFilterExpanded(!isFilterExpanded)} className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner" : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"}`}>
-            <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300"><path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" /></svg>
+            <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300"><path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 1-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" /></svg>
           </button>
         </div>
         <div className="pt-6">
-          <button onClick={() => { setTitleSearch(""); setStateFilter(""); setTimeframe("all"); setSelectedKeys([]); }} className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2">Reset All</button>
+          <button onClick={() => { setTitleSearch(""); setStateFilter(""); setTimeframe("1h"); setSelectedKeys([]); }} className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2">Reset All</button>
         </div>
       </div>
 
@@ -271,7 +272,10 @@ export default function Jobs({ user, userMeta }) {
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.3, ease: "easeInOut" }} className="overflow-hidden mb-8">
             <div className="space-y-8 py-4 px-1">
               <div className="space-y-4">
-                <label className="caps-label px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by State</label>
+                <div className="flex items-center gap-2 px-1">
+                  <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by State</label>
+                  <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{US_STATES.length}</span>
+                </div>
                 <div className="flex w-full overflow-hidden">
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button onClick={() => setStateFilter("")} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === "" ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}>All States</button>
@@ -282,7 +286,10 @@ export default function Jobs({ user, userMeta }) {
                 </div>
               </div>
               <div className="space-y-4">
-                <label className="caps-label px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by Company</label>
+                <div className="flex items-center gap-2 px-1">
+                  <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">Filter by Company</label>
+                  <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">{companies.length}</span>
+                </div>
                 <div className="flex w-full overflow-hidden">
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button onClick={() => setSelectedKeys([])} className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.length === 0 ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}>All Companies</button>
@@ -337,7 +344,7 @@ export default function Jobs({ user, userMeta }) {
               <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce" />
             </div>
           ) : !hasMore && jobs.length > 0 && (
-            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">End of Feed</span>
+            <span className="text-[10px] font-black text-gray-200 uppercase tracking-widest">End of Feed</span>
           )}
         </div>
       </div>

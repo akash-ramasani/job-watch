@@ -1,7 +1,7 @@
 /**
  * functions/index.js
  * Node runtime: 20
- * Optimized: US-Filter + Guaranteed History Logging
+ * Optimized: US-Filter (States + Cities) + Robust History Logging
  */
 
 const functions = require("firebase-functions");
@@ -12,16 +12,39 @@ const db = admin.firestore();
 
 // --- Robust US Location Filtering ---
 const US_STATE_CODES = ["AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC"];
+
 const US_KEYWORDS = ["UNITED STATES", "USA", "AMER - US", "USCA", "US-REMOTE", "US REMOTE", "REMOTE US", "REMOTE - US", "NYC", "SAN FRANCISCO", "SF-HQ", "US-NATIONAL", "WASHINGTON DC", "ANYWHERE IN THE UNITED STATES"];
+
+const MAJOR_US_CITIES = [
+  "SAN FRANCISCO", "NYC", "NEW YORK CITY", "LOS ANGELES", "CHICAGO", "HOUSTON", 
+  "PHOENIX", "PHILADELPHIA", "SAN ANTONIO", "SAN DIEGO", "DALLAS", "SAN JOSE", 
+  "AUSTIN", "JACKSONVILLE", "FORT WORTH", "COLUMBUS", "CHARLOTTE", "INDIANAPOLIS", 
+  "SEATTLE", "DENVER", "BOSTON", "EL PASO", "NASHVILLE", "DETROIT", 
+  "OKLAHOMA CITY", "PORTLAND", "LAS VEGAS", "MEMPHIS", "LOUISVILLE", "BALTIMORE", 
+  "MILWAUKEE", "ALBUQUERQUE", "TUCSON", "FRESNO", "SACRAMENTO", "MESA", "KANSAS CITY", 
+  "ATLANTA", "OMAHA", "COLORADO SPRINGS", "RALEIGH", "LONG BEACH", "VIRGINIA BEACH", 
+  "MIAMI", "OAKLAND", "MINNEAPOLIS", "TULSA", "BAKERSFIELD", "WICHITA", "ARLINGTON"
+];
 
 function isUSLocation(locationText) {
   if (!locationText) return false;
   const text = locationText.toUpperCase();
+
+  // 1. Check Keywords
   if (US_KEYWORDS.some(kw => text.includes(kw))) return true;
+
+  // 2. Check Major Cities with Word Boundaries
+  if (MAJOR_US_CITIES.some(city => {
+    const regex = new RegExp(`(?:^|[,\\s\\/])${city}(?:[\\s,;\\/]|$)`);
+    return regex.test(text);
+  })) return true;
+
+  // 3. Check State Codes
   const stateMatch = US_STATE_CODES.some(code => {
     const regex = new RegExp(`(?:^|[,\\s\\/])${code}(?:[\\s,;\\/]|$)`);
     return regex.test(text);
   });
+  
   return stateMatch || /\bUS\b/.test(text) || text.includes("U.S.");
 }
 
@@ -61,7 +84,6 @@ async function pollForUser(uid, runType = "scheduled") {
   const runRef = userRef.collection("fetchRuns").doc();
   const startedAtMs = Date.now();
 
-  // 1. Create the document immediately so it's visible in History
   await runRef.set({
     runType,
     startedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -129,7 +151,6 @@ async function pollForUser(uid, runType = "scheduled") {
       }
     }
   } finally {
-    // 2. GUARANTEED UPDATE: This ensures history is updated even if zero jobs are found
     await runRef.update({
       finishedAt: admin.firestore.FieldValue.serverTimestamp(),
       durationMs: Date.now() - startedAtMs,
