@@ -31,12 +31,49 @@ const SCHEDULE = "every 30 minutes";
 
 // If you want "remote anywhere worldwide", set this to [].
 const REMOTE_EXCLUDE_SUBSTRINGS = [
-  "uk", "u.k", "united kingdom", "ireland", "germany", "france", "spain", "portugal", "italy",
-  "sweden", "norway", "finland", "denmark", "netherlands", "poland", "romania", "hungary", "latvia",
-  "greece", "switzerland", "zurich", "zürich", "luxembourg", "australia", "canada", "mexico",
-  "argentina", "brazil", "colombia", "peru", "pakistan", "india", "bangalore", "bengaluru",
-  "hyderabad", "gurgaon", "gurugram", "china", "shanghai", "beijing", "hong kong", "singapore",
-  "japan", "tokyo", "osaka", "korea", "seoul", "uae", "dubai", "israel", "tel aviv", "turkey", "istanbul",
+  // Europe
+  "albania","andorra","austria","belgium","bosnia and herzegovina","bulgaria","croatia",
+  "cyprus","czech republic","denmark","estonia","finland","france","germany","greece",
+  "hungary","iceland","ireland","italy","latvia","liechtenstein","lithuania","luxembourg",
+  "malta","monaco","montenegro","netherlands","north macedonia","norway","poland",
+  "portugal","romania","san marino","serbia","slovakia","slovenia","spain","sweden",
+  "switzerland","ukraine","united kingdom","vatican city",
+
+  // Asia
+  "afghanistan","armenia","azerbaijan","bahrain","bangladesh","bhutan","brunei",
+  "cambodia","china","georgia","india","indonesia","iran","iraq","israel","japan",
+  "jordan","kazakhstan","kuwait","kyrgyzstan","laos","lebanon","malaysia","maldives",
+  "mongolia","myanmar","nepal","north korea","oman","pakistan","philippines","qatar",
+  "saudi arabia","singapore","south korea","sri lanka","syria","tajikistan","thailand",
+  "timor-leste","turkey","turkmenistan","united arab emirates","uzbekistan","vietnam","yemen",
+
+  // Africa
+  "algeria","angola","benin","botswana","burkina faso","burundi","cabo verde",
+  "cameroon","central african republic","chad","comoros","congo","costa d'ivoire",
+  "djibouti","egypt","equatorial guinea","eritrea","eswatini","ethiopia","gabon",
+  "gambia","ghana","guinea","guinea-bissau","kenya","lesotho","liberia","libya",
+  "madagascar","malawi","mali","mauritania","mauritius","morocco","mozambique",
+  "namibia","niger","nigeria","rwanda","sao tome and principe","senegal","seychelles",
+  "sierra leone","somalia","south africa","south sudan","sudan","tanzania","togo",
+  "tunisia","uganda","zambia","zimbabwe",
+
+  // South America
+  "argentina","bolivia","brazil","chile","colombia","ecuador","guyana","paraguay",
+  "peru","suriname","uruguay","venezuela",
+
+  // Central America & Caribbean
+  "antigua and barbuda","bahamas","barbados","belize","cuba","dominica",
+  "dominican republic","el salvador","grenada","guatemala","haiti","honduras",
+  "jamaica","nicaragua","panama","saint kitts and nevis","saint lucia",
+  "saint vincent and the grenadines","trinidad and tobago",
+
+  // North America (explicitly included, excluding USA)
+  "canada","mexico",
+
+  // Oceania
+  "australia","fiji","kiribati","marshall islands","micronesia","nauru",
+  "new zealand","palau","papua new guinea","samoa","solomon islands","tonga",
+  "tuvalu","vanuatu"
 ];
 
 // ---------------- US Location Filtering ----------------
@@ -47,6 +84,7 @@ const US_STATE_CODES = [
 ];
 
 const US_KEYWORDS = [
+  "REMOTE",
   "UNITED STATES",
   "USA",
   "AMER - US",
