@@ -75,73 +75,94 @@ function timeframeToThresholdTs(timeframe) {
   return Timestamp.fromDate(new Date(Date.now() - ms));
 }
 
-export default function Jobs({ user, userMeta }) {
+export default function Jobs({ user }) {
   const { showToast } = useToast();
 
   const [companies, setCompanies] = useState([]);
+  const [companyNameByKey, setCompanyNameByKey] = useState({}); // <-- map key => name
   const [selectedKeys, setSelectedKeys] = useState([]);
+
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(true);
   const [lastDoc, setLastDoc] = useState(null);
   const [hasMore, setHasMore] = useState(true);
+
   const [titleSearch, setTitleSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
-  const [timeframe, setTimeframe] = useState("1h");
+  const [timeframe, setTimeframe] = useState("1h"); // default Last 1h
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+
   const observer = useRef(null);
 
-  // ✅ CHANGE: use getDocs instead of onSnapshot to avoid constant reads as backend updates companies
+  // Load companies (and build key=>name map)
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const companiesRef = collection(db, "users", user.uid, "companies");
-        const qCompanies = query(companiesRef, orderBy("lastSeenAt", "desc"), limit(200));
+        const qCompanies = query(companiesRef, orderBy("lastSeenAt", "desc"), limit(500));
         const snap = await getDocs(qCompanies);
+
+        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+        // Build a stable map of companyKey => companyName
+        const map = {};
+        for (const c of list) {
+          const name = (c.companyName || c.name || "").trim();
+          map[c.id] = name || "Unknown";
+        }
+
         if (!cancelled) {
-          setCompanies(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+          setCompanies(list);
+          setCompanyNameByKey(map);
         }
       } catch (e) {
         console.error("Load companies error:", e);
       }
     })();
+
     return () => { cancelled = true; };
   }, [user.uid]);
 
-  // ✅ CHANGE: apply timeframe in Firestore query using updatedAtTs
-  // This stops infinite paging when timeframe filters out old jobs client-side.
+  /**
+   * SORTING (how jobs are sorted)
+   * - For timeframe != "all":
+   *     we do server-side filtering: where(updatedAtTs >= threshold) and orderBy(updatedAtTs desc)
+   * - For timeframe == "all":
+   *     if some docs might not have updatedAtTs, we fallback to orderBy(firstSeenAt desc)
+   *
+   * If your DB truly has NO updatedAtTs yet, you must add it in the backend writes,
+   * otherwise the timeframe queries will fail.
+   */
   const fetchJobs = useCallback(async (isFirstPage = true) => {
     setLoading(true);
     setIsProcessing(true);
 
     try {
       const jobsQueryBase = collectionGroup(db, "jobs");
-
       const constraints = [];
 
-      // always scoped to current user
+      // You are currently writing jobs under users/{uid}/jobs, so each job doc should include uid
       constraints.push(where("uid", "==", user.uid));
 
-      // timeframe server-side
-      const thresholdTs = timeframeToThresholdTs(timeframe);
-      if (thresholdTs) {
-        constraints.push(where("updatedAtTs", ">=", thresholdTs));
-      }
-
-      // company filter
+      // Company filter (supports single/multi)
       if (selectedKeys.length > 0) {
-        // NOTE: Firestore "in" supports max 10 items
         constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
       }
 
-      // order must match range field
-      constraints.push(orderBy("updatedAtTs", "desc"));
-      constraints.push(limit(PAGE_SIZE));
-
-      if (!isFirstPage && lastDoc) {
-        constraints.push(startAfter(lastDoc));
+      if (timeframe === "all") {
+        // "all" mode: legacy-safe sort (works even if updatedAtTs missing)
+        constraints.push(orderBy("firstSeenAt", "desc"));
+      } else {
+        // timeframe mode: requires updatedAtTs to exist on every job doc
+        const thresholdTs = timeframeToThresholdTs(timeframe);
+        if (thresholdTs) constraints.push(where("updatedAtTs", ">=", thresholdTs));
+        constraints.push(orderBy("updatedAtTs", "desc"));
       }
+
+      constraints.push(limit(PAGE_SIZE));
+      if (!isFirstPage && lastDoc) constraints.push(startAfter(lastDoc));
 
       const qJobs = query(jobsQueryBase, ...constraints);
       const snap = await getDocs(qJobs);
@@ -167,7 +188,7 @@ export default function Jobs({ user, userMeta }) {
     }
   }, [user.uid, selectedKeys, lastDoc, timeframe, showToast]);
 
-  // ✅ CHANGE: when selectedKeys OR timeframe changes, reset paging and refetch first page
+  // Reset paging when filters change
   useEffect(() => {
     setLastDoc(null);
     setJobs([]);
@@ -180,11 +201,12 @@ export default function Jobs({ user, userMeta }) {
     if (loading || !hasMore) return;
     if (observer.current) observer.current.disconnect();
 
-    observer.current = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && hasMore && !loading) {
-        fetchJobs(false);
-      }
-    }, { rootMargin: "400px", threshold: 0 });
+    observer.current = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loading) fetchJobs(false);
+      },
+      { rootMargin: "400px", threshold: 0 }
+    );
 
     if (node) observer.current.observe(node);
   }, [loading, hasMore, fetchJobs]);
@@ -205,14 +227,20 @@ export default function Jobs({ user, userMeta }) {
       await updateDoc(doc(db, job._path), { saved: newState });
       showToast(newState ? "Job pinned" : "Pin removed", "info");
     } catch (err) {
+      console.error("Bookmark update error:", err);
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, saved: !newState } : j)));
       showToast("Error updating bookmark", "error");
     }
   };
 
-  // ✅ NOTE: timeframe filtering is now server-side; keep only title + state client-side
+  /**
+   * State filtering:
+   * Right now this is CLIENT-SIDE using locationName text.
+   * If you want multi-state server-side filtering, you need backend to store stateCodes: ["CA","NY"].
+   */
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
+
     return jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
@@ -221,6 +249,7 @@ export default function Jobs({ user, userMeta }) {
         const stateRegex = new RegExp(`(?:^|[^A-Z])${stateFilter}(?:$|[^A-Z])`);
         if (!stateRegex.test(location)) return false;
       }
+
       return true;
     });
   }, [jobs, titleSearch, stateFilter]);
@@ -236,35 +265,73 @@ export default function Jobs({ user, userMeta }) {
     return { bookmarkedJobs: [], regularJobs: filteredJobs };
   }, [filteredJobs, selectedKeys, timeframe]);
 
+  const displayCompanyName = (job) => {
+    // Prefer job.companyName (stored on job doc); fallback to companies map; fallback to companyKey
+    const byDoc = (job.companyName || "").trim();
+    if (byDoc) return byDoc;
+
+    const byMap = companyNameByKey[job.companyKey];
+    if (byMap) return byMap;
+
+    return job.companyKey || "Unknown";
+  };
+
   const renderJobItem = (job) => (
-    <li key={job.id} className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500">
+    <li
+      key={job.id}
+      className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500"
+    >
       <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
       <div className="flex items-center justify-between">
         <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">{job.companyName}</span>
+            <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
+              {displayCompanyName(job)}
+            </span>
             <span className="text-gray-300">|</span>
-            <span className="text-xs text-gray-500 font-medium truncate">{job.locationName || "Remote"}</span>
+            <span className="text-xs text-gray-500 font-medium truncate">
+              {job.locationName || "Remote"}
+            </span>
           </div>
+
           <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
             {job.title}
           </h3>
-          <div className="mt-1 text-xs text-gray-400">Fetched {timeAgoFromFirestore(job.firstSeenAt)}</div>
+
+          <div className="mt-1 text-xs text-gray-400">
+            Fetched {timeAgoFromFirestore(job.firstSeenAt)}
+          </div>
         </a>
 
         <div className="flex items-center gap-4 ml-4">
           <button
             onClick={(e) => toggleBookmark(e, job)}
-            className={`p-2 rounded-full transition-colors ${job.saved ? "text-amber-500 bg-amber-50" : "text-gray-300 hover:bg-gray-100 hover:text-gray-500"}`}
+            className={`p-2 rounded-full transition-colors ${
+              job.saved ? "text-amber-500 bg-amber-50" : "text-gray-300 hover:bg-gray-100 hover:text-gray-500"
+            }`}
           >
-            <svg className="size-5" fill={job.saved ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" />
+            <svg
+              className="size-5"
+              fill={job.saved ? "currentColor" : "none"}
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z"
+              />
             </svg>
           </button>
 
           <div className="hidden sm:flex flex-col items-end">
-            <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">Updated</span>
-            <span className="text-sm font-bold text-gray-900">{shortAgoFromISO(job.updatedAtIso)}</span>
+            <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
+              Updated
+            </span>
+            <span className="text-sm font-bold text-gray-900">
+              {shortAgoFromISO(job.updatedAtIso)}
+            </span>
           </div>
         </div>
       </div>
@@ -279,8 +346,6 @@ export default function Jobs({ user, userMeta }) {
     </div>
   );
 
-console.error("Fetch jobs error:", err);
-
   return (
     <div className="py-8 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
       {/* HEADER */}
@@ -288,7 +353,7 @@ console.error("Fetch jobs error:", err);
         <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Opportunities</h1>
           <p className="text-sm text-gray-500 mt-1">
-            {selectedKeys.length === 0 ? "Viewing all companies" : `Filtering ${selectedKeys.length} source(s)`}
+            {selectedKeys.length === 0 ? "Viewing all companies" : `Filtering ${selectedKeys.length} company(ies)`}
           </p>
         </div>
 
@@ -298,7 +363,9 @@ console.error("Fetch jobs error:", err);
               <button
                 key={id}
                 onClick={() => setTimeframe(id)}
-                className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"}`}
+                className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${
+                  timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                }`}
               >
                 {id === "all" ? "All Jobs" : `Last ${id}`}
               </button>
@@ -324,7 +391,11 @@ console.error("Fetch jobs error:", err);
 
           <button
             onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-            className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner" : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"}`}
+            className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${
+              isFilterExpanded
+                ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
+                : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
+            }`}
           >
             <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300">
               <path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" />
@@ -338,7 +409,7 @@ console.error("Fetch jobs error:", err);
               setTitleSearch("");
               setStateFilter("");
               setTimeframe("1h");
-              setSelectedKeys([]);
+              setSelectedKeys([]); // all companies
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2"
           >
@@ -373,15 +444,24 @@ console.error("Fetch jobs error:", err);
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button
                       onClick={() => setStateFilter("")}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === "" ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}
+                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                        stateFilter === ""
+                          ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
                     >
                       All States
                     </button>
+
                     {US_STATES.map((s) => (
                       <button
                         key={s.code}
                         onClick={() => setStateFilter(s.code)}
-                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === s.code ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"}`}
+                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                          stateFilter === s.code
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
+                            : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
+                        }`}
                       >
                         {s.code} - {s.name}
                       </button>
@@ -405,20 +485,32 @@ console.error("Fetch jobs error:", err);
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button
                       onClick={() => setSelectedKeys([])}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.length === 0 ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" : "text-gray-500 hover:text-gray-700"}`}
+                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                        selectedKeys.length === 0
+                          ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
+                          : "text-gray-500 hover:text-gray-700"
+                      }`}
                     >
                       All Companies
                     </button>
 
-                    {companies.map((c) => (
-                      <button
-                        key={c.id}
-                        onClick={() => toggleCompany(c.id)}
-                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.includes(c.id) ? "bg-indigo-600 text-white shadow-md shadow-indigo-100" : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"}`}
-                      >
-                        {c.companyName || c.id}
-                      </button>
-                    ))}
+                    {companies.map((c) => {
+                      const label = (c.companyName || c.name || "").trim() || "Unknown";
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => toggleCompany(c.id)}
+                          className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
+                            selectedKeys.includes(c.id)
+                              ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
+                              : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
+                          }`}
+                          title={c.id} // hover shows the key if you ever need it
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -453,7 +545,9 @@ console.error("Fetch jobs error:", err);
                 <div className="px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">📌 Pinned for Review</span>
                 </div>
-                <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
+                <ul className="divide-y divide-gray-100">
+                  {bookmarkedJobs.map((job) => renderJobItem(job))}
+                </ul>
                 <div className="relative py-4 bg-white flex items-center px-6">
                   <div className="flex-grow border-t border-dashed border-gray-200" />
                   <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">Recent Postings</span>
@@ -461,7 +555,9 @@ console.error("Fetch jobs error:", err);
                 </div>
               </div>
             )}
-            <ul className="divide-y divide-gray-100">{regularJobs.map((job) => renderJobItem(job))}</ul>
+            <ul className="divide-y divide-gray-100">
+              {regularJobs.map((job) => renderJobItem(job))}
+            </ul>
           </div>
         )}
 

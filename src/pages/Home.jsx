@@ -12,6 +12,7 @@ import {
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import { getDocs } from "firebase/firestore";
 
 export default function Home({ user }) {
   const { showToast } = useToast();
@@ -74,29 +75,19 @@ export default function Home({ user }) {
   }
 
   async function fetchNow() {
-    setBusyNow(true);
-    try {
-      // KNOB: region MUST match where you deployed pollNowV2
-      const functions = getFunctions(undefined, "us-central1");
-
-      // IMPORTANT: callable name must match exactly what you deployed
-      const callPollNow = httpsCallable(functions, "pollNowV2");
-
-      const resp = await callPollNow({});
-      const data = resp?.data || {};
-
-      if (data?.enqueued) {
-        showToast("Fetch started. New jobs will appear shortly.", "success");
-      } else {
-        showToast("Fetch triggered, check Jobs page in a moment.", "success");
-      }
-    } catch (err) {
-      console.error(err);
-      showToast("Manual fetch failed. Try again later.", "error");
-    } finally {
-      setBusyNow(false);
-    }
+  setBusyNow(true);
+  try {
+    const functions = getFunctions(undefined, "us-central1");
+    const callFn = httpsCallable(functions, "pollNowV2");
+    await callFn({});
+    showToast("Fetch started. New jobs will appear shortly.", "success");
+  } catch (e) {
+    console.error(e);
+    showToast(e?.message || "Manual fetch failed.", "error");
+  } finally {
+    setBusyNow(false);
   }
+}
 
   async function archiveFeed(feedId) {
     setBusyArchiveId(feedId);

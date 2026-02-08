@@ -1,398 +1,629 @@
+/* eslint-disable max-len */
 /**
- * functions/index.js  (Node 20)
+ * functions/index.js (Node 20, Firebase Functions Gen2)
  *
- * FINAL SCALABLE ARCHITECTURE (no user feed limit):
- * 1) Scheduler enqueues ONE task per user (fan-out).
- * 2) Worker task processes ONE user per invocation.
- * 3) Worker processes feeds in PAGES (chunking) so a user with 10k feeds still works:
- *    - process up to FEEDS_PER_TASK feeds per task
- *    - if more feeds remain, enqueue the next page task
- * 4) No per-job Firestore reads: use BulkWriter + create() for dedupe.
+ * - Polls Greenhouse feeds stored per-user: users/{uid}/feeds/{feedId} -> { company/name, url, active:true }
+ * - Saves jobs: users/{uid}/jobs/{companyKey}__{jobId}
+ * - Writes fetch history: users/{uid}/fetchRuns/{runId}
+ * - Writes companies list for UI: users/{uid}/companies/{companyKey}
  *
- * KNOBS are clearly marked below.
+ * Writes:
+ * - updatedAtTs (Timestamp)  <-- required for proper sorting + timeframe query
+ * - stateCodes (array)       <-- required for multi-state filtering
+ * - perFeedSummary (array)   <-- for FetchHistory UI
  */
 
 const admin = require("firebase-admin");
-admin.initializeApp();
-const db = admin.firestore();
-
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+const pLimit = require("p-limit").default;
 
-// IMPORTANT: enqueue task queues via Admin SDK (NOT firebase-functions/v2)
-const { getFunctions } = require("firebase-admin/functions");
+admin.initializeApp();
+const db = admin.firestore();
+const { FieldValue, Timestamp } = admin.firestore;
 
-const pLimit = require("p-limit");
-
-// -------------------- KNOB 1: Set your deployment region (keep SAME for all functions) --------------------
-// What to do: set this to the same region where your Firestore + Functions should run (commonly "us-central1").
-// Why: reduces latency + avoids cross-region cost.
+// ------------------------ CONFIG ------------------------
 const REGION = "us-central1";
+const FEED_CONCURRENCY = 8;       // safe for ~350 feeds
+const JOB_WRITE_CONCURRENCY = 25; // safe for job upserts
+const SCHEDULE = "every 30 minutes";
 
-// -------------------- KNOB 2: Feed page size per task (hard scaling control) --------------------
-// What to do: if a user has many feeds, process them in chunks so you never time out.
-// Start with 100. If tasks finish very quickly, you can increase (200–300). If tasks time out, reduce.
-const FEEDS_PER_TASK = 100;
-
-// -------------------- KNOB 3: Parallel feeds processed inside ONE task --------------------
-// What to do: controls how many feeds are fetched/processed at the same time per user-task.
-// Start 10. If you hit remote rate limits, reduce to 5. If everything is fast and stable, increase to 15–20.
-const FEED_CONCURRENCY = 10;
-
-// -------------------- KNOB 4: HTTP fetch timeout per feed --------------------
-// What to do: how long to wait for a single feed URL before treating it as failed.
-// Start 15000ms. If feeds are often slow but valid, increase to 25000ms. If you want faster failover, reduce.
-const FETCH_TIMEOUT_MS = 15000;
-
-// -------------------- KNOB 5: Task worker resources --------------------
-// What to do: if tasks are timing out or OOM, increase memory and/or timeoutSeconds.
-// If costs are too high and tasks finish quickly, you can reduce.
-const WORKER_TIMEOUT_SECONDS = 540; // 9 minutes
-const WORKER_MEMORY = "1GiB";
-
-// -------------------- KNOB 6: Global max concurrent user tasks --------------------
-// What to do: limits how many user-tasks run at once for your whole project.
-// Start 20–50 depending on your project size. Too high can cause rate limits and Firestore pressure.
-const MAX_CONCURRENT_USER_TASKS = 50;
-// =================================================
+// If you want "remote anywhere worldwide", set this to [].
+const REMOTE_EXCLUDE_SUBSTRINGS = [
+  "uk", "u.k", "united kingdom", "ireland", "germany", "france", "spain", "portugal", "italy",
+  "sweden", "norway", "finland", "denmark", "netherlands", "poland", "romania", "hungary", "latvia",
+  "greece", "switzerland", "zurich", "zürich", "luxembourg", "australia", "canada", "mexico",
+  "argentina", "brazil", "colombia", "peru", "pakistan", "india", "bangalore", "bengaluru",
+  "hyderabad", "gurgaon", "gurugram", "china", "shanghai", "beijing", "hong kong", "singapore",
+  "japan", "tokyo", "osaka", "korea", "seoul", "uae", "dubai", "israel", "tel aviv", "turkey", "istanbul",
+];
 
 // ---------------- US Location Filtering ----------------
-const US_STATE_CODES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"];
-const US_KEYWORDS = ["UNITED STATES","USA","AMER - US","USCA","US-REMOTE","US REMOTE","REMOTE US","REMOTE - US","NYC","SAN FRANCISCO","SF-HQ","US-NATIONAL","WASHINGTON DC","ANYWHERE IN THE UNITED STATES"];
-const MAJOR_US_CITIES = ["SAN FRANCISCO","NYC","NEW YORK CITY","LOS ANGELES","CHICAGO","HOUSTON","PHOENIX","PHILADELPHIA","SAN ANTONIO","SAN DIEGO","DALLAS","SAN JOSE","AUSTIN","JACKSONVILLE","FORT WORTH","COLUMBUS","CHARLOTTE","INDIANAPOLIS","SEATTLE","DENVER","BOSTON","EL PASO","NASHVILLE","DETROIT","OKLAHOMA CITY","PORTLAND","LAS VEGAS","MEMPHIS","LOUISVILLE","BALTIMORE","MILWAUKEE","ALBUQUERQUE","TUCSON","FRESNO","SACRAMENTO","MESA","KANSAS CITY","ATLANTA","OMAHA","COLORADO SPRINGS","RALEIGH","LONG BEACH","VIRGINIA BEACH","MIAMI","OAKLAND","MINNEAPOLIS","TULSA","BAKERSFIELD","WICHITA","ARLINGTON"];
+const US_STATE_CODES = [
+  "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
+  "ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
+  "OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+];
+
+const US_KEYWORDS = [
+  "UNITED STATES",
+  "USA",
+  "AMER - US",
+  "USCA",
+  "US-REMOTE",
+  "US REMOTE",
+  "REMOTE US",
+  "REMOTE - US",
+  "US-NATIONAL",
+  "ANYWHERE IN THE UNITED STATES",
+  "U.S.",
+];
+
+const MAJOR_US_CITIES = [
+  "SAN FRANCISCO","NYC","NEW YORK CITY","LOS ANGELES","CHICAGO","HOUSTON","PHOENIX","PHILADELPHIA",
+  "SAN ANTONIO","SAN DIEGO","DALLAS","SAN JOSE","AUSTIN","JACKSONVILLE","FORT WORTH","COLUMBUS",
+  "CHARLOTTE","INDIANAPOLIS","SEATTLE","DENVER","BOSTON","EL PASO","NASHVILLE","DETROIT",
+  "OKLAHOMA CITY","PORTLAND","LAS VEGAS","MEMPHIS","LOUISVILLE","BALTIMORE","MILWAUKEE",
+  "ALBUQUERQUE","TUCSON","FRESNO","SACRAMENTO","MESA","KANSAS CITY","ATLANTA","OMAHA",
+  "COLORADO SPRINGS","RALEIGH","LONG BEACH","VIRGINIA BEACH","MIAMI","OAKLAND","MINNEAPOLIS",
+  "TULSA","BAKERSFIELD","WICHITA","ARLINGTON",
+];
 
 function isUSLocation(locationText) {
   if (!locationText) return false;
   const text = String(locationText).toUpperCase();
+
   if (US_KEYWORDS.some((kw) => text.includes(kw))) return true;
-  if (MAJOR_US_CITIES.some((city) => new RegExp(`(?:^|[,\\s\\/])${city}(?:[\\s,;\\/]|$)`).test(text))) return true;
+
+  // include bullets and dashes and pipes
+  if (MAJOR_US_CITIES.some((city) => new RegExp(`(?:^|[,\\s\\/•\\-|\\|])${city}(?:[\\s,;\\/•\\-|\\|]|$)`).test(text))) {
+    return true;
+  }
+
   return (
-    US_STATE_CODES.some((code) => new RegExp(`(?:^|[,\\s\\/])${code}(?:[\\s,;\\/]|$)`).test(text)) ||
+    US_STATE_CODES.some((code) => new RegExp(`(?:^|[,\\s\\/•\\-|\\|])${code}(?:[\\s,;\\/•\\-|\\|]|$)`).test(text)) ||
     /\bUS\b/.test(text) ||
     text.includes("U.S.")
   );
 }
 
-// ---------------- Helpers ----------------
-function normalizeJobsFromFeedJson(json) {
-  if (Array.isArray(json)) return json;
-  if (json?.jobs && Array.isArray(json.jobs)) return json.jobs;
-  if (json?.data && Array.isArray(json.data)) return json.data;
-  return [];
-}
+function isRemoteLocation(locationText) {
+  if (!locationText) return false;
+  const s = String(locationText).trim().toLowerCase();
+  if (!s.includes("remote")) return false;
 
-function safeJobKey(sourceUrl, job) {
-  if (job?.id || job?._id) return String(job.id || job._id);
-  return Buffer.from(`${sourceUrl}::${job?.absolute_url || ""}::${job?.title || ""}`)
-    .toString("base64")
-    .replace(/=+$/g, "");
-}
+  // Always keep explicit US-Remote
+  if (s.includes("us-remote") || s.includes("remote us") || s.includes("remote - us")) return true;
 
-function safeCompanyKey(companyName, fallbackUrl) {
-  const raw = (companyName || "").trim();
-  if (raw) {
-    return (
-      raw
-        .toLowerCase()
-        .replace(/&/g, "and")
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 80) ||
-      Buffer.from(raw).toString("base64").replace(/=+$/g, "")
-    );
+  // Exclude obvious non-US-only remote (optional)
+  for (const bad of REMOTE_EXCLUDE_SUBSTRINGS) {
+    if (s.includes(bad)) return false;
   }
-  const m = String(fallbackUrl).match(/\/v1\/boards\/([^/]+)\//);
-  return m?.[1]
-    ? m[1].replace(/[^a-z0-9\-]+/g, "-").slice(0, 80)
-    : Buffer.from(fallbackUrl).toString("base64").replace(/=+$/g, "").slice(0, 80);
+
+  return true;
 }
 
-async function fetchJson(url, timeoutMs) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: { "user-agent": "job-watch-bot/1.0" },
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Fetch failed ${res.status} for ${url}`);
-    return await res.json();
-  } finally {
-    clearTimeout(t);
+function shouldKeepJobByLocation(locationName) {
+  return isUSLocation(locationName) || isRemoteLocation(locationName);
+}
+
+// ---------- State extraction for server-side multi-state filtering ----------
+function extractStateCodes(locationText) {
+  if (!locationText) return [];
+  const text = String(locationText).toUpperCase();
+
+  const codes = new Set();
+
+  // DC special cases
+  if (
+    text.includes("WASHINGTON, D.C") ||
+    text.includes("WASHINGTON D.C") ||
+    text.includes("WASHINGTON DC")
+  ) {
+    codes.add("DC");
   }
+
+  // Two-letter tokens
+  const tokens = text.match(/\b[A-Z]{2}\b/g) || [];
+  for (const t of tokens) {
+    if (US_STATE_CODES.includes(t)) codes.add(t);
+  }
+
+  return Array.from(codes);
 }
 
-function isAlreadyExistsError(err) {
-  return err?.code === 6 || /already exists/i.test(err?.message || "");
+function parseUpdatedAtIso(jobRaw) {
+  const iso = jobRaw.updated_at || jobRaw.first_published || null;
+  if (!iso) return new Date().toISOString();
+  return iso;
 }
 
-function chunkArray(arr, size) {
-  const out = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
-
-function isoToTimestampOrNull(iso) {
-  if (!iso) return null;
+function isoToTimestamp(iso) {
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
-  return admin.firestore.Timestamp.fromDate(d);
+  if (Number.isNaN(d.getTime())) return Timestamp.now();
+  return Timestamp.fromDate(d);
 }
 
-// ---------------- Task queue enqueue helper ----------------
-// IMPORTANT: use explicit target URI (most reliable across regions/projects)
-function enqueueUserPollTask(data) {
-  const target = `locations/${REGION}/functions/pollUserTaskV2`;
-  return getFunctions().taskQueue(target).enqueue(data);
+// ------------------------ HTTP / FETCH ------------------------
+async function fetchJson(url) {
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "user-agent": "greenhouse-jobs-scraper/1.0",
+      "accept": "application/json",
+    },
+  });
+  if (!res.ok) {
+    const body = await safeReadText(res);
+    throw new Error(`HTTP ${res.status} ${res.statusText} for ${url} :: ${body?.slice(0, 300) || ""}`);
+  }
+  return res.json();
 }
 
-// ---------------- Task worker: one user page ----------------
+async function safeReadText(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+
+// ------------------------ CONTENT CLEANING ------------------------
+function decodeHtmlEntities(s) {
+  if (!s) return "";
+  return String(s)
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&nbsp;", " ");
+}
+
+function stripTags(html) {
+  if (!html) return "";
+  return String(html)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|ul|ol|h1|h2|h3|h4|h5|h6)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function escapeRegex(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function removeTracking(html) {
+  if (!html) return "";
+  let s = String(html);
+
+  // Remove all img tags (pixels + images)
+  s = s.replace(/<img\b[^>]*>/gi, " ");
+
+  // Remove tracker link anchors but keep anchor text
+  const trackerDomains = [
+    "click.appcast.io",
+    "track.jobadx.com",
+    "jobadx.com",
+    "appcast.io",
+    "doubleclick.net",
+    "googlesyndication.com",
+  ];
+  for (const d of trackerDomains) {
+    const re = new RegExp(`<a\\b[^>]*href=["'][^"']*${escapeRegex(d)}[^"']*["'][^>]*>([\\s\\S]*?)<\\/a>`, "gi");
+    s = s.replace(re, "$1");
+  }
+  return s;
+}
+
+/**
+ * Extract sections using headings in HTML (h1-h4).
+ * Returns: [{ title, text }]
+ */
+function extractSectionsFromHtml(htmlDecoded) {
+  if (!htmlDecoded) return [];
+  const html = String(htmlDecoded);
+
+  const headingRe = /<(h1|h2|h3|h4)[^>]*>([\s\S]*?)<\/\1>/gi;
+  const matches = [];
+  let m;
+  while ((m = headingRe.exec(html)) !== null) {
+    matches.push({ idx: m.index, titleHtml: m[2] });
+  }
+  if (!matches.length) return [];
+
+  const sections = [];
+  for (let i = 0; i < matches.length; i++) {
+    const start = matches[i].idx;
+    const end = i + 1 < matches.length ? matches[i + 1].idx : html.length;
+    const chunk = html.slice(start, end);
+
+    const title = stripTags(matches[i].titleHtml);
+
+    // remove first heading in chunk
+    let removedFirst = false;
+    const bodyHtml = chunk.replace(headingRe, (full) => {
+      if (removedFirst) return full;
+      removedFirst = true;
+      return "";
+    });
+
+    const bodyText = stripTags(bodyHtml);
+    if (title && bodyText.trim()) sections.push({ title, text: bodyText });
+  }
+
+  return sections;
+}
+
+function normalizeContent(rawContent) {
+  const decoded = decodeHtmlEntities(rawContent || "");
+  const noTrack = removeTracking(decoded);
+  const sections = extractSectionsFromHtml(noTrack);
+  const plain = stripTags(noTrack);
+
+  return {
+    contentHtmlClean: noTrack,
+    contentPlain: plain,
+    contentSections: sections,
+  };
+}
+
+// ------------------------ METADATA NORMALIZATION ------------------------
+function normalizeMetadata(metadataArr) {
+  if (!Array.isArray(metadataArr)) return { metadataKV: {}, metadataList: [] };
+
+  const kv = {};
+  const list = [];
+
+  for (const item of metadataArr) {
+    if (!item || !item.name) continue;
+    const name = String(item.name).trim();
+    let value = item.value;
+
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+
+    let normalizedValue = value;
+
+    if (item.value_type === "currency" && value && typeof value === "object" && !Array.isArray(value)) {
+      const unit = value.unit || "USD";
+      const amountStr = value.amount;
+      const amountNum = amountStr != null ? Number(amountStr) : null;
+      normalizedValue = {
+        unit,
+        amount: Number.isFinite(amountNum) ? amountNum : amountStr,
+      };
+    } else if (Array.isArray(value)) {
+      normalizedValue = value.map((v) => (typeof v === "string" ? v.trim() : v)).filter(Boolean);
+    } else if (typeof value === "object") {
+      normalizedValue = value;
+    } else if (typeof value === "string") {
+      normalizedValue = value.trim();
+    }
+
+    if (kv[name] === undefined) {
+      kv[name] = normalizedValue;
+      list.push({ name, value: normalizedValue });
+    }
+  }
+
+  return { metadataKV: kv, metadataList: list };
+}
+
+// ------------------------ JOB KEY / NORMALIZATION ------------------------
+function jobDocId(companyKey, jobId) {
+  return `${companyKey}__${jobId}`;
+}
+
+// Key derived from Greenhouse URL: /v1/boards/{slug}/jobs
+function feedCompanyKey(feed) {
+  try {
+    const u = new URL(feed.url);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("boards");
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1].toLowerCase();
+  } catch {}
+  return feed.id;
+}
+
+// Helper: best-effort company name from (1) feed.name (2) job payload (3) fallback
+function resolveCompanyName(feed, jobRaw) {
+  const fromFeed = (feed?.name || "").trim();
+  if (fromFeed) return fromFeed;
+
+  const fromJob = (jobRaw?.company_name || "").trim();
+  if (fromJob) return fromJob;
+
+  return feedCompanyKey(feed) || "Unknown";
+}
+
+function normalizeJob(uid, feed, jobRaw) {
+  const locationName = jobRaw?.location?.name || "";
+  const updatedAtIso = parseUpdatedAtIso(jobRaw);
+  const updatedAtTs = isoToTimestamp(updatedAtIso);
+
+  const { metadataKV, metadataList } = normalizeMetadata(jobRaw.metadata);
+  const content = normalizeContent(jobRaw.content || "");
+
+  const isRemote = isRemoteLocation(locationName) || (!locationName && true);
+  const stateCodes = extractStateCodes(locationName);
+
+  const companyKey = feedCompanyKey(feed);
+
+  return {
+    uid,
+
+    // IMPORTANT: use stable slug key instead of firestore feed doc id
+    companyKey,
+    companyName: resolveCompanyName(feed, jobRaw),
+
+    locationName: locationName || "Remote",
+    absolute_url: jobRaw.absolute_url || null,
+    title: jobRaw.title || null,
+
+    updatedAtIso,
+    updatedAtTs,
+
+    stateCodes,
+    isRemote,
+
+    jobId: jobRaw.id,
+    internalJobId: jobRaw.internal_job_id ?? jobRaw.internalJobId ?? null,
+    requisitionId: jobRaw.requisition_id ?? null,
+    language: jobRaw.language || null,
+    firstPublishedIso: jobRaw.first_published || null,
+
+    metadataKV,
+    metadataList,
+
+    contentPlain: content.contentPlain,
+    contentSections: content.contentSections,
+    contentHtmlClean: content.contentHtmlClean,
+
+    lastSeenAt: FieldValue.serverTimestamp(),
+    lastIngestedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+// ------------------------ FEED PROCESSING ------------------------
+async function loadUserFeeds(uid) {
+  const snap = await db.collection("users").doc(uid).collection("feeds").get();
+  const feeds = [];
+  snap.forEach((d) => {
+    const data = d.data() || {};
+    feeds.push({
+      id: d.id,
+
+      // IMPORTANT: your feed docs use "company" (client), not "name"
+      name: data.company || data.name || null,
+
+      url: data.url || null,
+      active: data.active !== false,
+    });
+  });
+  return feeds.filter((f) => f.url && f.active);
+}
+
+async function upsertCompanyDoc(uid, feed, inferredCompanyName) {
+  const companyKey = feedCompanyKey(feed);
+  const ref = db.collection("users").doc(uid).collection("companies").doc(companyKey);
+
+  const name =
+    (feed?.name || "").trim() ||
+    (inferredCompanyName || "").trim() ||
+    companyKey;
+
+  await ref.set(
+    {
+      companyKey,
+      companyName: name,
+      lastSeenAt: FieldValue.serverTimestamp(),
+      url: feed.url || null,
+    },
+    { merge: true }
+  );
+}
+
+async function processOneFeed(uid, feed) {
+  const json = await fetchJson(feed.url);
+  const jobs = Array.isArray(json.jobs) ? json.jobs : [];
+
+  const inferredCompanyName = (jobs.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
+
+  // Filter to US/Remote
+  const kept = [];
+  for (const j of jobs) {
+    const loc = j?.location?.name || "";
+    if (shouldKeepJobByLocation(loc)) kept.push(j);
+  }
+
+  const companyKey = feedCompanyKey(feed);
+  const jobsCol = db.collection("users").doc(uid).collection("jobs");
+  const limitWrite = pLimit(JOB_WRITE_CONCURRENCY);
+
+  let newCount = 0;
+
+  await Promise.all(
+    kept.map((jobRaw) =>
+      limitWrite(async () => {
+        const docId = jobDocId(companyKey, jobRaw.id);
+        const ref = jobsCol.doc(docId);
+
+        const normalized = normalizeJob(uid, feed, jobRaw);
+
+        const snap = await ref.get();
+        if (!snap.exists) {
+          newCount += 1;
+          await ref.set(
+            {
+              ...normalized,
+              createdAt: FieldValue.serverTimestamp(),
+              firstSeenAt: FieldValue.serverTimestamp(),
+              saved: false,
+            },
+            { merge: false }
+          );
+        } else {
+          const prev = snap.data() || {};
+          await ref.set(
+            {
+              ...normalized,
+              createdAt: prev.createdAt || FieldValue.serverTimestamp(),
+              firstSeenAt: prev.firstSeenAt || FieldValue.serverTimestamp(),
+              saved: prev.saved === true,
+            },
+            { merge: true }
+          );
+        }
+      })
+    )
+  );
+
+  await upsertCompanyDoc(uid, feed, inferredCompanyName);
+
+  return {
+    feedId: companyKey, // IMPORTANT: store stable key in history
+    companyName: (feed.name || inferredCompanyName || companyKey),
+    fetchedCount: jobs.length,
+    keptCount: kept.length,
+    newCount,
+    url: feed.url,
+  };
+}
+
+async function processUserFeeds(uid, runType) {
+  const startedAtMs = Date.now();
+  const feeds = await loadUserFeeds(uid);
+
+  const runRef = db.collection("users").doc(uid).collection("fetchRuns").doc();
+  await runRef.set({
+    runType,
+    status: "running",
+    startedAt: FieldValue.serverTimestamp(),
+    feedsCount: feeds.length,
+  });
+
+  const limitFeed = pLimit(FEED_CONCURRENCY);
+
+  const perFeedSummary = [];
+  const errorSamples = [];
+  let processedTotal = 0;
+  let newTotal = 0;
+
+  await Promise.all(
+    feeds.map((feed) =>
+      limitFeed(async () => {
+        try {
+          const summary = await processOneFeed(uid, feed);
+          processedTotal += summary.keptCount;
+          newTotal += summary.newCount;
+
+          perFeedSummary.push({
+            feedId: summary.feedId,
+            companyName: summary.companyName,
+            url: summary.url,
+            fetched: summary.fetchedCount,
+            kept: summary.keptCount,
+            newCount: summary.newCount,
+            ok: true,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          errorSamples.push({ url: feed.url, message: msg });
+
+          perFeedSummary.push({
+            feedId: feedCompanyKey(feed),
+            companyName: feed.name || feedCompanyKey(feed),
+            url: feed.url,
+            fetched: 0,
+            kept: 0,
+            newCount: 0,
+            ok: false,
+            error: msg,
+          });
+        }
+      })
+    )
+  );
+
+  const durationMs = Date.now() - startedAtMs;
+
+  await runRef.set(
+    {
+      status: errorSamples.length ? "done_with_errors" : "done",
+      finishedAt: FieldValue.serverTimestamp(),
+      durationMs,
+      processed: processedTotal,
+      newCount: newTotal,
+      errorsCount: errorSamples.length,
+      errorSamples: errorSamples.slice(0, 10),
+      perFeedSummary: perFeedSummary.sort((a, b) => (b.kept || 0) - (a.kept || 0)),
+    },
+    { merge: true }
+  );
+
+  return {
+    runId: runRef.id,
+    feedsCount: feeds.length,
+    processed: processedTotal,
+    newCount: newTotal,
+    durationMs,
+    errorsCount: errorSamples.length,
+  };
+}
+
+// ------------------------ FUNCTIONS ------------------------
+
+exports.pollNowV2 = onCall({ region: REGION }, async (req) => {
+  if (!req.auth?.uid) throw new HttpsError("unauthenticated", "You must be signed in.");
+
+  try {
+    const result = await processUserFeeds(req.auth.uid, "manual");
+    return { ok: true, ...result };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new HttpsError("internal", msg);
+  }
+});
+
+/**
+ * Scheduled poll every 30 minutes: enqueues a task per user
+ */
+exports.pollGreenhouseFeedsV2 = onSchedule({ region: REGION, schedule: SCHEDULE }, async () => {
+  const usersSnap = await db.collection("users").get();
+  const queue = admin.app().functions().taskQueue("pollUserTaskV2");
+
+  const limitEnq = pLimit(50);
+  await Promise.all(
+    usersSnap.docs.map((u) =>
+      limitEnq(async () => {
+        await queue.enqueue({ uid: u.id, runType: "scheduled" });
+      })
+    )
+  );
+
+  return null;
+});
+
+/**
+ * Task handler: polls feeds for a single user
+ */
 exports.pollUserTaskV2 = onTaskDispatched(
   {
     region: REGION,
-    timeoutSeconds: WORKER_TIMEOUT_SECONDS,
-    memory: WORKER_MEMORY,
-    retryConfig: { maxAttempts: 3, minBackoffSeconds: 10 },
-    rateLimits: { maxConcurrentDispatches: MAX_CONCURRENT_USER_TASKS },
+    rateLimits: { maxConcurrentDispatches: 10 },
+    retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 },
   },
   async (req) => {
-    const { uid, runType = "scheduled", pageIndex = 0, runId = null } = req.data || {};
-    if (!uid) throw new Error("Missing uid");
-
-    const userRef = db.collection("users").doc(uid);
-
-    if (runType === "scheduled") {
-      const userSnap = await userRef.get();
-      if (userSnap.exists && userSnap.data()?.schedulerEnabled === false) {
-        return { skipped: true };
-      }
-    }
-
-    const startedAtMs = Date.now();
-
-    const feedsSnap = await userRef.collection("feeds").get();
-    const activeFeedsAll = feedsSnap.docs
-      .map((d) => ({ id: d.id, ...d.data() }))
-      .filter((f) => !f.archivedAt);
-
-    const feedPages = chunkArray(activeFeedsAll, FEEDS_PER_TASK);
-    const totalPages = feedPages.length || 1;
-    const pageFeeds = feedPages[pageIndex] || [];
-
-    const runRef = runId
-      ? userRef.collection("fetchRuns").doc(runId)
-      : userRef.collection("fetchRuns").doc();
-
-    const effectiveRunId = runRef.id;
-
-    if (!runId) {
-      await runRef.set({
-        runType,
-        startedAt: admin.firestore.FieldValue.serverTimestamp(),
-        finishedAt: null,
-        durationMs: null,
-        feedsCount: activeFeedsAll.length,
-        feedsProcessed: 0,
-        newCount: 0,
-        errorsCount: 0,
-        errorSamples: [],
-        pagesTotal: totalPages,
-        pagesDone: 0,
-      });
-    }
-
-    let totalNewCount = 0;
-    let errorsCount = 0;
-    const errorSamples = [];
-
-    const runSnap = await runRef.get();
-    if (runSnap.exists) {
-      const d = runSnap.data() || {};
-      totalNewCount = d.newCount || 0;
-      errorsCount = d.errorsCount || 0;
-      if (Array.isArray(d.errorSamples)) errorSamples.push(...d.errorSamples);
-    }
-
-    const writer = db.bulkWriter();
-    writer.onWriteError((err) => {
-      if (isAlreadyExistsError(err)) return true;
-      if (err?.failedAttempts < 3) return true;
-      return false;
-    });
-
-    const limit = pLimit(FEED_CONCURRENCY);
-
-    let pageFeedsProcessed = 0;
-    let pageNewCount = 0;
-
-    try {
-      await Promise.all(
-        pageFeeds.map((feed) =>
-          limit(async () => {
-            try {
-              const json = await fetchJson(feed.url, FETCH_TIMEOUT_MS);
-              const jobs = normalizeJobsFromFeedJson(json);
-
-              let feedNewCount = 0;
-
-              for (const job of jobs) {
-                const locName = job?.location?.name || job.location_name || "";
-                if (!isUSLocation(locName)) continue;
-
-                const companyName = (job.company_name || feed.company || "Unknown").trim();
-                const companyKey = safeCompanyKey(companyName, feed.url);
-                const jobKey = safeJobKey(feed.url, job);
-
-                const companyRef = userRef.collection("companies").doc(companyKey);
-                const jobRef = companyRef.collection("jobs").doc(jobKey);
-
-                writer.set(
-                  companyRef,
-                  {
-                    companyName,
-                    companyKey,
-                    lastSeenAt: admin.firestore.FieldValue.serverTimestamp(),
-                  },
-                  { merge: true }
-                );
-
-                const updatedAtIso = job.updated_at || null;
-                const updatedAtTs = isoToTimestampOrNull(updatedAtIso);
-
-                try {
-                  await writer.create(jobRef, {
-                    uid,
-                    title: job.title || job.name || null,
-                    absolute_url: job.absolute_url || job.url || null,
-                    locationName: locName,
-                    companyName,
-                    companyKey,
-                    updatedAtIso,
-                    updatedAtTs,
-                    firstSeenAt: admin.firestore.FieldValue.serverTimestamp(),
-                    firstSeenAtTs: admin.firestore.FieldValue.serverTimestamp(),
-                    saved: false,
-                  });
-                  feedNewCount++;
-                } catch (e) {
-                  if (!isAlreadyExistsError(e)) throw e;
-                }
-              }
-
-              pageNewCount += feedNewCount;
-
-              await userRef.collection("feeds").doc(feed.id).set(
-                {
-                  lastCheckedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  lastNewCount: feedNewCount,
-                  lastError: null,
-                },
-                { merge: true }
-              );
-            } catch (err) {
-              errorsCount++;
-              if (errorSamples.length < 5) errorSamples.push({ url: feed.url, message: err.message });
-
-              await userRef.collection("feeds").doc(feed.id).set(
-                {
-                  lastCheckedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  lastError: err.message,
-                },
-                { merge: true }
-              );
-            } finally {
-              pageFeedsProcessed++;
-              if (pageFeedsProcessed % 20 === 0) {
-                await runRef.update({
-                  newCount: totalNewCount + pageNewCount,
-                  errorsCount,
-                  errorSamples: errorSamples.slice(0, 5),
-                });
-              }
-            }
-          })
-        )
-      );
-
-      await writer.close();
-
-      const nowSnap = await runRef.get();
-      const nowData = nowSnap.exists ? nowSnap.data() : {};
-      const prevFeedsProcessed = nowData?.feedsProcessed || 0;
-      const prevPagesDone = nowData?.pagesDone || 0;
-
-      await runRef.update({
-        feedsProcessed: prevFeedsProcessed + pageFeedsProcessed,
-        newCount: (nowData?.newCount || 0) + pageNewCount,
-        errorsCount,
-        errorSamples: errorSamples.slice(0, 5),
-        pagesDone: prevPagesDone + 1,
-      });
-    } finally {
-      if (pageIndex >= totalPages - 1) {
-        await runRef.update({
-          finishedAt: admin.firestore.FieldValue.serverTimestamp(),
-          durationMs: Date.now() - startedAtMs,
-        });
-      }
-    }
-
-    // enqueue next page if needed (FIXED)
-    if (pageIndex < totalPages - 1) {
-      await enqueueUserPollTask({
-        uid,
-        runType,
-        pageIndex: pageIndex + 1,
-        runId: effectiveRunId,
-      });
-    }
-
-    return {
-      uid,
-      runId: effectiveRunId,
-      pageIndex,
-      totalPages,
-      pageFeeds: pageFeeds.length,
-      pageNewCount,
-      errorsCount,
-    };
+    const { uid, runType } = req.data || {};
+    if (!uid) return;
+    await processUserFeeds(uid, runType || "scheduled");
   }
 );
-
-// ---------------- Scheduler fan-out ----------------
-exports.pollGreenhouseFeedsV2 = onSchedule(
-  {
-    region: REGION,
-    schedule: "every 30 minutes",
-    timeZone: "America/Los_Angeles",
-  },
-  async () => {
-    const usersSnap = await db
-      .collection("users")
-      .where("schedulerEnabled", "!=", false)
-      .get();
-
-    await Promise.all(
-      usersSnap.docs.map((d) =>
-        enqueueUserPollTask({ uid: d.id, runType: "scheduled", pageIndex: 0 })
-      )
-    );
-
-    return null;
-  }
-);
-
-// ---------------- Manual trigger ----------------
-exports.pollNowV2 = onCall({ region: REGION }, async (request) => {
-  if (!request.auth) throw new HttpsError("unauthenticated", "Auth required.");
-
-  await enqueueUserPollTask({
-    uid: request.auth.uid,
-    runType: "manual",
-    pageIndex: 0,
-  });
-
-  return { enqueued: true };
-});
