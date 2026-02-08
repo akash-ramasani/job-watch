@@ -279,8 +279,6 @@ export default function Jobs({ user, userMeta }) {
     </div>
   );
 
-  console.log("AUTH user.uid:", user.uid);
-console.log("Firestore projectId:", db.app.options.projectId);
 console.error("Fetch jobs error:", err);
 
   return (

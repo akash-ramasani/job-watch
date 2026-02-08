@@ -24,20 +24,16 @@ export default function Home({ user }) {
   useEffect(() => {
     const feedsRef = collection(db, "users", user.uid, "feeds");
     const qFeeds = query(feedsRef, orderBy("createdAt", "desc"));
+
+    // This gives instant updates after add/restore/archive without refresh.
+    // Reads are usually small here because feeds collection is small.
     return onSnapshot(qFeeds, (snap) =>
       setFeeds(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
   }, [user.uid]);
 
-  const activeFeeds = useMemo(
-    () => feeds.filter((f) => !f.archivedAt),
-    [feeds]
-  );
-
-  const archivedFeeds = useMemo(
-    () => feeds.filter((f) => !!f.archivedAt),
-    [feeds]
-  );
+  const activeFeeds = useMemo(() => feeds.filter((f) => !f.archivedAt), [feeds]);
+  const archivedFeeds = useMemo(() => feeds.filter((f) => !!f.archivedAt), [feeds]);
 
   async function addFeed(e) {
     e.preventDefault();
@@ -51,11 +47,7 @@ export default function Home({ user }) {
       return;
     }
 
-    // Duplicate Check Logic
-    const isDuplicate = feeds.some(
-      (f) => f.url.toLowerCase() === cleanUrl
-    );
-
+    const isDuplicate = feeds.some((f) => (f.url || "").toLowerCase() === cleanUrl);
     if (isDuplicate) {
       showToast("This feed URL has already been added.", "error");
       return;
@@ -74,34 +66,37 @@ export default function Home({ user }) {
       showToast(`${cleanCompany} feed added successfully`, "success");
       setCompany("");
       setUrl("");
+      // No refresh needed: onSnapshot will update immediately.
     } catch (err) {
+      console.error(err);
       showToast("Failed to add feed. Please try again.", "error");
     }
   }
 
   async function fetchNow() {
-  setBusyNow(true);
-  try {
-    // IMPORTANT: use the same region you deployed the Gen2 functions to
-    const functions = getFunctions(undefined, "us-central1");
+    setBusyNow(true);
+    try {
+      // KNOB: region MUST match where you deployed pollNowV2
+      const functions = getFunctions(undefined, "us-central1");
 
-    // IMPORTANT: call the V2 callable name you deployed (Option A)
-    const callFn = httpsCallable(functions, "pollNowV2");
+      // IMPORTANT: callable name must match exactly what you deployed
+      const callPollNow = httpsCallable(functions, "pollNowV2");
 
-    const resp = await callFn({});
-    const data = resp.data || {};
+      const resp = await callPollNow({});
+      const data = resp?.data || {};
 
-    // Your V2 returns { enqueued: true }, not {feeds,newCount} immediately.
-    // So show a different message.
-    showToast("Fetch started. New jobs will appear shortly.", "success");
-  } catch (err) {
-    console.error(err);
-    showToast("Manual fetch failed. Try again later.", "error");
-  } finally {
-    setBusyNow(false);
+      if (data?.enqueued) {
+        showToast("Fetch started. New jobs will appear shortly.", "success");
+      } else {
+        showToast("Fetch triggered, check Jobs page in a moment.", "success");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Manual fetch failed. Try again later.", "error");
+    } finally {
+      setBusyNow(false);
+    }
   }
-}
-
 
   async function archiveFeed(feedId) {
     setBusyArchiveId(feedId);
@@ -111,6 +106,7 @@ export default function Home({ user }) {
       });
       showToast("Feed archived", "info");
     } catch (err) {
+      console.error(err);
       showToast("Error archiving feed", "error");
     } finally {
       setBusyArchiveId(null);
@@ -125,6 +121,7 @@ export default function Home({ user }) {
       });
       showToast("Feed restored to active", "success");
     } catch (err) {
+      console.error(err);
       showToast("Error restoring feed", "error");
     } finally {
       setBusyArchiveId(null);
@@ -133,15 +130,14 @@ export default function Home({ user }) {
 
   return (
     <div className="space-y-12 py-10" style={{ fontFamily: "Ubuntu, sans-serif" }}>
-      {/* ===== TOP GRID ===== */}
       <div className="section-grid">
         <div>
           <h2 className="text-[10px] font-black uppercase tracking-widest text-gray-400">
             Job Board Sources
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            Connect Greenhouse job boards. Our system will automatically monitor
-            these for new opportunities.
+            Connect Greenhouse job boards. Our system will automatically monitor these for new
+            opportunities.
           </p>
 
           <div className="mt-6">
@@ -150,7 +146,7 @@ export default function Home({ user }) {
               disabled={busyNow}
               className="btn-secondary w-full sm:w-auto uppercase tracking-widest text-[11px] font-black"
             >
-              {busyNow ? "Checking..." : "Check for new jobs now"}
+              {busyNow ? "Starting..." : "Check for new jobs now"}
             </button>
           </div>
         </div>
@@ -190,21 +186,14 @@ export default function Home({ user }) {
         </div>
       </div>
 
-      {/* ===== CENTERED FEEDS ===== */}
       <div className="mx-auto max-w-3xl space-y-10">
-        {/* ACTIVE FEEDS */}
         <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
           <div className="px-6 py-4 border-b bg-indigo-50/60 border-indigo-100 flex items-center justify-between">
             <div>
               <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-900">
-                Active Feeds{" "}
-                <span className="ml-1 text-indigo-700">
-                  ({activeFeeds.length})
-                </span>
+                Active Feeds <span className="ml-1 text-indigo-700">({activeFeeds.length})</span>
               </h3>
-              <p className="text-[11px] text-indigo-700 mt-1">
-                These feeds are monitored for new jobs.
-              </p>
+              <p className="text-[11px] text-indigo-700 mt-1">These feeds are monitored for new jobs.</p>
             </div>
           </div>
 
@@ -215,12 +204,8 @@ export default function Home({ user }) {
                 className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">
-                    {feed.company || "Company"}
-                  </p>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">
-                    {feed.url}
-                  </p>
+                  <p className="text-sm font-semibold text-gray-900">{feed.company || "Company"}</p>
+                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
                 </div>
 
                 <button
@@ -241,19 +226,14 @@ export default function Home({ user }) {
           </ul>
         </div>
 
-        {/* ARCHIVED FEEDS */}
         <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
           <div className="px-6 py-4 border-b bg-gray-50/80 border-gray-200 flex items-center justify-between">
             <div>
               <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-600">
                 Archived Feeds{" "}
-                <span className="ml-1 text-gray-400">
-                  ({archivedFeeds.length})
-                </span>
+                <span className="ml-1 text-gray-400">({archivedFeeds.length})</span>
               </h3>
-              <p className="text-[11px] text-gray-500 mt-1">
-                Archived feeds are not monitored.
-              </p>
+              <p className="text-[11px] text-gray-500 mt-1">Archived feeds are not monitored.</p>
             </div>
           </div>
 
@@ -264,12 +244,8 @@ export default function Home({ user }) {
                 className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">
-                    {feed.company || "Company"}
-                  </p>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">
-                    {feed.url}
-                  </p>
+                  <p className="text-sm font-semibold text-gray-900">{feed.company || "Company"}</p>
+                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
                 </div>
 
                 <button
