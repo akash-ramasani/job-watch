@@ -6,9 +6,19 @@
  * - Greenhouse (boards-api): https://boards-api.greenhouse.io/v1/boards/<company>/jobs
  * - AshbyHQ (posting-api):   https://api.ashbyhq.com/posting-api/job-board/<company>
  *
+ * ✅ Ingests ONLY jobs from last 21 days (rolling window):
+ * - Greenhouse: uses updated_at, BUT edge-case fallback:
+ *    If updated_at is older than 21 days AND first_published is within 21 days => KEEP
+ * - AshbyHQ: uses publishedAt
+ *
+ * ✅ Cleanup pipeline (delete jobs older than 21 days) based on updatedAtTs:
+ * - callable: purgeOldJobsNowV2
+ * - task:     purgeUserOldJobsTaskV2
+ * - optional scheduled cleanup (daily)
+ *
  * ✅ Still NO perFeedSummary / NO errorSamples
- * ✅ fetchRuns still tracks (same as your current version)
- * ✅ Scale fixes remain (no per-job reads, BulkWriter, retries/timeouts, task queue for both manual + scheduled)
+ * ✅ fetchRuns still tracks
+ * ✅ Scale fixes remain (no per-job reads, BulkWriter, retries/timeouts, task queue)
  * ✅ Content fields: keeps ONLY contentHtmlClean
  */
 
@@ -45,6 +55,14 @@ const HEARTBEAT_EVERY_MS = 10_000;
 
 // Firestore doc safety
 const MAX_HTML_CHARS = 120_000;
+
+// ✅ Rolling retention window
+const LAST_N_DAYS = 21;
+const LAST_N_DAYS_MS = LAST_N_DAYS * 24 * 60 * 60 * 1000;
+
+// Cleanup batching
+const CLEANUP_BATCH_SIZE = 400;
+const CLEANUP_QUERY_LIMIT = 400;
 
 // If you want "remote anywhere worldwide", set this to [].
 const REMOTE_EXCLUDE_SUBSTRINGS = [
@@ -157,9 +175,7 @@ function isRemoteLocation(locationText) {
 }
 
 function shouldKeepJobByLocation(locationName, jobRaw) {
-  // If source has explicit isRemote true, always keep
   if (jobRaw && jobRaw.isRemote === true) return true;
-
   return isUSLocation(locationName) || isRemoteLocation(locationName);
 }
 
@@ -194,14 +210,9 @@ function detectFeedSource(feedUrl) {
 
 // ------------------------ TIME ------------------------
 function parseUpdatedAtIso(jobRaw) {
-  // Greenhouse
   if (jobRaw?.updated_at) return jobRaw.updated_at;
   if (jobRaw?.first_published) return jobRaw.first_published;
-
-  // Ashby
   if (jobRaw?.publishedAt) return jobRaw.publishedAt;
-
-  // Fallback
   return new Date().toISOString();
 }
 
@@ -209,6 +220,45 @@ function isoToTimestamp(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return Timestamp.now();
   return Timestamp.fromDate(d);
+}
+
+function parseIsoToMs(iso) {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * ✅ NEW behavior:
+ * - Greenhouse: keep if (updated_at within 21d) OR (first_published within 21d)
+ *   This addresses your edge-case request.
+ * - Ashby: keep if publishedAt within 21d
+ */
+function isJobWithinLastNDays(source, jobRaw, nowMs = Date.now()) {
+  const cutoffMs = nowMs - LAST_N_DAYS_MS;
+
+  if (source === "greenhouse") {
+    const updatedMs = parseIsoToMs(jobRaw?.updated_at);
+    if (updatedMs != null && updatedMs >= cutoffMs) return true;
+
+    const firstPubMs = parseIsoToMs(jobRaw?.first_published);
+    if (firstPubMs != null && firstPubMs >= cutoffMs) return true;
+
+    return false;
+  }
+
+  if (source === "ashby") {
+    const pubMs = parseIsoToMs(jobRaw?.publishedAt);
+    if (pubMs == null) return false;
+    return pubMs >= cutoffMs;
+  }
+
+  return false;
+}
+
+function cutoffTimestampNow() {
+  const cutoffMs = Date.now() - LAST_N_DAYS_MS;
+  return Timestamp.fromDate(new Date(cutoffMs));
 }
 
 // ------------------------ HTTP / FETCH ------------------------
@@ -377,11 +427,8 @@ function normalizeMetadata(metadataArr) {
 function toGreenhouseLikeJob(source, jobRaw) {
   if (source === "greenhouse") return jobRaw;
 
-  // AshbyHQ
-  // Input sample:
-  // { id, title, department, team, employmentType, location, publishedAt, jobUrl, applyUrl, descriptionHtml, isRemote, ... }
   return {
-    id: jobRaw?.id, // string UUID
+    id: jobRaw?.id,
     title: jobRaw?.title || null,
     absolute_url: jobRaw?.jobUrl || null,
     apply_url: jobRaw?.applyUrl || null,
@@ -398,7 +445,6 @@ function toGreenhouseLikeJob(source, jobRaw) {
       ...(jobRaw?.employmentType ? [{ name: "Employment Type", value: jobRaw.employmentType, value_type: "short_text" }] : []),
     ],
     content: jobRaw?.descriptionHtml || "",
-    // keep original fields for downstream logic
     _ashby: {
       isRemote: jobRaw?.isRemote ?? null,
       jobUrl: jobRaw?.jobUrl ?? null,
@@ -411,21 +457,13 @@ function toGreenhouseLikeJob(source, jobRaw) {
 }
 
 function extractJobsFromFeedJson(source, json) {
-  // Greenhouse: { jobs: [...] }
-  if (source === "greenhouse") {
-    return Array.isArray(json?.jobs) ? json.jobs : [];
-  }
-
-  // Ashby: commonly { jobs: [...] } OR directly an array (depends on endpoint/version)
+  if (source === "greenhouse") return Array.isArray(json?.jobs) ? json.jobs : [];
   if (source === "ashby") {
     if (Array.isArray(json?.jobs)) return json.jobs;
     if (Array.isArray(json)) return json;
-    // Some Ashby responses are { jobBoard: { jobs: [...] } } (defensive)
     if (Array.isArray(json?.jobBoard?.jobs)) return json.jobBoard.jobs;
     return [];
   }
-
-  // Unknown: try best-effort
   if (Array.isArray(json?.jobs)) return json.jobs;
   if (Array.isArray(json)) return json;
   return [];
@@ -440,7 +478,6 @@ function inferAshbyCompanyKeyFromUrl(feedUrl) {
   try {
     const u = new URL(feedUrl);
     const parts = u.pathname.split("/").filter(Boolean);
-    // /posting-api/job-board/<company>
     const idx = parts.indexOf("job-board");
     if (idx !== -1 && parts[idx + 1]) return parts[idx + 1].toLowerCase();
   } catch {}
@@ -451,25 +488,22 @@ function inferGreenhouseCompanyKeyFromUrl(feedUrl) {
   try {
     const u = new URL(feedUrl);
     const parts = u.pathname.split("/").filter(Boolean);
-    // /v1/boards/<company>/jobs
     const idx = parts.indexOf("boards");
     if (idx !== -1 && parts[idx + 1]) return parts[idx + 1].toLowerCase();
   } catch {}
   return null;
 }
 
+function detectFeedSourceFromFeed(feed) {
+  return feed.source || detectFeedSource(feed.url);
+}
+
 function feedCompanyKey(feed) {
   const source = detectFeedSource(feed.url);
 
-  if (source === "greenhouse") {
-    return inferGreenhouseCompanyKeyFromUrl(feed.url) || feed.id;
-  }
+  if (source === "greenhouse") return inferGreenhouseCompanyKeyFromUrl(feed.url) || feed.id;
+  if (source === "ashby") return inferAshbyCompanyKeyFromUrl(feed.url) || feed.id;
 
-  if (source === "ashby") {
-    return inferAshbyCompanyKeyFromUrl(feed.url) || feed.id;
-  }
-
-  // fallback
   try {
     const u = new URL(feed.url);
     const host = u.hostname.replaceAll(".", "_");
@@ -480,15 +514,12 @@ function feedCompanyKey(feed) {
 }
 
 function resolveCompanyName(feed, jobRaw, source) {
-  // Prefer feed config
   const fromFeed = (feed?.name || "").trim();
   if (fromFeed) return fromFeed;
 
-  // Greenhouse job has company_name
   const fromJob = (jobRaw?.company_name || "").trim();
   if (fromJob) return fromJob;
 
-  // Ashby: infer from URL slug (openai/notion/etc.)
   if (source === "ashby") {
     const key = inferAshbyCompanyKeyFromUrl(feed?.url) || feedCompanyKey(feed);
     if (key) return key.charAt(0).toUpperCase() + key.slice(1);
@@ -515,7 +546,7 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source) {
   return {
     uid,
 
-    source, // "greenhouse" | "ashby" | "unknown"
+    source,
     companyKey,
     companyName: resolveCompanyName(feed, jobRawGreenhouseLike, source),
 
@@ -531,7 +562,6 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source) {
     stateCodes,
     isRemote,
 
-    // IDs
     jobId: jobRawGreenhouseLike.id,
     internalJobId: jobRawGreenhouseLike.internal_job_id ?? jobRawGreenhouseLike.internalJobId ?? null,
     requisitionId: jobRawGreenhouseLike.requisition_id ?? null,
@@ -559,7 +589,6 @@ async function loadUserFeeds(uid) {
       name: data.company || data.name || null,
       url: data.url || null,
       active: data.active !== false,
-      // optional future field, but we can also auto-detect from URL
       source: data.source || null,
     });
   });
@@ -613,13 +642,11 @@ async function upsertJobNoRead(bulkWriter, jobsColRef, docId, normalized) {
 }
 
 function inferCompanyNameFromFeed(feed, source, jobsRaw) {
-  // Greenhouse: try company_name from jobs
   if (source === "greenhouse") {
     const inferred = (jobsRaw.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
     return inferred || null;
   }
 
-  // Ashby: use feed.name if present, else slug
   if (source === "ashby") {
     if ((feed?.name || "").trim()) return (feed.name || "").trim();
     const key = inferAshbyCompanyKeyFromUrl(feed?.url);
@@ -631,15 +658,21 @@ function inferCompanyNameFromFeed(feed, source, jobsRaw) {
 }
 
 async function processOneFeed(uid, feed, bulkWriter) {
-  const source = feed.source || detectFeedSource(feed.url);
+  const source = detectFeedSourceFromFeed(feed);
   const json = await fetchJson(feed.url);
 
   const jobsRaw = extractJobsFromFeedJson(source, json);
   const inferredCompanyName = inferCompanyNameFromFeed(feed, source, jobsRaw);
 
-  // filter by location rules
+  // ✅ filter by recency (21 days) + location rules
   const keptRaw = [];
+  const nowMs = Date.now();
+
   for (const j of jobsRaw) {
+    // 1) Recency gate (Greenhouse updated_at OR first_published; Ashby publishedAt)
+    if (!isJobWithinLastNDays(source, j, nowMs)) continue;
+
+    // 2) Location gate
     const loc = source === "greenhouse" ? j?.location?.name : j?.location;
     if (!loc || shouldKeepJobByLocation(loc, j)) keptRaw.push(j);
   }
@@ -723,6 +756,127 @@ async function enqueueUserRun(uid, runType) {
   }
 }
 
+// ------------------------ CLEANUP (DELETE old jobs) ------------------------
+async function enqueueUserCleanup(uid, runType = "cleanup") {
+  const { runId, ref } = await createFetchRun(uid, runType, "enqueued", {
+    enqueuedAt: FieldValue.serverTimestamp(),
+  });
+
+  const queue = getFunctions().taskQueue("purgeUserOldJobsTaskV2");
+  const targetUri = taskFunctionUri("purgeUserOldJobsTaskV2");
+
+  try {
+    await queue.enqueue({ uid, runType, runId }, { uri: targetUri });
+    return { ok: true, runId, status: "enqueued" };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await ref.set(
+      {
+        status: "enqueue_failed",
+        updatedAt: FieldValue.serverTimestamp(),
+        enqueueError: msg,
+      },
+      { merge: true }
+    );
+    throw err;
+  }
+}
+
+async function purgeOldJobsForUser(uid, runType, runId) {
+  const startedAtMs = Date.now();
+  const runRef = fetchRunRef(uid, runId);
+
+  const cutoffTs = cutoffTimestampNow();
+  let deleted = 0;
+
+  await runRef.set(
+    {
+      runType,
+      status: "running",
+      startedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      cutoffUpdatedAtTs: cutoffTs,
+      deleted: 0,
+    },
+    { merge: true }
+  );
+
+  const jobsCol = db.collection("users").doc(uid).collection("jobs");
+
+  const bulkWriter = db.bulkWriter();
+  bulkWriter.onWriteError((error) => {
+    const code = error?.code;
+    const retryable =
+      code === 4 ||  // DEADLINE_EXCEEDED
+      code === 8 ||  // RESOURCE_EXHAUSTED
+      code === 10 || // ABORTED
+      code === 13 || // INTERNAL
+      code === 14;   // UNAVAILABLE
+
+    if (retryable && error.failedAttempts < 3) return true;
+
+    logger.error("BulkWriter delete failed", { error: String(error) });
+    return false;
+  });
+
+  try {
+    while (true) {
+      const snap = await jobsCol
+        .where("updatedAtTs", "<", cutoffTs)
+        .orderBy("updatedAtTs", "asc")
+        .limit(CLEANUP_QUERY_LIMIT)
+        .get();
+
+      if (snap.empty) break;
+
+      for (const docSnap of snap.docs) {
+        bulkWriter.delete(docSnap.ref);
+      }
+
+      deleted += snap.size;
+
+      await runRef.set(
+        {
+          updatedAt: FieldValue.serverTimestamp(),
+          deleted,
+        },
+        { merge: true }
+      );
+
+      if (snap.size < CLEANUP_QUERY_LIMIT) break;
+    }
+
+    await bulkWriter.close();
+
+    const durationMs = Date.now() - startedAtMs;
+
+    await runRef.set(
+      {
+        status: "done",
+        finishedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        durationMs,
+        deleted,
+      },
+      { merge: true }
+    );
+
+    return { runId, deleted, durationMs };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await runRef.set(
+      {
+        status: "failed",
+        finishedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        error: msg,
+      },
+      { merge: true }
+    );
+    throw err;
+  }
+}
+
 // ------------------------ TASK BODY (NO perFeedSummary / NO errorSamples) ------------------------
 async function processUserFeeds(uid, runType, runId) {
   const startedAtMs = Date.now();
@@ -747,7 +901,6 @@ async function processUserFeeds(uid, runType, runId) {
     { merge: true }
   );
 
-  // Heartbeat: keeps UI updated while running
   let heartbeatTimer = null;
   const writeHeartbeat = async () => {
     await runRef.set(
@@ -835,8 +988,18 @@ exports.pollNowV2 = onCall({ region: REGION }, async (req) => {
   if (!req.auth?.uid) throw new HttpsError("unauthenticated", "You must be signed in.");
 
   try {
-    // Manual now uses task queue so it ALWAYS writes fetchRuns and behaves like scheduled.
     return await enqueueUserRun(req.auth.uid, "manual");
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new HttpsError("internal", msg);
+  }
+});
+
+exports.purgeOldJobsNowV2 = onCall({ region: REGION }, async (req) => {
+  if (!req.auth?.uid) throw new HttpsError("unauthenticated", "You must be signed in.");
+
+  try {
+    return await enqueueUserCleanup(req.auth.uid, "cleanup");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new HttpsError("internal", msg);
@@ -859,6 +1022,32 @@ exports.pollGreenhouseFeedsV2 = onSchedule(
             await enqueueUserRun(uid, "scheduled");
           } catch (err) {
             logger.error("scheduled enqueue failed", { uid, error: String(err?.message || err) });
+          }
+        })
+      )
+    );
+
+    return null;
+  }
+);
+
+// Optional: daily cleanup for all users (03:15am LA)
+exports.purgeOldJobsDailyV2 = onSchedule(
+  { region: REGION, schedule: "15 3 * * *", timeZone: TIME_ZONE },
+  async () => {
+    const usersSnap = await db.collection("users").get();
+    logger.info("cleanup scheduler tick", { users: usersSnap.size, schedule: "15 3 * * *", tz: TIME_ZONE });
+
+    const limitEnq = pLimit(50);
+
+    await Promise.all(
+      usersSnap.docs.map((u) =>
+        limitEnq(async () => {
+          const uid = u.id;
+          try {
+            await enqueueUserCleanup(uid, "cleanup_scheduled");
+          } catch (err) {
+            logger.error("scheduled cleanup enqueue failed", { uid, error: String(err?.message || err) });
           }
         })
       )
@@ -899,6 +1088,42 @@ exports.pollUserTaskV2 = onTaskDispatched(
       );
 
       logger.error("task failed", { uid, runType, runId, error: msg });
+      throw err;
+    }
+  }
+);
+
+exports.purgeUserOldJobsTaskV2 = onTaskDispatched(
+  {
+    region: REGION,
+    timeoutSeconds: 540,
+    memory: "1GiB",
+    rateLimits: { maxConcurrentDispatches: 10 },
+    retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 },
+  },
+  async (req) => {
+    const { uid, runType, runId } = req.data || {};
+    if (!uid || !runId) return;
+
+    logger.info("cleanup task start", { uid, runType, runId });
+
+    try {
+      await purgeOldJobsForUser(uid, runType || "cleanup", runId);
+      logger.info("cleanup task done", { uid, runType, runId });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      await fetchRunRef(uid, runId).set(
+        {
+          status: "failed",
+          updatedAt: FieldValue.serverTimestamp(),
+          finishedAt: FieldValue.serverTimestamp(),
+          error: msg,
+        },
+        { merge: true }
+      );
+
+      logger.error("cleanup task failed", { uid, runType, runId, error: msg });
       throw err;
     }
   }
