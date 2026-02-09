@@ -18,6 +18,7 @@ import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 const PAGE_SIZE = 50;
+const TITLE_DEBOUNCE_MS = 200;
 
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
@@ -83,12 +84,13 @@ export default function Jobs({ user }) {
   const [selectedKeys, setSelectedKeys] = useState([]);
 
   const [jobs, setJobs] = useState([]);
-  const [loading, setLoading] = useState(true); // skeleton only when we have no data
-  const [isProcessing, setIsProcessing] = useState(true); // shimmer overlay
+  const [loading, setLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(true);
   const [lastDoc, setLastDoc] = useState(null);
   const [hasMore, setHasMore] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState("");
+  const [debouncedTitleSearch, setDebouncedTitleSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
@@ -97,10 +99,20 @@ export default function Jobs({ user }) {
 
   const resetAll = useCallback(() => {
     setTitleSearch("");
+    setDebouncedTitleSearch("");
     setStateFilter("");
     setTimeframe("1h");
     setSelectedKeys([]);
   }, []);
+
+  // ✅ Debounce title search (200ms)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedTitleSearch(titleSearch);
+    }, TITLE_DEBOUNCE_MS);
+
+    return () => clearTimeout(t);
+  }, [titleSearch]);
 
   // Load companies
   useEffect(() => {
@@ -133,15 +145,6 @@ export default function Jobs({ user }) {
     };
   }, [user.uid]);
 
-  /**
-   * Query:
-   * - Always order by updatedAtTs desc
-   * - If timeframe != "all": add where(updatedAtTs >= threshold)
-   *
-   * UX:
-   * - Initial load => skeleton
-   * - Filter change => keep old list, show shimmer overlay until refreshed list arrives
-   */
   const fetchJobs = useCallback(
     async (isFirstPage = true) => {
       if (jobs.length === 0 && isFirstPage) setLoading(true);
@@ -193,7 +196,7 @@ export default function Jobs({ user }) {
     [user.uid, selectedKeys, lastDoc, timeframe, showToast, jobs.length]
   );
 
-  // Filter changes: refresh first page but keep list visible
+  // Refresh on company/timeframe changes (server-side)
   useEffect(() => {
     setLastDoc(null);
     setHasMore(true);
@@ -238,9 +241,9 @@ export default function Jobs({ user }) {
     }
   };
 
-  // Client-side filters
+  // Client-side filters (✅ uses debouncedTitleSearch)
   const filteredJobs = useMemo(() => {
-    const titleTerm = titleSearch.trim().toLowerCase();
+    const titleTerm = debouncedTitleSearch.trim().toLowerCase();
 
     return jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
@@ -253,13 +256,9 @@ export default function Jobs({ user }) {
 
       return true;
     });
-  }, [jobs, titleSearch, stateFilter]);
+  }, [jobs, debouncedTitleSearch, stateFilter]);
 
-  /**
-   * ✅ CONSISTENT UI ACROSS ALL TIMEFRAMES:
-   * Always split pinned/saved items into their own section
-   * (when viewing ALL companies; if you want it even when filtering companies, remove selectedKeys.length === 0).
-   */
+  // ✅ Consistent UI across timeframes: show saved section whenever viewing all companies
   const showPinnedSeparately = selectedKeys.length === 0;
 
   const { bookmarkedJobs, regularJobs } = useMemo(() => {
@@ -599,7 +598,6 @@ export default function Jobs({ user }) {
           </div>
         ) : (
           <div className="flex-grow">
-            {/* ✅ Always show pinned section when showPinnedSeparately is true */}
             {showPinnedSeparately && bookmarkedJobs.length > 0 && (
               <div className="bg-amber-50/30">
                 <div className="px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
@@ -609,7 +607,6 @@ export default function Jobs({ user }) {
                 </div>
                 <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
 
-                {/* Only show divider if there are also regular jobs */}
                 {regularJobs.length > 0 && (
                   <div className="relative py-4 bg-white flex items-center px-6">
                     <div className="flex-grow border-t border-dashed border-gray-200" />
@@ -622,18 +619,14 @@ export default function Jobs({ user }) {
               </div>
             )}
 
-            <ul className="divide-y divide-gray-100">
-              {regularJobs.map((job) => renderJobItem(job))}
-            </ul>
+            <ul className="divide-y divide-gray-100">{regularJobs.map((job) => renderJobItem(job))}</ul>
           </div>
         )}
 
         {/* Sentinel */}
         <div ref={lastElementRef} className="h-20 flex flex-col items-center justify-center border-t border-gray-50 gap-1">
           {jobs.length > 0 && (
-            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">
-              {progressLabel}
-            </span>
+            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">{progressLabel}</span>
           )}
 
           {(loading || isProcessing) && jobs.length > 0 ? (

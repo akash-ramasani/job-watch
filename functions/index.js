@@ -2,29 +2,14 @@
 /**
  * functions/index.js (Node 20, Firebase Functions Gen2)
  *
- * ✅ What this version does (per your request)
- * - NO perFeedSummary
- * - NO errorSamples
- * - fetchRuns will still track:
- *   - runType (manual/scheduled)
- *   - status (enqueued/enqueue_failed/running/done/done_with_errors/failed)
- *   - feedsCount
- *   - processed
- *   - newCount
- *   - durationMs
- *   - createdAt / enqueuedAt / startedAt / finishedAt / updatedAt
- *   - errorsCount (number only)
- *   - error (string only on fatal task failure)
+ * ✅ Supports BOTH Greenhouse + AshbyHQ feeds
+ * - Greenhouse (boards-api): https://boards-api.greenhouse.io/v1/boards/<company>/jobs
+ * - AshbyHQ (posting-api):   https://api.ashbyhq.com/posting-api/job-board/<company>
  *
- * ✅ Scale fixes
- * - Removes per-job Firestore reads (no doc.get) => reads won't explode
- * - Uses Firestore BulkWriter for fast writes
- * - Retries + longer timeouts for slow Greenhouse boards
- * - Manual and Scheduled BOTH enqueue a task and BOTH create fetchRuns docs
- *
- * ✅ Content fields
- * - Removes contentPlain, contentSections
- * - Keeps ONLY contentHtmlClean
+ * ✅ Still NO perFeedSummary / NO errorSamples
+ * ✅ fetchRuns still tracks (same as your current version)
+ * ✅ Scale fixes remain (no per-job reads, BulkWriter, retries/timeouts, task queue for both manual + scheduled)
+ * ✅ Content fields: keeps ONLY contentHtmlClean
  */
 
 const admin = require("firebase-admin");
@@ -171,7 +156,10 @@ function isRemoteLocation(locationText) {
   return true;
 }
 
-function shouldKeepJobByLocation(locationName) {
+function shouldKeepJobByLocation(locationName, jobRaw) {
+  // If source has explicit isRemote true, always keep
+  if (jobRaw && jobRaw.isRemote === true) return true;
+
   return isUSLocation(locationName) || isRemoteLocation(locationName);
 }
 
@@ -196,11 +184,25 @@ function extractStateCodes(locationText) {
   return Array.from(codes);
 }
 
+// ------------------------ FEED TYPE DETECTION ------------------------
+function detectFeedSource(feedUrl) {
+  const u = String(feedUrl || "").toLowerCase();
+  if (u.includes("boards-api.greenhouse.io")) return "greenhouse";
+  if (u.includes("api.ashbyhq.com/posting-api/job-board")) return "ashby";
+  return "unknown";
+}
+
 // ------------------------ TIME ------------------------
 function parseUpdatedAtIso(jobRaw) {
-  const iso = jobRaw?.updated_at || jobRaw?.first_published || null;
-  if (!iso) return new Date().toISOString();
-  return iso;
+  // Greenhouse
+  if (jobRaw?.updated_at) return jobRaw.updated_at;
+  if (jobRaw?.first_published) return jobRaw.first_published;
+
+  // Ashby
+  if (jobRaw?.publishedAt) return jobRaw.publishedAt;
+
+  // Fallback
+  return new Date().toISOString();
 }
 
 function isoToTimestamp(iso) {
@@ -237,7 +239,7 @@ async function fetchJson(url) {
       const res = await fetch(url, {
         method: "GET",
         headers: {
-          "user-agent": "greenhouse-jobs-scraper/3.2",
+          "user-agent": "jobs-aggregator/4.0",
           accept: "application/json",
         },
         signal: controller.signal,
@@ -300,6 +302,7 @@ function removeTracking(html) {
   if (!html) return "";
   let s = String(html);
 
+  // remove img pixels
   s = s.replace(/<img\b[^>]*>/gi, " ");
 
   const trackerDomains = [
@@ -370,52 +373,157 @@ function normalizeMetadata(metadataArr) {
   return { metadataKV: kv, metadataList: list };
 }
 
+// ------------------------ ASHBY -> GH-LIKE SHIM ------------------------
+function toGreenhouseLikeJob(source, jobRaw) {
+  if (source === "greenhouse") return jobRaw;
+
+  // AshbyHQ
+  // Input sample:
+  // { id, title, department, team, employmentType, location, publishedAt, jobUrl, applyUrl, descriptionHtml, isRemote, ... }
+  return {
+    id: jobRaw?.id, // string UUID
+    title: jobRaw?.title || null,
+    absolute_url: jobRaw?.jobUrl || null,
+    apply_url: jobRaw?.applyUrl || null,
+    updated_at: jobRaw?.publishedAt || null,
+    first_published: jobRaw?.publishedAt || null,
+    company_name: null,
+    requisition_id: null,
+    language: null,
+    internal_job_id: null,
+    location: { name: jobRaw?.location || "" },
+    metadata: [
+      ...(jobRaw?.department ? [{ name: "Department", value: jobRaw.department, value_type: "short_text" }] : []),
+      ...(jobRaw?.team ? [{ name: "Team", value: jobRaw.team, value_type: "short_text" }] : []),
+      ...(jobRaw?.employmentType ? [{ name: "Employment Type", value: jobRaw.employmentType, value_type: "short_text" }] : []),
+    ],
+    content: jobRaw?.descriptionHtml || "",
+    // keep original fields for downstream logic
+    _ashby: {
+      isRemote: jobRaw?.isRemote ?? null,
+      jobUrl: jobRaw?.jobUrl ?? null,
+      applyUrl: jobRaw?.applyUrl ?? null,
+      address: jobRaw?.address ?? null,
+      isListed: jobRaw?.isListed ?? null,
+    },
+    isRemote: jobRaw?.isRemote === true,
+  };
+}
+
+function extractJobsFromFeedJson(source, json) {
+  // Greenhouse: { jobs: [...] }
+  if (source === "greenhouse") {
+    return Array.isArray(json?.jobs) ? json.jobs : [];
+  }
+
+  // Ashby: commonly { jobs: [...] } OR directly an array (depends on endpoint/version)
+  if (source === "ashby") {
+    if (Array.isArray(json?.jobs)) return json.jobs;
+    if (Array.isArray(json)) return json;
+    // Some Ashby responses are { jobBoard: { jobs: [...] } } (defensive)
+    if (Array.isArray(json?.jobBoard?.jobs)) return json.jobBoard.jobs;
+    return [];
+  }
+
+  // Unknown: try best-effort
+  if (Array.isArray(json?.jobs)) return json.jobs;
+  if (Array.isArray(json)) return json;
+  return [];
+}
+
 // ------------------------ JOB KEY / NORMALIZATION ------------------------
 function jobDocId(companyKey, jobId) {
   return `${companyKey}__${jobId}`;
 }
 
-function feedCompanyKey(feed) {
+function inferAshbyCompanyKeyFromUrl(feedUrl) {
   try {
-    const u = new URL(feed.url);
+    const u = new URL(feedUrl);
     const parts = u.pathname.split("/").filter(Boolean);
+    // /posting-api/job-board/<company>
+    const idx = parts.indexOf("job-board");
+    if (idx !== -1 && parts[idx + 1]) return parts[idx + 1].toLowerCase();
+  } catch {}
+  return null;
+}
+
+function inferGreenhouseCompanyKeyFromUrl(feedUrl) {
+  try {
+    const u = new URL(feedUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    // /v1/boards/<company>/jobs
     const idx = parts.indexOf("boards");
     if (idx !== -1 && parts[idx + 1]) return parts[idx + 1].toLowerCase();
   } catch {}
-  return feed.id;
+  return null;
 }
 
-function resolveCompanyName(feed, jobRaw) {
+function feedCompanyKey(feed) {
+  const source = detectFeedSource(feed.url);
+
+  if (source === "greenhouse") {
+    return inferGreenhouseCompanyKeyFromUrl(feed.url) || feed.id;
+  }
+
+  if (source === "ashby") {
+    return inferAshbyCompanyKeyFromUrl(feed.url) || feed.id;
+  }
+
+  // fallback
+  try {
+    const u = new URL(feed.url);
+    const host = u.hostname.replaceAll(".", "_");
+    return `${host}_${feed.id}`.toLowerCase();
+  } catch {
+    return feed.id;
+  }
+}
+
+function resolveCompanyName(feed, jobRaw, source) {
+  // Prefer feed config
   const fromFeed = (feed?.name || "").trim();
   if (fromFeed) return fromFeed;
 
+  // Greenhouse job has company_name
   const fromJob = (jobRaw?.company_name || "").trim();
   if (fromJob) return fromJob;
+
+  // Ashby: infer from URL slug (openai/notion/etc.)
+  if (source === "ashby") {
+    const key = inferAshbyCompanyKeyFromUrl(feed?.url) || feedCompanyKey(feed);
+    if (key) return key.charAt(0).toUpperCase() + key.slice(1);
+  }
 
   return feedCompanyKey(feed) || "Unknown";
 }
 
-function normalizeJob(uid, feed, jobRaw) {
-  const locationName = jobRaw?.location?.name || "";
-  const updatedAtIso = parseUpdatedAtIso(jobRaw);
+function normalizeJob(uid, feed, jobRawGreenhouseLike, source) {
+  const locationName = jobRawGreenhouseLike?.location?.name || "";
+  const updatedAtIso = parseUpdatedAtIso(jobRawGreenhouseLike);
   const updatedAtTs = isoToTimestamp(updatedAtIso);
 
-  const { metadataKV, metadataList } = normalizeMetadata(jobRaw.metadata);
-  const contentHtmlClean = normalizeContentHtmlClean(jobRaw.content || "");
+  const { metadataKV, metadataList } = normalizeMetadata(jobRawGreenhouseLike.metadata);
+  const contentHtmlClean = normalizeContentHtmlClean(jobRawGreenhouseLike.content || "");
 
-  const isRemote = isRemoteLocation(locationName) || (!locationName && true);
+  const explicitRemote = jobRawGreenhouseLike?.isRemote === true || jobRawGreenhouseLike?._ashby?.isRemote === true;
+  const computedRemote = isRemoteLocation(locationName) || (!locationName && true);
+  const isRemote = explicitRemote || computedRemote;
+
   const stateCodes = extractStateCodes(locationName);
-
   const companyKey = feedCompanyKey(feed);
 
   return {
     uid,
+
+    source, // "greenhouse" | "ashby" | "unknown"
     companyKey,
-    companyName: resolveCompanyName(feed, jobRaw),
+    companyName: resolveCompanyName(feed, jobRawGreenhouseLike, source),
 
     locationName: locationName || "Remote",
-    absolute_url: jobRaw.absolute_url || null,
-    title: jobRaw.title || null,
+    absolute_url: jobRawGreenhouseLike.absolute_url || null,
+    applyUrl: jobRawGreenhouseLike.apply_url || jobRawGreenhouseLike?._ashby?.applyUrl || null,
+
+    title: jobRawGreenhouseLike.title || null,
 
     updatedAtIso,
     updatedAtTs,
@@ -423,11 +531,12 @@ function normalizeJob(uid, feed, jobRaw) {
     stateCodes,
     isRemote,
 
-    jobId: jobRaw.id,
-    internalJobId: jobRaw.internal_job_id ?? jobRaw.internalJobId ?? null,
-    requisitionId: jobRaw.requisition_id ?? null,
-    language: jobRaw.language || null,
-    firstPublishedIso: jobRaw.first_published || null,
+    // IDs
+    jobId: jobRawGreenhouseLike.id,
+    internalJobId: jobRawGreenhouseLike.internal_job_id ?? jobRawGreenhouseLike.internalJobId ?? null,
+    requisitionId: jobRawGreenhouseLike.requisition_id ?? null,
+    language: jobRawGreenhouseLike.language || null,
+    firstPublishedIso: jobRawGreenhouseLike.first_published || null,
 
     metadataKV,
     metadataList,
@@ -450,6 +559,8 @@ async function loadUserFeeds(uid) {
       name: data.company || data.name || null,
       url: data.url || null,
       active: data.active !== false,
+      // optional future field, but we can also auto-detect from URL
+      source: data.source || null,
     });
   });
   return feeds.filter((f) => f.url && f.active);
@@ -470,6 +581,7 @@ async function upsertCompanyDoc(uid, feed, inferredCompanyName) {
       companyName: name,
       lastSeenAt: FieldValue.serverTimestamp(),
       url: feed.url || null,
+      source: detectFeedSource(feed.url),
     },
     { merge: true }
   );
@@ -500,16 +612,36 @@ async function upsertJobNoRead(bulkWriter, jobsColRef, docId, normalized) {
   }
 }
 
+function inferCompanyNameFromFeed(feed, source, jobsRaw) {
+  // Greenhouse: try company_name from jobs
+  if (source === "greenhouse") {
+    const inferred = (jobsRaw.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
+    return inferred || null;
+  }
+
+  // Ashby: use feed.name if present, else slug
+  if (source === "ashby") {
+    if ((feed?.name || "").trim()) return (feed.name || "").trim();
+    const key = inferAshbyCompanyKeyFromUrl(feed?.url);
+    if (key) return key.charAt(0).toUpperCase() + key.slice(1);
+    return null;
+  }
+
+  return null;
+}
+
 async function processOneFeed(uid, feed, bulkWriter) {
+  const source = feed.source || detectFeedSource(feed.url);
   const json = await fetchJson(feed.url);
-  const jobs = Array.isArray(json.jobs) ? json.jobs : [];
 
-  const inferredCompanyName = (jobs.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
+  const jobsRaw = extractJobsFromFeedJson(source, json);
+  const inferredCompanyName = inferCompanyNameFromFeed(feed, source, jobsRaw);
 
-  const kept = [];
-  for (const j of jobs) {
-    const loc = j?.location?.name;
-    if (!loc || shouldKeepJobByLocation(loc)) kept.push(j);
+  // filter by location rules
+  const keptRaw = [];
+  for (const j of jobsRaw) {
+    const loc = source === "greenhouse" ? j?.location?.name : j?.location;
+    if (!loc || shouldKeepJobByLocation(loc, j)) keptRaw.push(j);
   }
 
   const companyKey = feedCompanyKey(feed);
@@ -517,10 +649,11 @@ async function processOneFeed(uid, feed, bulkWriter) {
   const limitWrite = pLimit(JOB_WRITE_CONCURRENCY);
 
   const createdFlags = await Promise.all(
-    kept.map((jobRaw) =>
+    keptRaw.map((jobRaw) =>
       limitWrite(async () => {
-        const normalized = normalizeJob(uid, feed, jobRaw);
-        const docId = jobDocId(companyKey, jobRaw.id);
+        const ghLike = toGreenhouseLikeJob(source, jobRaw);
+        const normalized = normalizeJob(uid, feed, ghLike, source);
+        const docId = jobDocId(companyKey, ghLike.id);
         return await upsertJobNoRead(bulkWriter, jobsCol, docId, normalized);
       })
     )
@@ -531,7 +664,7 @@ async function processOneFeed(uid, feed, bulkWriter) {
   await upsertCompanyDoc(uid, feed, inferredCompanyName);
 
   return {
-    processed: kept.length,
+    processed: keptRaw.length,
     newCount,
   };
 }
@@ -702,7 +835,7 @@ exports.pollNowV2 = onCall({ region: REGION }, async (req) => {
   if (!req.auth?.uid) throw new HttpsError("unauthenticated", "You must be signed in.");
 
   try {
-    // Manual now also uses task queue so it ALWAYS writes fetchRuns and behaves like scheduled.
+    // Manual now uses task queue so it ALWAYS writes fetchRuns and behaves like scheduled.
     return await enqueueUserRun(req.auth.uid, "manual");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
