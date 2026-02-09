@@ -18,7 +18,6 @@ import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 const PAGE_SIZE = 50;
-const TITLE_DEBOUNCE_MS = 200;
 
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
@@ -90,31 +89,13 @@ export default function Jobs({ user }) {
   const [hasMore, setHasMore] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState("");
-  const [debouncedTitleSearch, setDebouncedTitleSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
   const observer = useRef(null);
 
-  const resetAll = useCallback(() => {
-    setTitleSearch("");
-    setDebouncedTitleSearch("");
-    setStateFilter("");
-    setTimeframe("1h");
-    setSelectedKeys([]);
-  }, []);
-
-  // ✅ Debounce title search (200ms)
-  useEffect(() => {
-    const t = setTimeout(() => {
-      setDebouncedTitleSearch(titleSearch);
-    }, TITLE_DEBOUNCE_MS);
-
-    return () => clearTimeout(t);
-  }, [titleSearch]);
-
-  // Load companies
+  // Load companies (and build key=>name map)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -145,9 +126,16 @@ export default function Jobs({ user }) {
     };
   }, [user.uid]);
 
+  /**
+   * Jobs query:
+   * - Always order by updatedAtTs desc (so "All Jobs" matches timeframe modes)
+   * - Timeframe modes add where(updatedAtTs >= threshold)
+   *
+   * NOTE: updatedAtTs must exist on job docs for this to be complete.
+   */
   const fetchJobs = useCallback(
     async (isFirstPage = true) => {
-      if (jobs.length === 0 && isFirstPage) setLoading(true);
+      setLoading(true);
       setIsProcessing(true);
 
       try {
@@ -193,12 +181,13 @@ export default function Jobs({ user }) {
         }, 150);
       }
     },
-    [user.uid, selectedKeys, lastDoc, timeframe, showToast, jobs.length]
+    [user.uid, selectedKeys, lastDoc, timeframe, showToast]
   );
 
-  // Refresh on company/timeframe changes (server-side)
+  // Reset paging when filters change
   useEffect(() => {
     setLastDoc(null);
+    setJobs([]);
     setHasMore(true);
     fetchJobs(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -233,17 +222,17 @@ export default function Jobs({ user }) {
 
     try {
       await updateDoc(doc(db, job._path), { saved: newState });
-      showToast(newState ? "📌 Saved to review list" : "📍 Removed from review list", "info");
+      showToast(newState ? "Job pinned" : "Pin removed", "info");
     } catch (err) {
       console.error("Bookmark update error:", err);
       setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, saved: !newState } : j)));
-      showToast("Error updating saved state", "error");
+      showToast("Error updating bookmark", "error");
     }
   };
 
-  // Client-side filters (✅ uses debouncedTitleSearch)
+  // Client-side filters
   const filteredJobs = useMemo(() => {
-    const titleTerm = debouncedTitleSearch.trim().toLowerCase();
+    const titleTerm = titleSearch.trim().toLowerCase();
 
     return jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
@@ -256,12 +245,10 @@ export default function Jobs({ user }) {
 
       return true;
     });
-  }, [jobs, debouncedTitleSearch, stateFilter]);
-
-  // ✅ Consistent UI across timeframes: show saved section whenever viewing all companies
-  const showPinnedSeparately = selectedKeys.length === 0;
+  }, [jobs, titleSearch, stateFilter]);
 
   const { bookmarkedJobs, regularJobs } = useMemo(() => {
+    const showPinnedSeparately = selectedKeys.length === 0 && timeframe === "all";
     if (showPinnedSeparately) {
       return {
         bookmarkedJobs: filteredJobs.filter((j) => j.saved),
@@ -269,7 +256,7 @@ export default function Jobs({ user }) {
       };
     }
     return { bookmarkedJobs: [], regularJobs: filteredJobs };
-  }, [filteredJobs, showPinnedSeparately]);
+  }, [filteredJobs, selectedKeys, timeframe]);
 
   const displayCompanyName = (job) => {
     const byDoc = (job.companyName || "").trim();
@@ -281,13 +268,8 @@ export default function Jobs({ user }) {
     return job.companyKey || "Unknown";
   };
 
-  const TS_HELP = {
-    discovered: "When JobWatch first discovered this role.",
-    lastChange: "Most recent change detected for this role (posting updates, content changes, etc.).",
-  };
-
   const renderJobItem = (job) => {
-    const lastChangeShort = shortAgoFromISO(job.updatedAtIso);
+    const updatedShort = shortAgoFromISO(job.updatedAtIso);
 
     return (
       <li
@@ -312,13 +294,15 @@ export default function Jobs({ user }) {
               {job.title}
             </h3>
 
+            {/* ✅ Show BOTH on all screens (desktop keeps right column too) */}
             <div className="mt-1 text-xs text-gray-400 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span title={TS_HELP.discovered}>Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
+              <span>Fetched {timeAgoFromFirestore(job.firstSeenAt)}</span>
 
-              <span className="sm:hidden inline-flex items-center gap-1" title={TS_HELP.lastChange}>
+              {/* Mobile/compact updated label */}
+              <span className="sm:hidden inline-flex items-center gap-1">
                 <span className="text-gray-300">•</span>
                 <span>
-                  Last change <span className="font-semibold text-gray-700">{lastChangeShort}</span>
+                  Updated <span className="font-semibold text-gray-600">{updatedShort}</span>
                 </span>
               </span>
             </div>
@@ -330,8 +314,7 @@ export default function Jobs({ user }) {
               className={`p-2 rounded-full transition-colors ${
                 job.saved ? "text-amber-500 bg-amber-50" : "text-gray-300 hover:bg-gray-100 hover:text-gray-500"
               }`}
-              aria-label={job.saved ? "Remove from review list" : "Save to review list"}
-              title={job.saved ? "Saved to review list" : "Save to review list"}
+              aria-label={job.saved ? "Unpin job" : "Pin job"}
             >
               <svg
                 className="size-5"
@@ -348,11 +331,12 @@ export default function Jobs({ user }) {
               </svg>
             </button>
 
-            <div className="hidden sm:flex flex-col items-end min-w-[92px]" title={TS_HELP.lastChange}>
+            {/* Desktop updated column (unchanged, but now NOT the only place Updated appears) */}
+            <div className="hidden sm:flex flex-col items-end min-w-[70px]">
               <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
-                Last change
+                Updated
               </span>
-              <span className="text-sm font-bold text-gray-900">{lastChangeShort}</span>
+              <span className="text-sm font-bold text-gray-900">{updatedShort}</span>
             </div>
           </div>
         </div>
@@ -367,10 +351,6 @@ export default function Jobs({ user }) {
       <div className="h-3 w-40 bg-gray-100 rounded" />
     </div>
   );
-
-  const progressLabel = useMemo(() => {
-    return `Showing ${filteredJobs.length}${hasMore ? "+" : ""} roles`;
-  }, [filteredJobs.length, hasMore]);
 
   return (
     <div className="py-8 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
@@ -431,7 +411,15 @@ export default function Jobs({ user }) {
         </div>
 
         <div className="pt-6">
-          <button onClick={resetAll} className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2">
+          <button
+            onClick={() => {
+              setTitleSearch("");
+              setStateFilter("");
+              setTimeframe("1h");
+              setSelectedKeys([]);
+            }}
+            className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2"
+          >
             Reset All
           </button>
         </div>
@@ -545,90 +533,43 @@ export default function Jobs({ user }) {
       </AnimatePresence>
 
       {/* LIST */}
-      <div className="relative bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
-        {/* Shimmer overlay */}
-        <AnimatePresence>
-          {isProcessing && jobs.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="absolute inset-0 z-10 pointer-events-none"
-            >
-              <div className="absolute inset-0 bg-white/55" />
-              <div className="absolute inset-0 animate-pulse">
-                <div className="h-16 border-b border-gray-100 bg-gray-50/70" />
-                <div className="h-16 border-b border-gray-100 bg-gray-50/60" />
-                <div className="h-16 border-b border-gray-100 bg-gray-50/70" />
-                <div className="h-16 border-b border-gray-100 bg-gray-50/60" />
-                <div className="h-16 border-b border-gray-100 bg-gray-50/70" />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {loading && jobs.length === 0 ? (
+      <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
+        {(loading || isProcessing) && jobs.length === 0 ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>{renderSkeleton()}</React.Fragment>
             ))}
           </div>
         ) : filteredJobs.length === 0 ? (
-          <div className="flex-grow flex flex-col items-center justify-center py-32 text-center bg-gray-50/10 px-6">
-            <p className="text-sm font-semibold text-gray-900 tracking-tight">No roles match your filters</p>
-            <p className="text-xs text-gray-400 mt-1 max-w-[320px] leading-relaxed">
-              Try clearing filters or switching back to All Jobs.
-            </p>
-
-            <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-              <button
-                onClick={() => setTimeframe("all")}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-white ring-1 ring-gray-200 text-gray-700 hover:bg-gray-50"
-              >
-                All Jobs
-              </button>
-              <button
-                onClick={resetAll}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 text-white hover:bg-indigo-700"
-              >
-                Clear filters
-              </button>
-            </div>
+          <div className="flex-grow flex flex-col items-center justify-center py-32 text-center bg-gray-50/10">
+            <p className="text-sm font-semibold text-gray-900 tracking-tight">No positions found</p>
+            <p className="text-xs text-gray-400 mt-1 max-w-[200px] leading-relaxed">Adjust filters to see more roles.</p>
           </div>
         ) : (
           <div className="flex-grow">
-            {showPinnedSeparately && bookmarkedJobs.length > 0 && (
+            {bookmarkedJobs.length > 0 && (
               <div className="bg-amber-50/30">
                 <div className="px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
                   <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                    📌 Saved for Review
+                    📌 Pinned for Review
                   </span>
                 </div>
                 <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
-
-                {regularJobs.length > 0 && (
-                  <div className="relative py-4 bg-white flex items-center px-6">
-                    <div className="flex-grow border-t border-dashed border-gray-200" />
-                    <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">
-                      Recent Postings
-                    </span>
-                    <div className="flex-grow border-t border-dashed border-gray-200" />
-                  </div>
-                )}
+                <div className="relative py-4 bg-white flex items-center px-6">
+                  <div className="flex-grow border-t border-dashed border-gray-200" />
+                  <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">
+                    Recent Postings
+                  </span>
+                  <div className="flex-grow border-t border-dashed border-gray-200" />
+                </div>
               </div>
             )}
-
             <ul className="divide-y divide-gray-100">{regularJobs.map((job) => renderJobItem(job))}</ul>
           </div>
         )}
 
         {/* Sentinel */}
-        <div ref={lastElementRef} className="h-20 flex flex-col items-center justify-center border-t border-gray-50 gap-1">
-          {jobs.length > 0 && (
-            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">{progressLabel}</span>
-          )}
-
+        <div ref={lastElementRef} className="h-20 flex items-center justify-center border-t border-gray-50">
           {(loading || isProcessing) && jobs.length > 0 ? (
             <div className="flex gap-1.5">
               <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce [animation-delay:-0.3s]" />
