@@ -12,7 +12,6 @@ function fmtDateTime(ts) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
   });
 }
 
@@ -20,15 +19,13 @@ function fmtSince(ts) {
   if (!ts?.toDate) return "—";
   const d = ts.toDate();
   const diffMs = Date.now() - d.getTime();
-  const secs = Math.floor(diffMs / 1000);
-  const mins = Math.floor(secs / 60);
+  const mins = Math.floor(diffMs / (1000 * 60));
   const hours = Math.floor(mins / 60);
   const days = Math.floor(hours / 24);
 
   if (days > 0) return `${days}d ago`;
   if (hours > 0) return `${hours}h ago`;
   if (mins > 0) return `${mins}m ago`;
-  if (secs > 5) return `${secs}s ago`;
   return "just now";
 }
 
@@ -42,29 +39,27 @@ function pickRunTime(r) {
   return r.startedAt || r.enqueuedAt || r.createdAt || r.updatedAt || null;
 }
 
-function prettyRunType(runType) {
-  if (runType === "scheduled") return "Scheduled";
-  if (runType === "manual") return "Manual";
-  if (runType === "cleanup_scheduled") return "Cleanup (Scheduled)";
-  if (runType === "cleanup_manual") return "Cleanup (Manual)";
-  return runType ? String(runType) : "Run";
+function statusLabel(statusRaw) {
+  const s = String(statusRaw || "done").toUpperCase();
+  return s;
 }
 
-function badgeClassForRunType(runType) {
-  if (runType === "scheduled") return "bg-gray-100 text-gray-700 ring-gray-200";
-  if (runType === "manual") return "bg-indigo-50 text-indigo-700 ring-indigo-100";
-  if (String(runType || "").startsWith("cleanup"))
-    return "bg-emerald-50 text-emerald-700 ring-emerald-100";
-  return "bg-gray-50 text-gray-600 ring-gray-200";
-}
-
-function statusClass(statusUpper) {
-  if (statusUpper === "DONE") return "text-green-700";
-  if (statusUpper === "RUNNING") return "text-amber-700";
-  if (statusUpper === "ENQUEUED") return "text-gray-600";
-  if (statusUpper === "DONE_WITH_ERRORS") return "text-red-700";
-  if (statusUpper === "FAILED" || statusUpper === "ENQUEUE_FAILED") return "text-red-700";
+function statusClass(status) {
+  if (status === "DONE") return "text-green-700";
+  if (status === "RUNNING" || status === "ENQUEUED") return "text-amber-700";
+  if (status === "DONE_WITH_ERRORS") return "text-red-700";
+  if (status === "FAILED" || status === "ENQUEUE_FAILED") return "text-red-700";
   return "text-gray-500";
+}
+
+function runTypeLabel(rt) {
+  return rt === "scheduled" ? "Scheduled" : "Manual";
+}
+
+function runTypeBadgeClass(rt) {
+  return rt === "scheduled"
+    ? "bg-gray-100 text-gray-700 ring-gray-200"
+    : "bg-indigo-50 text-indigo-700 ring-indigo-100";
 }
 
 export default function FetchHistory({ user }) {
@@ -86,7 +81,7 @@ export default function FetchHistory({ user }) {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Fetch History</h1>
         <p className="mt-1 text-sm text-gray-600">
-          “Added” = number of brand-new job documents created in Firestore during that run.
+          Every scheduled poll (every 30 minutes) and every manual fetch is logged here.
         </p>
       </div>
 
@@ -94,7 +89,7 @@ export default function FetchHistory({ user }) {
         <div className="px-4 py-4 sm:px-6 border-b border-gray-100">
           <h3 className="text-sm font-semibold text-gray-900">Recent Runs</h3>
           <p className="text-xs text-gray-500 mt-1">
-            Expand a run to see error details (URL + message).
+            “Added” = new docs created • “Updated” = existing docs merged
           </p>
         </div>
 
@@ -102,33 +97,34 @@ export default function FetchHistory({ user }) {
           {runs.map((r) => {
             const isOpen = openId === r.id;
 
-            const runTypeLabel = prettyRunType(r.runType);
-            const badgeCls = badgeClassForRunType(r.runType);
+            const runType = runTypeLabel(r.runType);
+            const badgeCls = runTypeBadgeClass(r.runType);
 
-            const statusUpper = String(r.status || "done").toUpperCase();
-            const statusCls = statusClass(statusUpper);
+            const status = statusLabel(r.status);
+            const statusCls = statusClass(status);
 
             const runTime = pickRunTime(r);
 
             const feedsCount = r.feedsCount ?? 0;
             const processedCount = r.processed ?? 0;
-            const addedCount = r.createdCount ?? 0;
+
+            // NEW COUNTERS (from updated index.js)
+            const added = r.createdCount ?? 0;
+            const updated = r.updatedCount ?? 0;
+
             const errorsCount = r.errorsCount ?? 0;
-
-            const errorSamples = Array.isArray(r.errorSamples) ? r.errorSamples : [];
-
-            const deletedCount = r.deleted ?? null;
-            const isCleanup = String(r.runType || "").startsWith("cleanup");
+            const samples = Array.isArray(r.errorSamples) ? r.errorSamples : [];
 
             return (
               <li key={r.id} className="px-4 py-5 sm:px-6 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start justify-between gap-x-6">
                   <div className="min-w-0 flex-1">
+                    {/* Top line */}
                     <div className="flex flex-wrap items-center gap-2">
                       <span
                         className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${badgeCls}`}
                       >
-                        {runTypeLabel}
+                        {runType}
                       </span>
 
                       <span className="text-sm font-semibold text-gray-900">
@@ -142,29 +138,24 @@ export default function FetchHistory({ user }) {
                       <span className="text-gray-300">|</span>
 
                       <span className={`text-xs font-black uppercase tracking-widest ${statusCls}`}>
-                        {statusUpper}
+                        {status}
                       </span>
                     </div>
 
+                    {/* Summary line */}
                     <div className="mt-2 text-sm text-gray-700">
-                      {isCleanup ? (
-                        <>
-                          Deleted <span className="font-semibold">{deletedCount ?? 0}</span> • Duration{" "}
-                          <span className="font-semibold">{fmtDuration(r.durationMs)}</span>
-                        </>
-                      ) : (
-                        <>
-                          Feeds <span className="font-semibold">{feedsCount}</span> • Processed{" "}
-                          <span className="font-semibold">{processedCount}</span> • Added{" "}
-                          <span className="font-semibold">{addedCount}</span> • Duration{" "}
-                          <span className="font-semibold">{fmtDuration(r.durationMs)}</span>
-                        </>
-                      )}
+                      Feeds <span className="font-semibold">{feedsCount}</span> • Processed{" "}
+                      <span className="font-semibold">{processedCount}</span> • Added{" "}
+                      <span className="font-semibold">{added}</span> • Updated{" "}
+                      <span className="font-semibold">{updated}</span> • Duration{" "}
+                      <span className="font-semibold">{fmtDuration(r.durationMs)}</span>
                     </div>
 
+                    {/* Expanded */}
                     {isOpen && (
                       <div className="mt-5 space-y-4">
-                        {(statusUpper === "RUNNING" || statusUpper === "ENQUEUED") ? (
+                        {/* status panel */}
+                        {status === "RUNNING" || status === "ENQUEUED" ? (
                           <div className="rounded-lg bg-amber-50 ring-1 ring-inset ring-amber-100 p-4">
                             <div className="text-xs font-bold uppercase tracking-widest text-amber-700">
                               In progress
@@ -173,13 +164,13 @@ export default function FetchHistory({ user }) {
                               This run is still updating.
                             </div>
                           </div>
-                        ) : errorsCount === 0 && statusUpper !== "FAILED" && statusUpper !== "ENQUEUE_FAILED" ? (
+                        ) : errorsCount === 0 && status !== "FAILED" && status !== "ENQUEUE_FAILED" ? (
                           <div className="rounded-lg bg-green-50 ring-1 ring-inset ring-green-100 p-4">
                             <div className="text-xs font-bold uppercase tracking-widest text-green-700">
                               No errors in this run
                             </div>
                             <div className="mt-2 text-sm text-green-800">
-                              {isCleanup ? "Cleanup completed successfully." : "All feeds completed successfully."}
+                              All feeds completed successfully.
                             </div>
                           </div>
                         ) : (
@@ -187,11 +178,10 @@ export default function FetchHistory({ user }) {
                             <div className="text-xs font-bold uppercase tracking-widest text-red-700">
                               Errors detected
                             </div>
-
                             <div className="mt-2 text-sm text-red-800">
-                              {statusUpper === "ENQUEUE_FAILED"
+                              {status === "ENQUEUE_FAILED"
                                 ? "The run could not be enqueued."
-                                : statusUpper === "FAILED"
+                                : status === "FAILED"
                                 ? "The task failed."
                                 : "Some feeds failed during the run."}
                             </div>
@@ -200,6 +190,7 @@ export default function FetchHistory({ user }) {
                               Errors count: <span className="font-semibold">{errorsCount}</span>
                             </div>
 
+                            {/* show enqueueError / error */}
                             {r.enqueueError ? (
                               <div className="mt-3 text-xs text-red-800 font-mono whitespace-pre-wrap break-words">
                                 {r.enqueueError}
@@ -212,51 +203,68 @@ export default function FetchHistory({ user }) {
                               </div>
                             ) : null}
 
-                            {errorSamples.length > 0 ? (
+                            {/* NEW: error samples list */}
+                            {samples.length > 0 ? (
                               <div className="mt-4">
-                                <div className="text-xs font-bold uppercase tracking-widest text-red-700">
+                                <div className="text-[11px] font-black uppercase tracking-widest text-red-700">
                                   Error samples
                                 </div>
                                 <ul className="mt-2 space-y-2">
-                                  {errorSamples.map((e, idx) => (
+                                  {samples.map((s, idx) => (
                                     <li
-                                      key={idx}
+                                      key={`${idx}-${s?.url || "x"}`}
                                       className="rounded-md bg-white/60 ring-1 ring-inset ring-red-100 p-2"
                                     >
-                                      <div className="text-[11px] font-mono text-gray-700 break-words">
-                                        <span className="font-semibold text-gray-900">URL:</span>{" "}
-                                        {e?.url || "—"}
+                                      <div className="text-[11px] text-gray-700 font-mono break-words">
+                                        {s?.url || "—"}
                                       </div>
-                                      <div className="text-[11px] font-mono text-red-800 whitespace-pre-wrap break-words mt-1">
-                                        {e?.error || "—"}
+                                      <div className="mt-1 text-[11px] text-red-800 font-mono whitespace-pre-wrap break-words">
+                                        {s?.error || "—"}
                                       </div>
                                     </li>
                                   ))}
                                 </ul>
                               </div>
-                            ) : (
-                              <div className="mt-3 text-xs text-gray-600">
-                                No error samples stored (or older run schema).
-                              </div>
-                            )}
+                            ) : null}
                           </div>
                         )}
 
+                        {/* run details */}
                         <div className="rounded-lg bg-gray-50 ring-1 ring-inset ring-gray-200 p-4">
                           <div className="text-xs font-bold uppercase tracking-widest text-gray-600">
                             Run details
                           </div>
-                          <div className="mt-2 text-xs text-gray-700 space-y-1">
-                            <div>Created: <span className="font-mono">{fmtDateTime(r.createdAt)}</span></div>
-                            <div>Enqueued: <span className="font-mono">{fmtDateTime(r.enqueuedAt)}</span></div>
-                            <div>Started: <span className="font-mono">{fmtDateTime(r.startedAt)}</span></div>
-                            <div>Finished: <span className="font-mono">{fmtDateTime(r.finishedAt)}</span></div>
-                            {isCleanup && r.cutoffUpdatedAtTs ? (
-                              <div>
-                                Cutoff (updatedAtTs &lt;):{" "}
-                                <span className="font-mono">{fmtDateTime(r.cutoffUpdatedAtTs)}</span>
-                              </div>
-                            ) : null}
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-gray-700">
+                            <div>
+                              <span className="text-gray-500">Created:</span>{" "}
+                              <span className="font-medium">{fmtDateTime(r.createdAt)}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Enqueued:</span>{" "}
+                              <span className="font-medium">{fmtDateTime(r.enqueuedAt)}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Started:</span>{" "}
+                              <span className="font-medium">{fmtDateTime(r.startedAt)}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-500">Finished:</span>{" "}
+                              <span className="font-medium">{fmtDateTime(r.finishedAt)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* counters detail */}
+                        <div className="rounded-lg bg-white ring-1 ring-inset ring-gray-200 p-4">
+                          <div className="text-xs font-bold uppercase tracking-widest text-gray-600">
+                            Counters
+                          </div>
+                          <div className="mt-2 text-sm text-gray-700">
+                            Processed (within last 1h): <span className="font-semibold">{processedCount}</span>
+                            <br />
+                            Added (new docs): <span className="font-semibold">{added}</span>
+                            <br />
+                            Updated (existing docs): <span className="font-semibold">{updated}</span>
                           </div>
                         </div>
                       </div>
@@ -268,7 +276,7 @@ export default function FetchHistory({ user }) {
                     className={`text-xs font-bold uppercase tracking-wider ${
                       isOpen
                         ? "text-gray-600 hover:text-gray-900"
-                        : (errorsCount || 0) > 0 || statusUpper === "FAILED" || statusUpper === "ENQUEUE_FAILED"
+                        : (errorsCount || 0) > 0 || status === "FAILED" || status === "ENQUEUE_FAILED"
                         ? "text-red-600 hover:text-red-800"
                         : "text-indigo-600 hover:text-indigo-800"
                     }`}
