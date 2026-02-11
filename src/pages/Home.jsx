@@ -92,26 +92,6 @@ export default function Home({ user }) {
 
   const detectedSource = useMemo(() => detectSourceFromUrl(url), [url]);
 
-  // NEW: Rename function to change feed company name
-  async function renameFeed(feedId, currentName) {
-    const newName = window.prompt("Enter new company name:", currentName);
-    if (!newName || newName.trim() === "" || newName === currentName) return;
-
-    setBusyArchiveId(feedId);
-    try {
-      const feedRef = doc(db, "users", user.uid, "feeds", feedId);
-      await updateDoc(feedRef, {
-        company: newName.trim()
-      });
-      showToast("Feed renamed successfully", "success");
-    } catch (err) {
-      console.error(err);
-      showToast("Error renaming feed", "error");
-    } finally {
-      setBusyArchiveId(null);
-    }
-  }
-
   async function addFeed(e) {
     e.preventDefault();
     const cleanCompany = company.trim();
@@ -315,22 +295,13 @@ export default function Home({ user }) {
                   <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
                 </div>
 
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => renameFeed(feed.id, feed.company)}
-                    disabled={busyArchiveId === feed.id}
-                    className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    onClick={() => archiveFeed(feed.id)}
-                    disabled={busyArchiveId === feed.id}
-                    className="text-[10px] font-black uppercase tracking-widest text-amber-600 hover:text-amber-800 disabled:opacity-50"
-                  >
-                    Archive
-                  </button>
-                </div>
+                <button
+                  onClick={() => archiveFeed(feed.id)}
+                  disabled={busyArchiveId === feed.id}
+                  className="text-[10px] font-black uppercase tracking-widest text-amber-600 hover:text-amber-800 disabled:opacity-50"
+                >
+                  Archive
+                </button>
               </li>
             ))}
 
@@ -373,22 +344,13 @@ export default function Home({ user }) {
                   <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
                 </div>
 
-                <div className="flex gap-4">
-                  <button
-                    onClick={() => renameFeed(feed.id, feed.company)}
-                    disabled={busyArchiveId === feed.id}
-                    className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    onClick={() => restoreFeed(feed.id)}
-                    disabled={busyArchiveId === feed.id}
-                    className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
-                  >
-                    Restore
-                  </button>
-                </div>
+                <button
+                  onClick={() => restoreFeed(feed.id)}
+                  disabled={busyArchiveId === feed.id}
+                  className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+                >
+                  Restore
+                </button>
               </li>
             ))}
 

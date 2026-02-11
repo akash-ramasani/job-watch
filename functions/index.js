@@ -1,19 +1,3 @@
-/* eslint-disable max-len */
-/**
- * functions/index.js (Node 20, Firebase Functions Gen2)
- *
- * ✅ Supports BOTH Greenhouse + AshbyHQ feeds
- * ✅ Only processes jobs updated within the last 1 hour (configurable)
- * ✅ Reduces Firestore writes by comparing timestamps BEFORE writing:
- *    - Added: doc doesn't exist -> create()
- *    - Updated: doc exists AND incomingUpdatedAtMs > existingUpdatedAtMs -> set(merge)
- *    - Skipped: doc exists AND incomingUpdatedAtMs <= existingUpdatedAtMs -> no write
- *
- * ✅ Timestamp rules:
- *    - Greenhouse: max(updated_at, first_published)
- *    - AshbyHQ: publishedAt
- */
-
 const admin = require("firebase-admin");
 const { getFunctions } = require("firebase-admin/functions");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
@@ -33,12 +17,21 @@ const REGION = "us-central1";
 const FEED_CONCURRENCY = 6;
 const JOB_WRITE_CONCURRENCY = 25;
 
-// Schedule
-const SCHEDULE = "*/30 * * * *";
+// ✅ Start at 11:15 PM now and continue every 30 mins => :15 and :45
+// (This will run at 11:15, 11:45, 12:15, 12:45, ...)
+const POLL_SCHEDULE = "15,45 * * * *";
 const TIME_ZONE = "America/Los_Angeles";
 
-// Process only jobs "updated" within last 1 hour
-const WINDOW_MS = 60 * 60 * 1000; // 1 hour
+// ✅ Cleanup at 03:00 AM every 2 days
+const CLEANUP_SCHEDULE = "0 3 */2 * *";
+
+// Ingestion window: last 1 hour only
+const INGEST_WINDOW_MS = 60 * 60 * 1000;
+
+// Retention for cleanup (adjust anytime)
+const JOB_RETENTION_DAYS = 14;      // keep jobs for 14 days
+const RUN_RETENTION_DAYS = 14;      // keep fetchRuns for 14 days
+const COMPANY_RETENTION_DAYS = 30;  // keep companies if seen within last 30 days
 
 // Fetch reliability
 const FETCH_TIMEOUT_MS = 90_000;
@@ -199,38 +192,52 @@ function detectFeedSource(feedUrl) {
 }
 
 // ------------------------ TIME HELPERS ------------------------
-function isoToTimestamp(iso) {
+function isoToTimestampOrNull(iso) {
+  if (!iso) return null;
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return Timestamp.now();
+  if (Number.isNaN(d.getTime())) return null;
   return Timestamp.fromDate(d);
 }
 
-function isoToMs(iso) {
+function isoToMsOrNull(iso) {
+  if (!iso) return null;
   const d = new Date(iso);
   const ms = d.getTime();
-  if (!Number.isFinite(ms)) return 0;
+  if (!Number.isFinite(ms)) return null;
   return ms;
 }
 
 /**
- * ✅ Timestamp rules
- * - Greenhouse: latest of updated_at + first_published
- * - Ashby: publishedAt
+ * ✅ Upsert timestamp rules (what we compare to decide whether to write)
+ * - Greenhouse: max(updated_at, first_published)
+ * - Ashby: publishedAt (BUT if we don't have it directly, we accept greenhouse-like updated_at/first_published too)
  *
- * IMPORTANT: For Ashby we must use the *original Ashby job object* (not _ashby shim).
+ * Returns ISO string or null if missing/invalid.
  */
-function computeSourceUpdatedIso(source, jobRawOriginal) {
+function computeSourceUpdatedIso(source, jobRaw) {
   if (source === "ashby") {
-    return jobRawOriginal?.publishedAt || null;
-  }
-  // greenhouse-like
-  const a = jobRawOriginal?.updated_at || null;
-  const b = jobRawOriginal?.first_published || null;
+    // Prefer publishedAt if present (raw Ashby shape), else fall back to greenhouse-like fields.
+    const iso =
+      jobRaw?.publishedAt ||
+      jobRaw?.updated_at ||
+      jobRaw?.first_published ||
+      null;
 
-  if (a && b) {
-    return isoToMs(a) >= isoToMs(b) ? a : b;
+    const ms = isoToMsOrNull(iso);
+    return ms ? iso : null;
   }
-  return a || b || null;
+
+  // greenhouse-like
+  const a = jobRaw?.updated_at || null;
+  const b = jobRaw?.first_published || null;
+
+  const aMs = isoToMsOrNull(a);
+  const bMs = isoToMsOrNull(b);
+
+  if (aMs && bMs) return aMs >= bMs ? a : b;
+  if (aMs) return a;
+  if (bMs) return b;
+  return null;
 }
 
 // ------------------------ HTTP / FETCH ------------------------
@@ -304,7 +311,7 @@ async function fetchJson(url) {
   throw new Error(`Fetch failed after retries for ${url}`);
 }
 
-// ------------------------ CONTENT CLEANING ------------------------
+// ------------------------ CONTENT CLEANING (ONLY contentHtmlClean) ------------------------
 function decodeHtmlEntities(s) {
   if (!s) return "";
   return String(s)
@@ -399,14 +406,16 @@ function normalizeMetadata(metadataArr) {
 function toGreenhouseLikeJob(source, jobRaw) {
   if (source === "greenhouse") return jobRaw;
 
-  // ashby -> greenhouse-like
   return {
     id: jobRaw?.id,
     title: jobRaw?.title || null,
     absolute_url: jobRaw?.jobUrl || null,
     apply_url: jobRaw?.applyUrl || null,
+
+    // IMPORTANT: put publishedAt here so greenhouse-like logic can read it too
     updated_at: jobRaw?.publishedAt || null,
     first_published: jobRaw?.publishedAt || null,
+
     company_name: null,
     requisition_id: null,
     language: null,
@@ -418,15 +427,15 @@ function toGreenhouseLikeJob(source, jobRaw) {
       ...(jobRaw?.employmentType ? [{ name: "Employment Type", value: jobRaw.employmentType, value_type: "short_text" }] : []),
     ],
     content: jobRaw?.descriptionHtml || "",
-    isRemote: jobRaw?.isRemote === true,
     _ashby: {
+      // keep useful bits, but DO NOT rely on it for publishedAt
       isRemote: jobRaw?.isRemote ?? null,
       jobUrl: jobRaw?.jobUrl ?? null,
       applyUrl: jobRaw?.applyUrl ?? null,
       address: jobRaw?.address ?? null,
       isListed: jobRaw?.isListed ?? null,
-      publishedAt: jobRaw?.publishedAt ?? null,
     },
+    isRemote: jobRaw?.isRemote === true,
   };
 }
 
@@ -490,31 +499,24 @@ function feedCompanyKey(feed) {
   }
 }
 
-function resolveCompanyName(feed, jobRawGreenhouseLike, source) {
-  const fromFeed = (feed?.name || "").trim();
-  if (fromFeed) return fromFeed;
-
-  const fromJob = (jobRawGreenhouseLike?.company_name || "").trim();
-  if (fromJob) return fromJob;
-
-  if (source === "ashby") {
-    const key = inferAshbyCompanyKeyFromUrl(feed?.url) || feedCompanyKey(feed);
-    if (key) return key.charAt(0).toUpperCase() + key.slice(1);
-  }
-
-  return feedCompanyKey(feed) || "Unknown";
+// ✅ Company name ONLY from feed doc
+function companyNameFromFeed(feed) {
+  return (feed?.name || "").trim() || "Unknown";
 }
 
 /**
- * normalizeJob includes:
- * - sourceUpdatedIso/sourceUpdatedTs/sourceUpdatedMs (computed from ORIGINAL job object)
+ * normalizeJob now includes:
+ * - sourceUpdatedIso/sourceUpdatedTs/sourceUpdatedMs
+ * This is what we compare in Firestore to decide if we need to write.
+ *
+ * NOTE: updatedAtTs/updatedAtIso are what your frontend queries.
  */
-function normalizeJob(uid, feed, jobRawGreenhouseLike, source, sourceUpdatedIso) {
+function normalizeJob(uid, feed, jobRawGreenhouseLike, source) {
   const locationName = jobRawGreenhouseLike?.location?.name || "";
-  const safeIso = sourceUpdatedIso || new Date().toISOString();
 
-  const sourceUpdatedTs = isoToTimestamp(safeIso);
-  const sourceUpdatedMs = isoToMs(safeIso);
+  const sourceUpdatedIso = computeSourceUpdatedIso(source, jobRawGreenhouseLike);
+  const sourceUpdatedTs = isoToTimestampOrNull(sourceUpdatedIso);
+  const sourceUpdatedMs = isoToMsOrNull(sourceUpdatedIso);
 
   const { metadataKV, metadataList } = normalizeMetadata(jobRawGreenhouseLike.metadata);
   const contentHtmlClean = normalizeContentHtmlClean(jobRawGreenhouseLike.content || "");
@@ -531,7 +533,7 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source, sourceUpdatedIso)
 
     source, // "greenhouse" | "ashby" | "unknown"
     companyKey,
-    companyName: resolveCompanyName(feed, jobRawGreenhouseLike, source),
+    companyName: companyNameFromFeed(feed),
 
     locationName: locationName || "Remote",
     absolute_url: jobRawGreenhouseLike.absolute_url || null,
@@ -539,10 +541,14 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source, sourceUpdatedIso)
 
     title: jobRawGreenhouseLike.title || null,
 
-    // freshness we compare (THIS drives Added/Updated/Skipped)
-    sourceUpdatedIso: safeIso,
-    sourceUpdatedTs,
-    sourceUpdatedMs,
+    // the "freshness" we compare + frontend uses
+    sourceUpdatedIso,        // raw ISO
+    sourceUpdatedTs,         // Timestamp or null
+    sourceUpdatedMs,         // number or null
+
+    // ✅ FRONTEND FIELD NAMES
+    updatedAtIso: sourceUpdatedIso || null,
+    updatedAtTs: sourceUpdatedTs || null,
 
     stateCodes,
     isRemote,
@@ -567,59 +573,53 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source, sourceUpdatedIso)
 async function loadUserFeeds(uid) {
   const snap = await db.collection("users").doc(uid).collection("feeds").get();
   const feeds = [];
+
   snap.forEach((d) => {
     const data = d.data() || {};
+
+    const active = data.active !== false;
+
+    // ✅ archived if ANY of these are set
+    const archived =
+      data.archived === true ||
+      data.isArchived === true ||
+      data.active === false ||
+      data.archivedAt != null; // <-- IMPORTANT (matches your Firestore schema)
+
+    if (!active || archived) return;
+
     feeds.push({
       id: d.id,
-      name: data.company || data.name || null,
+      name: (data.company || data.name || "").trim() || "Unknown",
       url: data.url || null,
-      active: data.active !== false,
+      active: true,
       source: data.source || null,
     });
   });
-  return feeds.filter((f) => f.url && f.active);
+
+  return feeds.filter((f) => f.url);
 }
 
-async function upsertCompanyDoc(uid, feed, inferredCompanyName) {
+async function upsertCompanyDoc(uid, feed) {
   const companyKey = feedCompanyKey(feed);
   const ref = db.collection("users").doc(uid).collection("companies").doc(companyKey);
-
-  const name =
-    (feed?.name || "").trim() ||
-    (inferredCompanyName || "").trim() ||
-    companyKey;
 
   await ref.set(
     {
       companyKey,
-      companyName: name,
+      companyName: companyNameFromFeed(feed), // ✅ feed-only
       lastSeenAt: FieldValue.serverTimestamp(),
       url: feed.url || null,
       source: detectFeedSource(feed.url),
+      archived: false,
     },
     { merge: true }
   );
 }
 
-function inferCompanyNameFromFeed(feed, source, jobsRaw) {
-  if (source === "greenhouse") {
-    const inferred = (jobsRaw.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
-    return inferred || null;
-  }
-
-  if (source === "ashby") {
-    if ((feed?.name || "").trim()) return (feed.name || "").trim();
-    const key = inferAshbyCompanyKeyFromUrl(feed?.url);
-    if (key) return key.charAt(0).toUpperCase() + key.slice(1);
-    return null;
-  }
-
-  return null;
-}
-
 // --------- batched getAll() for existing docs ----------
 async function getExistingUpdatedMsMap(docRefs) {
-  const out = new Map(); // docPath -> sourceUpdatedMs (number)
+  const out = new Map(); // docPath -> sourceUpdatedMs (number) or null
   for (let i = 0; i < docRefs.length; i += GETALL_CHUNK) {
     const chunk = docRefs.slice(i, i + GETALL_CHUNK);
     const snaps = await db.getAll(...chunk);
@@ -644,6 +644,11 @@ function isAlreadyExistsError(e) {
 async function writeJobIfNeeded({ bulkWriter, ref, normalized, existingUpdatedMs }) {
   const incomingMs = normalized.sourceUpdatedMs;
 
+  // If missing timestamp, we should NOT write
+  if (!Number.isFinite(incomingMs)) {
+    return { added: 0, updated: 0, skippedUnchanged: 0, noTimestamp: 1 };
+  }
+
   // New doc -> create
   if (existingUpdatedMs === undefined) {
     try {
@@ -652,88 +657,107 @@ async function writeJobIfNeeded({ bulkWriter, ref, normalized, existingUpdatedMs
         createdAt: FieldValue.serverTimestamp(),
         firstSeenAt: FieldValue.serverTimestamp(),
       });
-      return { added: 1, updated: 0, skipped: 0 };
+      return { added: 1, updated: 0, skippedUnchanged: 0, noTimestamp: 0 };
     } catch (e) {
-      // race fallback
+      // If create races, fall back to merge set
       if (!isAlreadyExistsError(e)) throw e;
       await bulkWriter.set(ref, normalized, { merge: true });
-      return { added: 0, updated: 1, skipped: 0 };
+      return { added: 0, updated: 1, skippedUnchanged: 0, noTimestamp: 0 };
     }
   }
 
+  // Existing doc: if it has no value, treat as update
   const prevMs = existingUpdatedMs ?? -1;
 
-  // Not newer -> skip
+  // Not newer -> skip write
   if (incomingMs <= prevMs) {
-    return { added: 0, updated: 0, skipped: 1 };
+    return { added: 0, updated: 0, skippedUnchanged: 1, noTimestamp: 0 };
   }
 
   // Newer -> update
   await bulkWriter.set(ref, normalized, { merge: true });
-  return { added: 0, updated: 1, skipped: 0 };
+  return { added: 0, updated: 1, skippedUnchanged: 0, noTimestamp: 0 };
 }
 
-async function processOneFeed(uid, feed, bulkWriter, cutoffMs) {
+async function processOneFeed(uid, feed, bulkWriter) {
+  const nowMs = Date.now();
+  const windowThresholdMs = nowMs - INGEST_WINDOW_MS;
+
   const source = feed.source || detectFeedSource(feed.url);
   const json = await fetchJson(feed.url);
-
   const jobsRaw = extractJobsFromFeedJson(source, json);
-  const inferredCompanyName = inferCompanyNameFromFeed(feed, source, jobsRaw);
 
-  // filter by location + last-1h window (key reduction)
+  // filter by location rules
   const keptRaw = [];
   for (const j of jobsRaw) {
-    // compute sourceUpdated using ORIGINAL job object (critical)
-    const iso = computeSourceUpdatedIso(source, j);
-    const ms = iso ? isoToMs(iso) : 0;
-
-    // if missing timestamp, treat as old -> ignore (prevents mass-updates)
-    if (!ms || ms < cutoffMs) continue;
-
     const loc = source === "greenhouse" ? j?.location?.name : j?.location;
-    if (!loc || shouldKeepJobByLocation(loc, j)) {
-      keptRaw.push({ jobRaw: j, sourceUpdatedIso: iso });
-    }
+    if (!loc || shouldKeepJobByLocation(loc, j)) keptRaw.push(j);
   }
 
   const companyKey = feedCompanyKey(feed);
   const jobsCol = db.collection("users").doc(uid).collection("jobs");
 
   // Build normalized payloads + refs
-  const incoming = [];
-  for (const entry of keptRaw) {
-    const jobRaw = entry.jobRaw;
+  const found = keptRaw.length;
+
+  let candidates = 0;
+  let skippedOld = 0;
+  let noTimestamp = 0;
+
+  const incomingCandidates = [];
+
+  for (const jobRaw of keptRaw) {
     const ghLike = toGreenhouseLikeJob(source, jobRaw);
+    const normalized = normalizeJob(uid, feed, ghLike, source);
 
-    // must have id
-    if (!ghLike?.id) continue;
+    // missing timestamp => track, skip
+    if (!Number.isFinite(normalized.sourceUpdatedMs)) {
+      noTimestamp += 1;
+      continue;
+    }
 
-    const normalized = normalizeJob(uid, feed, ghLike, source, entry.sourceUpdatedIso);
+    // outside 1h window => track, skip
+    if (normalized.sourceUpdatedMs < windowThresholdMs) {
+      skippedOld += 1;
+      continue;
+    }
+
+    // candidate
+    candidates += 1;
     const docId = jobDocId(companyKey, ghLike.id);
     const ref = jobsCol.doc(docId);
-    incoming.push({ ref, normalized });
+    incomingCandidates.push({ ref, normalized });
   }
 
-  // If nothing in last 1h, we still upsert company and return quickly
-  if (incoming.length === 0) {
-    await upsertCompanyDoc(uid, feed, inferredCompanyName);
-    return { processed: 0, added: 0, updated: 0, skipped: 0 };
+  // If no candidates, still upsert company and exit fast
+  await upsertCompanyDoc(uid, feed);
+
+  if (incomingCandidates.length === 0) {
+    return {
+      found,
+      candidates,
+      added: 0,
+      updated: 0,
+      skippedOld,
+      skippedUnchanged: 0,
+      noTimestamp,
+    };
   }
 
-  // 1 batched read phase (chunked)
-  const refs = incoming.map((x) => x.ref);
+  // Batched read for existing docs (only candidates)
+  const refs = incomingCandidates.map((x) => x.ref);
   const existingMap = await getExistingUpdatedMsMap(refs);
 
-  // Writes only if needed
+  // Perform writes only if needed
   const limitWrite = pLimit(JOB_WRITE_CONCURRENCY);
 
-  let processed = incoming.length;
   let added = 0;
   let updated = 0;
-  let skipped = 0;
+  let skippedUnchanged = 0;
+  let noTimestampWrites = 0;
 
   await Promise.all(
-    incoming.map((x) =>
+    incomingCandidates.map((x) =>
       limitWrite(async () => {
         const key = x.ref.path;
         const existingUpdatedMs = existingMap.has(key) ? existingMap.get(key) : undefined;
@@ -747,14 +771,24 @@ async function processOneFeed(uid, feed, bulkWriter, cutoffMs) {
 
         added += res.added;
         updated += res.updated;
-        skipped += res.skipped;
+        skippedUnchanged += res.skippedUnchanged;
+        noTimestampWrites += res.noTimestamp;
       })
     )
   );
 
-  await upsertCompanyDoc(uid, feed, inferredCompanyName);
+  // noTimestampWrites should be 0 because we filtered earlier, but keep safe.
+  noTimestamp += noTimestampWrites;
 
-  return { processed, added, updated, skipped };
+  return {
+    found,
+    candidates,
+    added,
+    updated,
+    skippedOld,
+    skippedUnchanged,
+    noTimestamp,
+  };
 }
 
 // ------------------------ FETCH RUN HELPERS ------------------------
@@ -785,7 +819,7 @@ function taskFunctionUri(functionName) {
   return `https://${REGION}-${projectId}.cloudfunctions.net/${functionName}`;
 }
 
-// ------------------------ ENQUEUE (manual + scheduled) ------------------------
+// ------------------------ ENQUEUE (used by BOTH manual + scheduled) ------------------------
 async function enqueueUserRun(uid, runType) {
   const { runId, ref } = await createFetchRun(uid, runType, "enqueued", {
     enqueuedAt: FieldValue.serverTimestamp(),
@@ -814,15 +848,16 @@ async function enqueueUserRun(uid, runType) {
 // ------------------------ TASK BODY ------------------------
 async function processUserFeeds(uid, runType, runId) {
   const startedAtMs = Date.now();
-  const cutoffMs = startedAtMs - WINDOW_MS;
-
   const feeds = await loadUserFeeds(uid);
   const runRef = fetchRunRef(uid, runId);
 
-  let processedTotal = 0;
+  let foundTotal = 0;           // all jobs in feed after location filter
+  let candidatesTotal = 0;      // jobs within 1 hour window
   let addedTotal = 0;
   let updatedTotal = 0;
-  let skippedTotal = 0;
+  let skippedOldTotal = 0;      // older than 1h
+  let skippedUnchangedTotal = 0;// timestamp not newer than Firestore
+  let noTimestampTotal = 0;
 
   let errorsCount = 0;
   const errorSamples = [];
@@ -835,15 +870,15 @@ async function processUserFeeds(uid, runType, runId) {
       feedsCount: feeds.length,
       updatedAt: FieldValue.serverTimestamp(),
 
-      // counters
-      processed: 0,
+      // Counters
+      found: 0,
+      candidates: 0,
       added: 0,
       updated: 0,
-      skipped: 0,
-
-      // window info
-      windowMs: WINDOW_MS,
-      cutoffMs,
+      skippedOld: 0,
+      skippedUnchanged: 0,
+      noTimestamp: 0,
+      writes: 0,
 
       errorsCount: 0,
       errorSamples: [],
@@ -855,10 +890,14 @@ async function processUserFeeds(uid, runType, runId) {
     await runRef.set(
       {
         updatedAt: FieldValue.serverTimestamp(),
-        processed: processedTotal,
+        found: foundTotal,
+        candidates: candidatesTotal,
         added: addedTotal,
         updated: updatedTotal,
-        skipped: skippedTotal,
+        skippedOld: skippedOldTotal,
+        skippedUnchanged: skippedUnchangedTotal,
+        noTimestamp: noTimestampTotal,
+        writes: addedTotal + updatedTotal,
         errorsCount,
         errorSamples,
       },
@@ -871,8 +910,6 @@ async function processUserFeeds(uid, runType, runId) {
   }, HEARTBEAT_EVERY_MS);
 
   const bulkWriter = db.bulkWriter();
-
-  // CRITICAL: log real error details
   bulkWriter.onWriteError((error) => {
     const code = error?.code;
     const retryable =
@@ -887,6 +924,7 @@ async function processUserFeeds(uid, runType, runId) {
     logger.error("BulkWriter write failed", {
       code,
       message: error?.message,
+      name: error?.name,
       failedAttempts: error?.failedAttempts,
       docPath: error?.documentRef?.path,
     });
@@ -900,17 +938,20 @@ async function processUserFeeds(uid, runType, runId) {
       feeds.map((feed) =>
         limitFeed(async () => {
           try {
-            const summary = await processOneFeed(uid, feed, bulkWriter, cutoffMs);
-            processedTotal += summary.processed;
+            const summary = await processOneFeed(uid, feed, bulkWriter);
+
+            foundTotal += summary.found;
+            candidatesTotal += summary.candidates;
             addedTotal += summary.added;
             updatedTotal += summary.updated;
-            skippedTotal += summary.skipped;
+            skippedOldTotal += summary.skippedOld;
+            skippedUnchangedTotal += summary.skippedUnchanged;
+            noTimestampTotal += summary.noTimestamp;
           } catch (err) {
             errorsCount += 1;
             const msg = String(err?.message || err);
 
-            if (errorSamples.length < 12) errorSamples.push(`${feed.url} :: ${msg}`);
-
+            if (errorSamples.length < 8) errorSamples.push(`${feed.url} :: ${msg}`);
             logger.warn("feed failed", { uid, url: feed.url, error: msg });
           }
         })
@@ -928,10 +969,14 @@ async function processUserFeeds(uid, runType, runId) {
         updatedAt: FieldValue.serverTimestamp(),
         durationMs,
 
-        processed: processedTotal,
+        found: foundTotal,
+        candidates: candidatesTotal,
         added: addedTotal,
         updated: updatedTotal,
-        skipped: skippedTotal,
+        skippedOld: skippedOldTotal,
+        skippedUnchanged: skippedUnchangedTotal,
+        noTimestamp: noTimestampTotal,
+        writes: addedTotal + updatedTotal,
 
         errorsCount,
         errorSamples,
@@ -942,16 +987,109 @@ async function processUserFeeds(uid, runType, runId) {
     return {
       runId,
       feedsCount: feeds.length,
-      processed: processedTotal,
+      found: foundTotal,
+      candidates: candidatesTotal,
       added: addedTotal,
       updated: updatedTotal,
-      skipped: skippedTotal,
+      skippedOld: skippedOldTotal,
+      skippedUnchanged: skippedUnchangedTotal,
+      noTimestamp: noTimestampTotal,
+      writes: addedTotal + updatedTotal,
       durationMs,
       errorsCount,
     };
   } finally {
     clearInterval(heartbeatTimer);
   }
+}
+
+// ------------------------ CLEANUP HELPERS ------------------------
+function daysAgoMs(days) {
+  return Date.now() - days * 24 * 60 * 60 * 1000;
+}
+
+async function deleteInBatches(queryRef, maxLoops = 50) {
+  let loops = 0;
+
+  while (loops < maxLoops) {
+    const snap = await queryRef.get();
+    if (snap.empty) return { deleted: 0 };
+
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    loops += 1;
+
+    // if fewer than limit returned, we're done
+    if (snap.size < 400) break;
+  }
+
+  return { deleted: loops * 400 };
+}
+
+async function cleanupOldDataForUser(uid) {
+  const jobsCutoff = Timestamp.fromDate(new Date(daysAgoMs(JOB_RETENTION_DAYS)));
+  const runsCutoff = Timestamp.fromDate(new Date(daysAgoMs(RUN_RETENTION_DAYS)));
+  const companiesCutoff = Timestamp.fromDate(new Date(daysAgoMs(COMPANY_RETENTION_DAYS)));
+
+  // Jobs: delete old by updatedAtTs (or sourceUpdatedTs if you prefer)
+  const jobsCol = db.collection("users").doc(uid).collection("jobs");
+  const jobsQ = jobsCol
+    .where("updatedAtTs", "<", jobsCutoff)
+    .orderBy("updatedAtTs", "asc")
+    .limit(400);
+
+  // FetchRuns: delete old by createdAt
+  const runsCol = db.collection("users").doc(uid).collection("fetchRuns");
+  const runsQ = runsCol
+    .where("createdAt", "<", runsCutoff)
+    .orderBy("createdAt", "asc")
+    .limit(400);
+
+  // Companies: delete those not seen for a long time
+  const companiesCol = db.collection("users").doc(uid).collection("companies");
+  const companiesQ = companiesCol
+    .where("lastSeenAt", "<", companiesCutoff)
+    .orderBy("lastSeenAt", "asc")
+    .limit(400);
+
+  let jobsDeleted = 0;
+  let runsDeleted = 0;
+  let companiesDeleted = 0;
+
+  // Repeat until empty (bounded loops)
+  for (let i = 0; i < 20; i++) {
+    const s = await jobsQ.get();
+    if (s.empty) break;
+    const batch = db.batch();
+    s.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    jobsDeleted += s.size;
+    if (s.size < 400) break;
+  }
+
+  for (let i = 0; i < 20; i++) {
+    const s = await runsQ.get();
+    if (s.empty) break;
+    const batch = db.batch();
+    s.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    runsDeleted += s.size;
+    if (s.size < 400) break;
+  }
+
+  for (let i = 0; i < 20; i++) {
+    const s = await companiesQ.get();
+    if (s.empty) break;
+    const batch = db.batch();
+    s.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    companiesDeleted += s.size;
+    if (s.size < 400) break;
+  }
+
+  return { jobsDeleted, runsDeleted, companiesDeleted };
 }
 
 // ------------------------ CLOUD FUNCTIONS ------------------------
@@ -968,10 +1106,10 @@ exports.pollNowV2 = onCall({ region: REGION }, async (req) => {
 });
 
 exports.pollGreenhouseFeedsV2 = onSchedule(
-  { region: REGION, schedule: SCHEDULE, timeZone: TIME_ZONE },
+  { region: REGION, schedule: POLL_SCHEDULE, timeZone: TIME_ZONE },
   async () => {
     const usersSnap = await db.collection("users").get();
-    logger.info("scheduler tick", { users: usersSnap.size, schedule: SCHEDULE, tz: TIME_ZONE });
+    logger.info("scheduler tick", { users: usersSnap.size, schedule: POLL_SCHEDULE, tz: TIME_ZONE });
 
     const limitEnq = pLimit(50);
 
@@ -992,13 +1130,49 @@ exports.pollGreenhouseFeedsV2 = onSchedule(
   }
 );
 
+// ✅ Cleanup at 03:00 AM every 2 days
+exports.cleanupOldJobsV2 = onSchedule(
+  { region: REGION, schedule: CLEANUP_SCHEDULE, timeZone: TIME_ZONE },
+  async () => {
+    const usersSnap = await db.collection("users").get();
+    logger.info("cleanup tick", {
+      users: usersSnap.size,
+      schedule: CLEANUP_SCHEDULE,
+      tz: TIME_ZONE,
+      JOB_RETENTION_DAYS,
+      RUN_RETENTION_DAYS,
+      COMPANY_RETENTION_DAYS,
+    });
+
+    const limitUsers = pLimit(10);
+
+    await Promise.all(
+      usersSnap.docs.map((u) =>
+        limitUsers(async () => {
+          const uid = u.id;
+          try {
+            const res = await cleanupOldDataForUser(uid);
+            logger.info("cleanup user done", { uid, ...res });
+          } catch (err) {
+            logger.error("cleanup user failed", { uid, error: String(err?.message || err) });
+          }
+        })
+      )
+    );
+
+    return null;
+  }
+);
+
 exports.pollUserTaskV2 = onTaskDispatched(
   {
     region: REGION,
     timeoutSeconds: 540,
     memory: "1GiB",
     rateLimits: { maxConcurrentDispatches: 10 },
-    retryConfig: { maxAttempts: 3, minBackoffSeconds: 60 },
+
+    // ✅ NO RETRIES (and handler never throws)
+    retryConfig: { maxAttempts: 1 },
   },
   async (req) => {
     const { uid, runType, runId } = req.data || {};
@@ -1009,21 +1183,28 @@ exports.pollUserTaskV2 = onTaskDispatched(
     try {
       await processUserFeeds(uid, runType || "scheduled", runId);
       logger.info("task done", { uid, runType, runId });
+      return;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
 
-      await fetchRunRef(uid, runId).set(
-        {
-          status: "failed",
-          updatedAt: FieldValue.serverTimestamp(),
-          finishedAt: FieldValue.serverTimestamp(),
-          error: msg,
-        },
-        { merge: true }
-      );
+      // Write failure for UI
+      try {
+        await fetchRunRef(uid, runId).set(
+          {
+            status: "failed",
+            updatedAt: FieldValue.serverTimestamp(),
+            finishedAt: FieldValue.serverTimestamp(),
+            error: msg,
+          },
+          { merge: true }
+        );
+      } catch (e) {
+        logger.error("failed to write run failure", { uid, runId, error: String(e?.message || e) });
+      }
 
-      logger.error("task failed", { uid, runType, runId, error: msg });
-      throw err;
+      // ✅ DO NOT throw => Cloud Tasks will NOT retry
+      logger.error("task failed (no retry)", { uid, runType, runId, error: msg });
+      return;
     }
   }
 );

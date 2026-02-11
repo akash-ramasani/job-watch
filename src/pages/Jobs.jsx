@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
-  collectionGroup,
   doc,
   getDocs,
   limit,
@@ -40,7 +39,7 @@ const US_STATES = [
 ];
 
 function timeAgoFromFirestore(ts) {
-  if (!ts?.toDate) return "";
+  if (!ts?.toDate) return "—";
   const d = ts.toDate();
   const diffMs = Date.now() - d.getTime();
   const mins = Math.floor(diffMs / (1000 * 60));
@@ -79,7 +78,6 @@ export default function Jobs({ user }) {
   const { showToast } = useToast();
 
   const [companies, setCompanies] = useState([]);
-  const [companyNameByKey, setCompanyNameByKey] = useState({});
   const [selectedKeys, setSelectedKeys] = useState([]);
 
   const [jobs, setJobs] = useState([]);
@@ -95,70 +93,51 @@ export default function Jobs({ user }) {
 
   const observer = useRef(null);
 
-  // Load companies (and build key=>name map)
+  // Load companies alphabetical
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const companiesRef = collection(db, "users", user.uid, "companies");
-        const qCompanies = query(companiesRef, orderBy("lastSeenAt", "desc"), limit(500));
+        const qCompanies = query(companiesRef, orderBy("companyName", "asc"), limit(500));
         const snap = await getDocs(qCompanies);
-
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-        const map = {};
-        for (const c of list) {
-          const name = (c.companyName || c.name || "").trim();
-          map[c.id] = name || "Unknown";
-        }
-
-        if (!cancelled) {
-          setCompanies(list);
-          setCompanyNameByKey(map);
-        }
+        if (!cancelled) setCompanies(list);
       } catch (e) {
         console.error("Load companies error:", e);
       }
     })();
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [user.uid]);
 
-  /**
-   * Jobs query:
-   * - Always order by updatedAtTs desc (so "All Jobs" matches timeframe modes)
-   * - Timeframe modes add where(updatedAtTs >= threshold)
-   *
-   * NOTE: updatedAtTs must exist on job docs for this to be complete.
-   */
   const fetchJobs = useCallback(
     async (isFirstPage = true) => {
       setLoading(true);
       setIsProcessing(true);
 
       try {
-        const jobsQueryBase = collectionGroup(db, "jobs");
+        // DIRECT collection access is better than collectionGroup for user-specific data
+        const jobsCol = collection(db, "users", user.uid, "jobs");
         const constraints = [];
-
-        constraints.push(where("uid", "==", user.uid));
 
         if (selectedKeys.length > 0) {
           constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
         }
 
-        constraints.push(orderBy("updatedAtTs", "desc"));
+        // UPDATED: Using sourceUpdatedTs from your new index.js
+        constraints.push(orderBy("sourceUpdatedTs", "desc"));
 
         if (timeframe !== "all") {
           const thresholdTs = timeframeToThresholdTs(timeframe);
-          if (thresholdTs) constraints.push(where("updatedAtTs", ">=", thresholdTs));
+          // UPDATED: Using sourceUpdatedTs
+          if (thresholdTs) constraints.push(where("sourceUpdatedTs", ">=", thresholdTs));
         }
 
         constraints.push(limit(PAGE_SIZE));
         if (!isFirstPage && lastDoc) constraints.push(startAfter(lastDoc));
 
-        const qJobs = query(jobsQueryBase, ...constraints);
+        const qJobs = query(jobsCol, ...constraints);
         const snap = await getDocs(qJobs);
 
         const docs = snap.docs.map((d) => ({
@@ -172,7 +151,7 @@ export default function Jobs({ user }) {
         setHasMore(snap.docs.length === PAGE_SIZE);
       } catch (err) {
         console.error("Fetch jobs error:", err);
-        showToast("Error loading jobs.", "error");
+        showToast("Error loading jobs. Check Firestore indexes.", "error");
         setHasMore(false);
       } finally {
         setTimeout(() => {
@@ -184,13 +163,11 @@ export default function Jobs({ user }) {
     [user.uid, selectedKeys, lastDoc, timeframe, showToast]
   );
 
-  // Reset paging when filters change
   useEffect(() => {
     setLastDoc(null);
     setJobs([]);
     setHasMore(true);
     fetchJobs(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKeys, timeframe]);
 
   const lastElementRef = useCallback(
@@ -230,7 +207,6 @@ export default function Jobs({ user }) {
     }
   };
 
-  // Client-side filters
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
@@ -238,9 +214,15 @@ export default function Jobs({ user }) {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
       if (stateFilter) {
-        const location = (j.locationName || "").trim().toUpperCase();
-        const stateRegex = new RegExp(`(?:^|[^A-Z])${stateFilter}(?:$|[^A-Z])`);
-        if (!stateRegex.test(location)) return false;
+        // UPDATED: Using stateCodes array from index.js for more accurate filtering
+        if (Array.isArray(j.stateCodes)) {
+          if (!j.stateCodes.includes(stateFilter)) return false;
+        } else {
+          // Fallback to text matching
+          const location = (j.locationName || "").trim().toUpperCase();
+          const stateRegex = new RegExp(`(?:^|[^A-Z])${stateFilter}(?:$|[^A-Z])`);
+          if (!stateRegex.test(location)) return false;
+        }
       }
 
       return true;
@@ -258,18 +240,9 @@ export default function Jobs({ user }) {
     return { bookmarkedJobs: [], regularJobs: filteredJobs };
   }, [filteredJobs, selectedKeys, timeframe]);
 
-  const displayCompanyName = (job) => {
-    const byDoc = (job.companyName || "").trim();
-    if (byDoc) return byDoc;
-
-    const byMap = companyNameByKey[job.companyKey];
-    if (byMap) return byMap;
-
-    return job.companyKey || "Unknown";
-  };
-
   const renderJobItem = (job) => {
-    const updatedShort = shortAgoFromISO(job.updatedAtIso);
+    // UPDATED: Use sourceUpdatedIso and sourceUpdatedTs
+    const updatedShort = shortAgoFromISO(job.sourceUpdatedIso);
 
     return (
       <li
@@ -282,11 +255,12 @@ export default function Jobs({ user }) {
           <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
-                {displayCompanyName(job)}
+                {job.companyName || "Unknown"}
               </span>
               <span className="text-gray-300">|</span>
               <span className="text-xs text-gray-500 font-medium truncate">
                 {job.locationName || "Remote"}
+                {job.isRemote && <span className="ml-1 text-indigo-400 font-bold">(Remote)</span>}
               </span>
             </div>
 
@@ -294,11 +268,9 @@ export default function Jobs({ user }) {
               {job.title}
             </h3>
 
-            {/* ✅ Show BOTH on all screens (desktop keeps right column too) */}
             <div className="mt-1 text-xs text-gray-400 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>Fetched {timeAgoFromFirestore(job.firstSeenAt)}</span>
-
-              {/* Mobile/compact updated label */}
+              {/* UPDATED: Using firstSeenAt and sourceUpdatedTs */}
+              <span>Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
               <span className="sm:hidden inline-flex items-center gap-1">
                 <span className="text-gray-300">•</span>
                 <span>
@@ -331,7 +303,6 @@ export default function Jobs({ user }) {
               </svg>
             </button>
 
-            {/* Desktop updated column (unchanged, but now NOT the only place Updated appears) */}
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">
               <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
                 Updated
@@ -481,7 +452,7 @@ export default function Jobs({ user }) {
               <div className="space-y-4">
                 <div className="flex items-center gap-2 px-1">
                   <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">
-                    Filter by Company
+                    Filter by Company (A-Z)
                   </label>
                   <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                     {companies.length}
@@ -502,7 +473,7 @@ export default function Jobs({ user }) {
                     </button>
 
                     {companies.map((c) => {
-                      const label = (c.companyName || c.name || "").trim() || "Unknown";
+                      const label = c.companyName || "Unknown";
                       return (
                         <button
                           key={c.id}
@@ -512,7 +483,6 @@ export default function Jobs({ user }) {
                               ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
                               : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
                           }`}
-                          title={c.id}
                         >
                           {label}
                         </button>
@@ -568,7 +538,6 @@ export default function Jobs({ user }) {
           </div>
         )}
 
-        {/* Sentinel */}
         <div ref={lastElementRef} className="h-20 flex items-center justify-center border-t border-gray-50">
           {(loading || isProcessing) && jobs.length > 0 ? (
             <div className="flex gap-1.5">

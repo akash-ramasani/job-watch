@@ -35,12 +35,17 @@ function fmtDuration(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function statusLabel(s) {
+  return String(s || "done").toUpperCase();
+}
+
+// Prefer the most “truthy” timeline point for “Ran X ago”
 function pickRunTime(r) {
   return r.startedAt || r.enqueuedAt || r.createdAt || r.updatedAt || null;
 }
 
-function statusLabel(s) {
-  return String(s || "done").toUpperCase();
+function metric(n) {
+  return Number.isFinite(n) ? n : 0;
 }
 
 export default function FetchHistory({ user }) {
@@ -63,10 +68,19 @@ export default function FetchHistory({ user }) {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">Fetch History</h1>
         <p className="mt-1 text-sm text-gray-600">
-          Each scheduled poll and manual fetch is logged here.
+          Logs for the “Last 1 Hour” ingestion window.
         </p>
+
         <p className="mt-2 text-xs text-gray-500">
-          Added = new job docs created. Updated = existing docs written with newer timestamps. Skipped = existing docs that were not newer (no write).
+          <span className="font-semibold">Found</span> = jobs after location filter.
+          {" "}
+          <span className="font-semibold">Candidates</span> = jobs within the last 60 minutes.
+          {" "}
+          <span className="font-semibold">Added/Updated</span> = Firestore writes.
+          {" "}
+          <span className="font-semibold">Skipped (Old)</span> = older than 60 minutes.
+          {" "}
+          <span className="font-semibold">Skipped (Unchanged)</span> = not newer than what’s already stored.
         </p>
       </div>
 
@@ -97,19 +111,29 @@ export default function FetchHistory({ user }) {
 
             const runTime = pickRunTime(r);
 
-            const feedsCount = r.feedsCount ?? 0;
-            const processed = r.processed ?? 0;
-            const added = r.added ?? r.newCount ?? 0;
-            const updated = r.updated ?? 0;
-            const skipped = r.skipped ?? 0;
-            const errorsCount = r.errorsCount ?? 0;
+            // ✅ Updated counter names from new backend
+            const feedsCount = metric(r.feedsCount);
+            const found = metric(r.found);
+            const candidates = metric(r.candidates);
+            const added = metric(r.added);
+            const updated = metric(r.updated);
+            const writes = metric(r.writes) || added + updated;
+
+            const skippedOld = metric(r.skippedOld);
+            const skippedUnchanged = metric(r.skippedUnchanged);
+            const noTimestamp = metric(r.noTimestamp);
+
+            const errorsCount = metric(r.errorsCount);
+            const durationMs = r.durationMs;
 
             return (
               <li key={r.id} className="px-4 py-5 sm:px-6 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start justify-between gap-x-6">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${badgeCls}`}>
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${badgeCls}`}
+                      >
                         {runType}
                       </span>
 
@@ -128,13 +152,44 @@ export default function FetchHistory({ user }) {
                       </span>
                     </div>
 
+                    {/* Topline summary */}
                     <div className="mt-2 text-sm text-gray-700">
-                      Feeds <span className="font-semibold">{feedsCount}</span> • Processed{" "}
-                      <span className="font-semibold">{processed}</span> • Added{" "}
-                      <span className="font-semibold">{added}</span> • Updated{" "}
-                      <span className="font-semibold">{updated}</span> • Skipped{" "}
-                      <span className="font-semibold">{skipped}</span> • Duration{" "}
-                      <span className="font-semibold">{fmtDuration(r.durationMs)}</span>
+                      Feeds <span className="font-semibold">{feedsCount}</span>
+                      {" "}• Found <span className="font-semibold">{found}</span>
+                      {" "}• Candidates <span className="font-semibold">{candidates}</span>
+                      {" "}• Writes <span className="font-semibold">{writes}</span>
+                      {" "}• Duration <span className="font-semibold">{fmtDuration(durationMs)}</span>
+                    </div>
+
+                    {/* Mini cards like your screenshot */}
+                    <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="rounded-lg ring-1 ring-inset ring-gray-200 bg-white p-3">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          Skipped (Old)
+                        </div>
+                        <div className="mt-1 text-lg font-extrabold text-gray-900">{skippedOld}</div>
+                      </div>
+
+                      <div className="rounded-lg ring-1 ring-inset ring-gray-200 bg-white p-3">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          No Timestamp
+                        </div>
+                        <div className="mt-1 text-lg font-extrabold text-gray-900">{noTimestamp}</div>
+                      </div>
+
+                      <div className="rounded-lg ring-1 ring-inset ring-gray-200 bg-white p-3">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          Unchanged
+                        </div>
+                        <div className="mt-1 text-lg font-extrabold text-gray-900">{skippedUnchanged}</div>
+                      </div>
+
+                      <div className="rounded-lg ring-1 ring-inset ring-gray-200 bg-white p-3">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                          Writes
+                        </div>
+                        <div className="mt-1 text-lg font-extrabold text-indigo-700">{writes}</div>
+                      </div>
                     </div>
 
                     {isOpen && (
@@ -179,7 +234,10 @@ export default function FetchHistory({ user }) {
                                 </div>
                                 <ul className="mt-2 space-y-2">
                                   {r.errorSamples.slice(0, 12).map((e, idx) => (
-                                    <li key={idx} className="text-xs font-mono text-red-900 whitespace-pre-wrap break-words">
+                                    <li
+                                      key={idx}
+                                      className="text-xs font-mono text-red-900 whitespace-pre-wrap break-words"
+                                    >
                                       {e}
                                     </li>
                                   ))}
@@ -188,7 +246,8 @@ export default function FetchHistory({ user }) {
                             ) : null}
                           </div>
                         ) : (
-                          status !== "RUNNING" && status !== "ENQUEUED" && (
+                          status !== "RUNNING" &&
+                          status !== "ENQUEUED" && (
                             <div className="rounded-lg bg-green-50 ring-1 ring-inset ring-green-100 p-4">
                               <div className="text-xs font-bold uppercase tracking-widest text-green-700">
                                 No errors in this run
@@ -200,27 +259,65 @@ export default function FetchHistory({ user }) {
                           )
                         )}
 
+                        {/* Timeline */}
                         <div className="rounded-lg bg-white ring-1 ring-inset ring-gray-200 p-4">
                           <div className="text-[11px] font-black uppercase tracking-widest text-gray-600">
-                            Run details
-                          </div>
-                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-700">
-                            <div>Created: <span className="font-semibold">{fmtDateTime(r.createdAt)}</span></div>
-                            <div>Enqueued: <span className="font-semibold">{fmtDateTime(r.enqueuedAt)}</span></div>
-                            <div>Started: <span className="font-semibold">{fmtDateTime(r.startedAt)}</span></div>
-                            <div>Finished: <span className="font-semibold">{fmtDateTime(r.finishedAt)}</span></div>
+                            Timeline
                           </div>
 
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm text-gray-700">
+                            <div>
+                              Created: <span className="font-semibold">{fmtDateTime(r.createdAt)}</span>
+                            </div>
+                            <div>
+                              Enqueued: <span className="font-semibold">{fmtDateTime(r.enqueuedAt)}</span>
+                            </div>
+                            <div>
+                              Started: <span className="font-semibold">{fmtDateTime(r.startedAt)}</span>
+                            </div>
+                            <div>
+                              Finished: <span className="font-semibold">{fmtDateTime(r.finishedAt)}</span>
+                            </div>
+                          </div>
+
+                          {/* Optional backend debug fields */}
                           {typeof r.windowMs === "number" ? (
                             <div className="mt-3 text-xs text-gray-600">
-                              Window: <span className="font-semibold">{Math.round(r.windowMs / 60000)} min</span>
+                              Window:{" "}
+                              <span className="font-semibold">{Math.round(r.windowMs / 60000)} min</span>
                               {typeof r.cutoffMs === "number" ? (
                                 <>
-                                  {" "}• Cutoff: <span className="font-semibold">{new Date(r.cutoffMs).toLocaleString()}</span>
+                                  {" "}• Cutoff:{" "}
+                                  <span className="font-semibold">
+                                    {new Date(r.cutoffMs).toLocaleString()}
+                                  </span>
                                 </>
                               ) : null}
                             </div>
                           ) : null}
+                        </div>
+
+                        {/* Human explanation */}
+                        <div className="rounded-lg bg-indigo-50 ring-1 ring-inset ring-indigo-100 p-4">
+                          <div className="text-[11px] font-black uppercase tracking-widest text-indigo-700">
+                            How to read this run
+                          </div>
+                          <div className="mt-2 text-sm text-indigo-900/90 leading-relaxed">
+                            <ul className="list-disc pl-5 space-y-1">
+                              <li>
+                                <span className="font-semibold">Found</span> is after location filtering.
+                              </li>
+                              <li>
+                                <span className="font-semibold">Candidates</span> are only jobs updated/published within the last hour.
+                              </li>
+                              <li>
+                                <span className="font-semibold">Skipped (Old)</span> means the job was outside the 1-hour window, so it was ignored.
+                              </li>
+                              <li>
+                                <span className="font-semibold">Unchanged</span> means the job existed in Firestore and wasn’t newer, so no write.
+                              </li>
+                            </ul>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -231,7 +328,7 @@ export default function FetchHistory({ user }) {
                     className={`text-xs font-bold uppercase tracking-wider ${
                       isOpen
                         ? "text-gray-600 hover:text-gray-900"
-                        : (errorsCount || 0) > 0 || status === "FAILED" || status === "ENQUEUE_FAILED"
+                        : errorsCount > 0 || status === "FAILED" || status === "ENQUEUE_FAILED"
                         ? "text-red-600 hover:text-red-800"
                         : "text-indigo-600 hover:text-indigo-800"
                     }`}
@@ -251,11 +348,11 @@ export default function FetchHistory({ user }) {
         </ul>
       </div>
 
-      {/* Small helper box when an item is open */}
       {openRun ? (
         <div className="text-xs text-gray-500">
-          Tip: if “Processed” is unexpectedly high, it means the backend is scanning too many jobs. With the updated backend,
-          “Processed” should usually be close to the number of jobs updated in the last hour.
+          Note: With the “last 1 hour” ingestion window,{" "}
+          <span className="font-semibold">Candidates</span> should usually be much smaller than{" "}
+          <span className="font-semibold">Found</span>.
         </div>
       ) : null}
     </div>
