@@ -2,16 +2,15 @@
 /**
  * functions/index.js (Node 20, Firebase Functions Gen2)
  *
- * ✅ Greenhouse + AshbyHQ feeds
- * ✅ Only writes jobs whose FEED timestamp is within last 1 hour
- * ✅ Upsert without per-job reads: create() else set(merge)
- * ✅ Greenhouse timestamp rule: max(updated_at, first_published)
- * ✅ Ashby timestamp rule: publishedAt
+ * ✅ Supports BOTH Greenhouse + AshbyHQ feeds
+ * ✅ Reduces Firestore writes by comparing timestamps BEFORE writing:
+ *    - Added: doc doesn't exist -> create()
+ *    - Updated: doc exists AND incomingUpdatedAtMs > existingUpdatedAtMs -> set(merge)
+ *    - Skipped: doc exists AND incomingUpdatedAtMs <= existingUpdatedAtMs -> no write
  *
- * ✅ Fixes “RUNNING forever”:
- *   - heartbeat + leaseExpiresAt updated every 10s
- *   - per-user run lock prevents overlapping runs
- *   - cleanup scheduler marks stale runs failed_stale
+ * ✅ Upsert timestamp rules:
+ *    - Greenhouse: max(updated_at, first_published)
+ *    - AshbyHQ: publishedAt
  */
 
 const admin = require("firebase-admin");
@@ -30,47 +29,46 @@ const { FieldValue, Timestamp } = admin.firestore;
 const REGION = "us-central1";
 
 // Concurrency
-const FEED_CONCURRENCY = 10; // increase so 300+ feeds finish within task timeout
+const FEED_CONCURRENCY = 6;
 const JOB_WRITE_CONCURRENCY = 25;
 
 // Schedule
 const SCHEDULE = "*/30 * * * *";
 const TIME_ZONE = "America/Los_Angeles";
 
-// Fetch reliability (keep tight to avoid slow/hanging feeds)
-const FETCH_TIMEOUT_MS = 15_000;
-const FETCH_RETRIES = 1;
-const FETCH_RETRY_BASE_DELAY_MS = 600;
+// Fetch reliability
+const FETCH_TIMEOUT_MS = 90_000;
+const FETCH_RETRIES = 3;
+const FETCH_RETRY_BASE_DELAY_MS = 800;
 
-// Progress heartbeat / lease
+// Progress heartbeat
 const HEARTBEAT_EVERY_MS = 10_000;
-const LEASE_EXTENSION_MS = 2 * 60 * 1000; // extend lease 2 minutes each heartbeat
-const STALE_GRACE_MS = 2 * 60 * 1000; // extra grace before cleanup marks stale
-
-// Only ingest jobs updated/published in last 1 hour
-const UPDATE_WINDOW_MS = 60 * 60 * 1000;
-
-// Error samples for UI
-const MAX_ERROR_SAMPLES = 15;
 
 // Firestore doc safety
 const MAX_HTML_CHARS = 120_000;
 
-// ------------------------ LOCATION FILTERING (your existing lists) ------------------------
+// Batched read chunk size for db.getAll(...refs)
+const GETALL_CHUNK = 450;
+
+// If you want "remote anywhere worldwide", set this to [].
 const REMOTE_EXCLUDE_SUBSTRINGS = [
-  // (same list as you had)
+  // Europe
   "albania","andorra","austria","belgium","bosnia and herzegovina","bulgaria","croatia",
   "cyprus","czech republic","denmark","estonia","finland","france","germany","greece",
   "hungary","iceland","ireland","italy","latvia","liechtenstein","lithuania","luxembourg",
   "malta","monaco","montenegro","netherlands","north macedonia","norway","poland",
   "portugal","romania","san marino","serbia","slovakia","slovenia","spain","sweden",
   "switzerland","ukraine","united kingdom","vatican city",
+
+  // Asia
   "afghanistan","armenia","azerbaijan","bahrain","bangladesh","bhutan","brunei",
   "cambodia","china","georgia","india","indonesia","iran","iraq","israel","japan",
   "jordan","kazakhstan","kuwait","kyrgyzstan","laos","lebanon","malaysia","maldives",
   "mongolia","myanmar","nepal","north korea","oman","pakistan","philippines","qatar",
   "saudi arabia","singapore","south korea","sri lanka","syria","tajikistan","thailand",
   "timor-leste","turkey","turkmenistan","united arab emirates","uzbekistan","vietnam","yemen",
+
+  // Africa
   "algeria","angola","benin","botswana","burkina faso","burundi","cabo verde",
   "cameroon","central african republic","chad","comoros","congo","costa d'ivoire",
   "djibouti","egypt","equatorial guinea","eritrea","eswatini","ethiopia","gabon",
@@ -79,18 +77,27 @@ const REMOTE_EXCLUDE_SUBSTRINGS = [
   "namibia","niger","nigeria","rwanda","sao tome and principe","senegal","seychelles",
   "sierra leone","somalia","south africa","south sudan","sudan","tanzania","togo",
   "tunisia","uganda","zambia","zimbabwe",
+
+  // South America
   "argentina","bolivia","brazil","chile","colombia","ecuador","guyana","paraguay",
   "peru","suriname","uruguay","venezuela",
+
+  // Central America & Caribbean
   "antigua and barbuda","bahamas","barbados","belize","cuba","dominica",
   "dominican republic","el salvador","grenada","guatemala","haiti","honduras",
   "jamaica","nicaragua","panama","saint kitts and nevis","saint lucia",
   "saint vincent and the grenadines","trinidad and tobago",
+
+  // North America (explicitly included, excluding USA)
   "canada","mexico",
+
+  // Oceania
   "australia","fiji","kiribati","marshall islands","micronesia","nauru",
   "new zealand","palau","papua new guinea","samoa","solomon islands","tonga",
   "tuvalu","vanuatu"
 ];
 
+// ---------------- US Location Filtering ----------------
 const US_STATE_CODES = [
   "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
   "ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
@@ -127,7 +134,10 @@ function isUSLocation(locationText) {
   const text = String(locationText).toUpperCase();
 
   if (US_KEYWORDS.some((kw) => text.includes(kw))) return true;
-  if (MAJOR_US_CITIES.some((city) => new RegExp(`(?:^|[,\\s\\/•\\-|\\|])${city}(?:[\\s,;\\/•\\-|\\|]|$)`).test(text))) return true;
+
+  if (MAJOR_US_CITIES.some((city) => new RegExp(`(?:^|[,\\s\\/•\\-|\\|])${city}(?:[\\s,;\\/•\\-|\\|]|$)`).test(text))) {
+    return true;
+  }
 
   return (
     US_STATE_CODES.some((code) => new RegExp(`(?:^|[,\\s\\/•\\-|\\|])${code}(?:[\\s,;\\/•\\-|\\|]|$)`).test(text)) ||
@@ -146,6 +156,7 @@ function isRemoteLocation(locationText) {
   for (const bad of REMOTE_EXCLUDE_SUBSTRINGS) {
     if (s.includes(bad)) return false;
   }
+
   return true;
 }
 
@@ -159,16 +170,23 @@ function extractStateCodes(locationText) {
   const text = String(locationText).toUpperCase();
   const codes = new Set();
 
-  if (text.includes("WASHINGTON, D.C") || text.includes("WASHINGTON D.C") || text.includes("WASHINGTON DC")) codes.add("DC");
+  if (
+    text.includes("WASHINGTON, D.C") ||
+    text.includes("WASHINGTON D.C") ||
+    text.includes("WASHINGTON DC")
+  ) {
+    codes.add("DC");
+  }
 
   const tokens = text.match(/\b[A-Z]{2}\b/g) || [];
   for (const t of tokens) {
     if (US_STATE_CODES.includes(t)) codes.add(t);
   }
+
   return Array.from(codes);
 }
 
-// ------------------------ FEED TYPE ------------------------
+// ------------------------ FEED TYPE DETECTION ------------------------
 function detectFeedSource(feedUrl) {
   const u = String(feedUrl || "").toLowerCase();
   if (u.includes("boards-api.greenhouse.io")) return "greenhouse";
@@ -176,73 +194,50 @@ function detectFeedSource(feedUrl) {
   return "unknown";
 }
 
-// ------------------------ TIME RULES ------------------------
-function parseIsoToMs(iso) {
-  if (!iso) return null;
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? ms : null;
-}
-
-// Greenhouse effective timestamp = max(updated_at, first_published)
-function greenhouseEffectiveTime(jobRaw) {
-  const updIso = jobRaw?.updated_at || null;
-  const fpIso = jobRaw?.first_published || null;
-  const updMs = parseIsoToMs(updIso);
-  const fpMs = parseIsoToMs(fpIso);
-
-  if (updMs == null && fpMs == null) return null;
-  if (updMs != null && fpMs == null) return { ms: updMs, iso: updIso, sourceField: "updated_at" };
-  if (updMs == null && fpMs != null) return { ms: fpMs, iso: fpIso, sourceField: "first_published" };
-
-  if (updMs >= fpMs) return { ms: updMs, iso: updIso, sourceField: "updated_at" };
-  return { ms: fpMs, iso: fpIso, sourceField: "first_published" };
-}
-
-// Ashby effective timestamp = publishedAt
-function ashbyEffectiveTime(jobRaw) {
-  const iso = jobRaw?.publishedAt || null;
-  const ms = parseIsoToMs(iso);
-  if (ms == null) return null;
-  return { ms, iso, sourceField: "publishedAt" };
-}
-
-function isJobWithinUpdateWindow(source, jobRaw, nowMs) {
-  const cutoff = nowMs - UPDATE_WINDOW_MS;
-  if (source === "greenhouse") {
-    const eff = greenhouseEffectiveTime(jobRaw);
-    return !!eff && eff.ms >= cutoff;
-  }
-  if (source === "ashby") {
-    const eff = ashbyEffectiveTime(jobRaw);
-    return !!eff && eff.ms >= cutoff;
-  }
-  return false;
-}
-
+// ------------------------ TIME HELPERS ------------------------
 function isoToTimestamp(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return Timestamp.now();
   return Timestamp.fromDate(d);
 }
 
-function computeUpdatedAtForStorage(source, jobRawGreenhouseLike, jobRawOriginalForRule) {
-  if (source === "greenhouse") {
-    const eff = greenhouseEffectiveTime(jobRawOriginalForRule || jobRawGreenhouseLike);
-    if (eff?.iso) return { updatedAtIso: eff.iso, updatedAtTs: isoToTimestamp(eff.iso), updatedAtSource: eff.sourceField };
-  }
-  if (source === "ashby") {
-    const eff = ashbyEffectiveTime(jobRawOriginalForRule || jobRawGreenhouseLike);
-    if (eff?.iso) return { updatedAtIso: eff.iso, updatedAtTs: isoToTimestamp(eff.iso), updatedAtSource: eff.sourceField };
-  }
-  const fallbackIso = new Date().toISOString();
-  return { updatedAtIso: fallbackIso, updatedAtTs: Timestamp.now(), updatedAtSource: "fallback" };
+function isoToMs(iso) {
+  const d = new Date(iso);
+  const ms = d.getTime();
+  if (!Number.isFinite(ms)) return Date.now();
+  return ms;
 }
 
-// ------------------------ FETCH ------------------------
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+/**
+ * ✅ Upsert timestamp rules (what we compare to decide whether to write)
+ * - Greenhouse: use latest of updated_at and first_published
+ * - Ashby: publishedAt
+ */
+function computeSourceUpdatedIso(source, jobRaw) {
+  if (source === "ashby") {
+    return jobRaw?.publishedAt || new Date().toISOString();
+  }
+  // greenhouse-like
+  const a = jobRaw?.updated_at || null;
+  const b = jobRaw?.first_published || null;
+
+  if (a && b) {
+    return isoToMs(a) >= isoToMs(b) ? a : b;
+  }
+  return a || b || new Date().toISOString();
+}
+
+// ------------------------ HTTP / FETCH ------------------------
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 async function safeReadText(res) {
-  try { return await res.text(); } catch { return ""; }
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
 }
 
 function isRetryableHttpStatus(status) {
@@ -251,6 +246,7 @@ function isRetryableHttpStatus(status) {
 
 async function fetchJson(url) {
   let attempt = 0;
+
   while (attempt <= FETCH_RETRIES) {
     const controller = new AbortController();
     const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -258,7 +254,10 @@ async function fetchJson(url) {
     try {
       const res = await fetch(url, {
         method: "GET",
-        headers: { "user-agent": "jobs-aggregator/8.0", accept: "application/json" },
+        headers: {
+          "user-agent": "jobs-aggregator/5.0",
+          accept: "application/json",
+        },
         signal: controller.signal,
       });
 
@@ -267,7 +266,7 @@ async function fetchJson(url) {
         const msg = `HTTP ${res.status} ${res.statusText} for ${url} :: ${(body || "").slice(0, 300)}`;
 
         if (isRetryableHttpStatus(res.status) && attempt < FETCH_RETRIES) {
-          const delay = FETCH_RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 150);
+          const delay = FETCH_RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
           logger.warn("retryable http error", { url, status: res.status, attempt, delay });
           await sleep(delay);
           attempt += 1;
@@ -282,7 +281,7 @@ async function fetchJson(url) {
       const retryable = isAbort || /ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENOTFOUND/i.test(String(err?.message || err));
 
       if (attempt < FETCH_RETRIES && retryable) {
-        const delay = FETCH_RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 150);
+        const delay = FETCH_RETRY_BASE_DELAY_MS * Math.pow(2, attempt) + Math.floor(Math.random() * 250);
         logger.warn("retryable network error", { url, attempt, delay, error: String(err?.message || err) });
         await sleep(delay);
         attempt += 1;
@@ -299,7 +298,7 @@ async function fetchJson(url) {
   throw new Error(`Fetch failed after retries for ${url}`);
 }
 
-// ------------------------ CONTENT CLEANING ------------------------
+// ------------------------ CONTENT CLEANING (ONLY contentHtmlClean) ------------------------
 function decodeHtmlEntities(s) {
   if (!s) return "";
   return String(s)
@@ -319,6 +318,7 @@ function removeTracking(html) {
   if (!html) return "";
   let s = String(html);
 
+  // remove img pixels
   s = s.replace(/<img\b[^>]*>/gi, " ");
 
   const trackerDomains = [
@@ -389,9 +389,10 @@ function normalizeMetadata(metadataArr) {
   return { metadataKV: kv, metadataList: list };
 }
 
-// ------------------------ ASHBY -> GH-LIKE ------------------------
+// ------------------------ ASHBY -> GH-LIKE SHIM ------------------------
 function toGreenhouseLikeJob(source, jobRaw) {
   if (source === "greenhouse") return jobRaw;
+
   return {
     id: jobRaw?.id,
     title: jobRaw?.title || null,
@@ -410,13 +411,21 @@ function toGreenhouseLikeJob(source, jobRaw) {
       ...(jobRaw?.employmentType ? [{ name: "Employment Type", value: jobRaw.employmentType, value_type: "short_text" }] : []),
     ],
     content: jobRaw?.descriptionHtml || "",
-    _ashby: { isRemote: jobRaw?.isRemote ?? null },
+    _ashby: {
+      isRemote: jobRaw?.isRemote ?? null,
+      jobUrl: jobRaw?.jobUrl ?? null,
+      applyUrl: jobRaw?.applyUrl ?? null,
+      address: jobRaw?.address ?? null,
+      isListed: jobRaw?.isListed ?? null,
+    },
     isRemote: jobRaw?.isRemote === true,
   };
 }
 
 function extractJobsFromFeedJson(source, json) {
-  if (source === "greenhouse") return Array.isArray(json?.jobs) ? json.jobs : [];
+  if (source === "greenhouse") {
+    return Array.isArray(json?.jobs) ? json.jobs : [];
+  }
   if (source === "ashby") {
     if (Array.isArray(json?.jobs)) return json.jobs;
     if (Array.isArray(json)) return json;
@@ -428,7 +437,7 @@ function extractJobsFromFeedJson(source, json) {
   return [];
 }
 
-// ------------------------ IDs / COMPANY KEY ------------------------
+// ------------------------ JOB KEY / NORMALIZATION ------------------------
 function jobDocId(companyKey, jobId) {
   return `${companyKey}__${jobId}`;
 }
@@ -455,8 +464,14 @@ function inferGreenhouseCompanyKeyFromUrl(feedUrl) {
 
 function feedCompanyKey(feed) {
   const source = detectFeedSource(feed.url);
-  if (source === "greenhouse") return inferGreenhouseCompanyKeyFromUrl(feed.url) || feed.id;
-  if (source === "ashby") return inferAshbyCompanyKeyFromUrl(feed.url) || feed.id;
+
+  if (source === "greenhouse") {
+    return inferGreenhouseCompanyKeyFromUrl(feed.url) || feed.id;
+  }
+
+  if (source === "ashby") {
+    return inferAshbyCompanyKeyFromUrl(feed.url) || feed.id;
+  }
 
   try {
     const u = new URL(feed.url);
@@ -482,15 +497,16 @@ function resolveCompanyName(feed, jobRaw, source) {
   return feedCompanyKey(feed) || "Unknown";
 }
 
-// ------------------------ NORMALIZE JOB ------------------------
-function normalizeJob(uid, feed, jobRawGreenhouseLike, source, jobRawOriginalForRule) {
+/**
+ * normalizeJob now includes:
+ * - sourceUpdatedIso/sourceUpdatedTs/sourceUpdatedMs
+ * This is what we compare in Firestore to decide if we need to write.
+ */
+function normalizeJob(uid, feed, jobRawGreenhouseLike, source) {
   const locationName = jobRawGreenhouseLike?.location?.name || "";
-
-  const { updatedAtIso, updatedAtTs, updatedAtSource } = computeUpdatedAtForStorage(
-    source,
-    jobRawGreenhouseLike,
-    jobRawOriginalForRule
-  );
+  const sourceUpdatedIso = computeSourceUpdatedIso(source, source === "ashby" ? jobRawGreenhouseLike?._ashby : jobRawGreenhouseLike);
+  const sourceUpdatedTs = isoToTimestamp(sourceUpdatedIso);
+  const sourceUpdatedMs = isoToMs(sourceUpdatedIso);
 
   const { metadataKV, metadataList } = normalizeMetadata(jobRawGreenhouseLike.metadata);
   const contentHtmlClean = normalizeContentHtmlClean(jobRawGreenhouseLike.content || "");
@@ -504,24 +520,27 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source, jobRawOriginalFor
 
   return {
     uid,
-    source,
+
+    source, // "greenhouse" | "ashby" | "unknown"
     companyKey,
     companyName: resolveCompanyName(feed, jobRawGreenhouseLike, source),
 
     locationName: locationName || "Remote",
     absolute_url: jobRawGreenhouseLike.absolute_url || null,
     applyUrl: jobRawGreenhouseLike.apply_url || jobRawGreenhouseLike?._ashby?.applyUrl || null,
+
     title: jobRawGreenhouseLike.title || null,
 
-    updatedAtIso,
-    updatedAtTs,
-    updatedAtSource,
+    // the "freshness" we compare
+    sourceUpdatedIso,
+    sourceUpdatedTs,
+    sourceUpdatedMs,
 
     stateCodes,
     isRemote,
 
     jobId: jobRawGreenhouseLike.id,
-    internalJobId: jobRawGreenhouseLike.internal_job_id ?? null,
+    internalJobId: jobRawGreenhouseLike.internal_job_id ?? jobRawGreenhouseLike.internalJobId ?? null,
     requisitionId: jobRawGreenhouseLike.requisition_id ?? null,
     language: jobRawGreenhouseLike.language || null,
     firstPublishedIso: jobRawGreenhouseLike.first_published || null,
@@ -531,14 +550,12 @@ function normalizeJob(uid, feed, jobRawGreenhouseLike, source, jobRawOriginalFor
 
     contentHtmlClean,
 
-    saved: false,
-
     lastSeenAt: FieldValue.serverTimestamp(),
     lastIngestedAt: FieldValue.serverTimestamp(),
   };
 }
 
-// ------------------------ FIRESTORE LOADS ------------------------
+// ------------------------ FEED PROCESSING ------------------------
 async function loadUserFeeds(uid) {
   const snap = await db.collection("users").doc(uid).collection("feeds").get();
   const feeds = [];
@@ -555,10 +572,14 @@ async function loadUserFeeds(uid) {
   return feeds.filter((f) => f.url && f.active);
 }
 
-async function upsertCompanyDoc(uid, feed) {
+async function upsertCompanyDoc(uid, feed, inferredCompanyName) {
   const companyKey = feedCompanyKey(feed);
   const ref = db.collection("users").doc(uid).collection("companies").doc(companyKey);
-  const name = (feed?.name || "").trim() || companyKey;
+
+  const name =
+    (feed?.name || "").trim() ||
+    (inferredCompanyName || "").trim() ||
+    companyKey;
 
   await ref.set(
     {
@@ -572,69 +593,147 @@ async function upsertCompanyDoc(uid, feed) {
   );
 }
 
-// ------------------------ UPSERT WITHOUT READS ------------------------
+function inferCompanyNameFromFeed(feed, source, jobsRaw) {
+  if (source === "greenhouse") {
+    const inferred = (jobsRaw.find((j) => (j?.company_name || "").trim())?.company_name || "").trim();
+    return inferred || null;
+  }
+
+  if (source === "ashby") {
+    if ((feed?.name || "").trim()) return (feed.name || "").trim();
+    const key = inferAshbyCompanyKeyFromUrl(feed?.url);
+    if (key) return key.charAt(0).toUpperCase() + key.slice(1);
+    return null;
+  }
+
+  return null;
+}
+
+// --------- NEW: batched getAll() for existing docs ----------
+async function getExistingUpdatedMsMap(docRefs) {
+  const out = new Map(); // docPath -> sourceUpdatedMs (number) or null
+  for (let i = 0; i < docRefs.length; i += GETALL_CHUNK) {
+    const chunk = docRefs.slice(i, i + GETALL_CHUNK);
+    const snaps = await db.getAll(...chunk);
+    for (const s of snaps) {
+      if (!s.exists) continue;
+      const data = s.data() || {};
+      const v = data.sourceUpdatedMs;
+      out.set(s.ref.path, typeof v === "number" ? v : null);
+    }
+  }
+  return out;
+}
+
 function isAlreadyExistsError(e) {
   const code = e?.code;
-  if (code === 6) return true;
+  if (code === 6) return true; // ALREADY_EXISTS
   const msg = String(e?.message || "");
   return msg.includes("ALREADY_EXISTS") || msg.includes("already exists");
 }
 
-async function upsertJobNoRead(bulkWriter, jobsColRef, docId, normalized) {
-  const ref = jobsColRef.doc(docId);
-  try {
-    await bulkWriter.create(ref, {
-      ...normalized,
-      createdAt: FieldValue.serverTimestamp(),
-      firstSeenAt: FieldValue.serverTimestamp(),
-    });
-    return { created: 1, updated: 0 };
-  } catch (e) {
-    if (!isAlreadyExistsError(e)) throw e;
-    await bulkWriter.set(ref, normalized, { merge: true });
-    return { created: 0, updated: 1 };
+// Writes are only performed AFTER timestamp comparison
+async function writeJobIfNeeded({ bulkWriter, jobsColRef, ref, normalized, existingUpdatedMs }) {
+  const incomingMs = normalized.sourceUpdatedMs;
+
+  // New doc -> create
+  if (existingUpdatedMs === undefined) {
+    try {
+      await bulkWriter.create(ref, {
+        ...normalized,
+        createdAt: FieldValue.serverTimestamp(),
+        firstSeenAt: FieldValue.serverTimestamp(),
+      });
+      return { added: 1, updated: 0, skipped: 0 };
+    } catch (e) {
+      // If create races, fall back to merge set ONLY IF incoming is newer than stored (we don't know stored here)
+      if (!isAlreadyExistsError(e)) throw e;
+      await bulkWriter.set(ref, normalized, { merge: true });
+      return { added: 0, updated: 1, skipped: 0 };
+    }
   }
+
+  // Existing doc: if it has no value, treat as update
+  const prevMs = existingUpdatedMs ?? -1;
+
+  // Not newer -> skip write
+  if (incomingMs <= prevMs) {
+    return { added: 0, updated: 0, skipped: 1 };
+  }
+
+  // Newer -> update
+  await bulkWriter.set(ref, normalized, { merge: true });
+  return { added: 0, updated: 1, skipped: 0 };
 }
 
-// ------------------------ PROCESS ONE FEED ------------------------
 async function processOneFeed(uid, feed, bulkWriter) {
   const source = feed.source || detectFeedSource(feed.url);
   const json = await fetchJson(feed.url);
+
   const jobsRaw = extractJobsFromFeedJson(source, json);
+  const inferredCompanyName = inferCompanyNameFromFeed(feed, source, jobsRaw);
 
-  const nowMs = Date.now();
+  // filter by location rules (same as before)
   const keptRaw = [];
-
   for (const j of jobsRaw) {
-    if (!isJobWithinUpdateWindow(source, j, nowMs)) continue;
-
     const loc = source === "greenhouse" ? j?.location?.name : j?.location;
     if (!loc || shouldKeepJobByLocation(loc, j)) keptRaw.push(j);
   }
 
   const companyKey = feedCompanyKey(feed);
   const jobsCol = db.collection("users").doc(uid).collection("jobs");
+
+  // Build normalized payloads + refs
+  const incoming = [];
+  for (const jobRaw of keptRaw) {
+    const ghLike = toGreenhouseLikeJob(source, jobRaw);
+    const normalized = normalizeJob(uid, feed, ghLike, source);
+    const docId = jobDocId(companyKey, ghLike.id);
+    const ref = jobsCol.doc(docId);
+    incoming.push({ ref, normalized });
+  }
+
+  // --- NEW: 1 batched read phase (chunked) ---
+  // We need to know which docs exist + their stored sourceUpdatedMs
+  const refs = incoming.map((x) => x.ref);
+  const existingMap = await getExistingUpdatedMsMap(refs);
+
+  // Perform writes only if needed
   const limitWrite = pLimit(JOB_WRITE_CONCURRENCY);
 
-  let createdCount = 0;
-  let updatedCount = 0;
+  let added = 0;
+  let updated = 0;
+  let skipped = 0;
 
   await Promise.all(
-    keptRaw.map((jobRaw) =>
+    incoming.map((x) =>
       limitWrite(async () => {
-        const ghLike = toGreenhouseLikeJob(source, jobRaw);
-        const normalized = normalizeJob(uid, feed, ghLike, source, jobRaw);
-        const docId = jobDocId(companyKey, ghLike.id);
-        const res = await upsertJobNoRead(bulkWriter, jobsCol, docId, normalized);
-        createdCount += res.created;
-        updatedCount += res.updated;
+        const key = x.ref.path;
+        const existingUpdatedMs = existingMap.has(key) ? existingMap.get(key) : undefined;
+
+        const res = await writeJobIfNeeded({
+          bulkWriter,
+          jobsColRef: jobsCol,
+          ref: x.ref,
+          normalized: x.normalized,
+          existingUpdatedMs,
+        });
+
+        added += res.added;
+        updated += res.updated;
+        skipped += res.skipped;
       })
     )
   );
 
-  if (keptRaw.length > 0) await upsertCompanyDoc(uid, feed);
+  await upsertCompanyDoc(uid, feed, inferredCompanyName);
 
-  return { processed: keptRaw.length, createdCount, updatedCount };
+  return {
+    processed: keptRaw.length,
+    added,
+    updated,
+    skipped,
+  };
 }
 
 // ------------------------ FETCH RUN HELPERS ------------------------
@@ -654,83 +753,22 @@ async function createFetchRun(uid, runType, initialStatus, extra = {}) {
   return { runId: ref.id, ref };
 }
 
-// ------------------------ RUN LOCK (prevents overlapping runs) ------------------------
-async function acquireRunLock(uid, runId) {
-  const userRef = db.collection("users").doc(uid);
-
-  return await db.runTransaction(async (tx) => {
-    const snap = await tx.get(userRef);
-    const data = snap.data() || {};
-    const lock = data.pollLock || null;
-    const now = Date.now();
-
-    if (lock?.active === true && lock?.expiresAtMs && lock.expiresAtMs > now) {
-      return { ok: false, reason: "lock_active", lock };
-    }
-
-    tx.set(
-      userRef,
-      {
-        pollLock: {
-          active: true,
-          runId,
-          acquiredAtMs: now,
-          expiresAtMs: now + 12 * 60 * 1000, // 12 minutes lock window
-        },
-      },
-      { merge: true }
-    );
-
-    return { ok: true };
-  });
-}
-
-async function releaseRunLock(uid, runId) {
-  const userRef = db.collection("users").doc(uid);
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(userRef);
-    const data = snap.data() || {};
-    const lock = data.pollLock || null;
-
-    if (lock?.runId !== runId) return;
-
-    tx.set(
-      userRef,
-      { pollLock: { active: false, runId: null, releasedAtMs: Date.now(), expiresAtMs: 0 } },
-      { merge: true }
-    );
-  });
-}
-
-// ------------------------ TASK URI ------------------------
+// ------------------------ TASK URI HELPERS ------------------------
 function getProjectId() {
   return process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || process.env.PROJECT_ID || null;
 }
 
 function taskFunctionUri(functionName) {
   const projectId = getProjectId();
-  if (!projectId) throw new Error("Missing project ID env var (GCLOUD_PROJECT/GCP_PROJECT/PROJECT_ID).");
+  if (!projectId) throw new Error("Missing project ID env var (GCLOUD_PROJECT/GCP_PROJECT/PROJECT_ID). Cannot build task URI.");
   return `https://${REGION}-${projectId}.cloudfunctions.net/${functionName}`;
 }
 
-// ------------------------ ENQUEUE ------------------------
+// ------------------------ ENQUEUE (used by BOTH manual + scheduled) ------------------------
 async function enqueueUserRun(uid, runType) {
-  const { runId, ref } = await createFetchRun(uid, runType, "enqueued", { enqueuedAt: FieldValue.serverTimestamp() });
-
-  // acquire lock BEFORE enqueue
-  const lockRes = await acquireRunLock(uid, runId);
-  if (!lockRes.ok) {
-    await ref.set(
-      {
-        status: "skipped_lock_active",
-        updatedAt: FieldValue.serverTimestamp(),
-        skipReason: "Another run is still active. Skipping enqueue.",
-        lock: lockRes.lock || null,
-      },
-      { merge: true }
-    );
-    return { ok: false, runId, status: "skipped_lock_active" };
-  }
+  const { runId, ref } = await createFetchRun(uid, runType, "enqueued", {
+    enqueuedAt: FieldValue.serverTimestamp(),
+  });
 
   const queue = getFunctions().taskQueue("pollUserTaskV2");
   const targetUri = taskFunctionUri("pollUserTaskV2");
@@ -740,30 +778,32 @@ async function enqueueUserRun(uid, runType) {
     return { ok: true, runId, status: "enqueued" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-
     await ref.set(
-      { status: "enqueue_failed", updatedAt: FieldValue.serverTimestamp(), enqueueError: msg },
+      {
+        status: "enqueue_failed",
+        updatedAt: FieldValue.serverTimestamp(),
+        enqueueError: msg,
+      },
       { merge: true }
     );
-
-    await releaseRunLock(uid, runId);
     throw err;
   }
 }
 
-// ------------------------ MAIN PROCESS ------------------------
+// ------------------------ TASK BODY ------------------------
 async function processUserFeeds(uid, runType, runId) {
   const startedAtMs = Date.now();
   const feeds = await loadUserFeeds(uid);
   const runRef = fetchRunRef(uid, runId);
 
   let processedTotal = 0;
-  let createdTotal = 0;
+  let addedTotal = 0;
   let updatedTotal = 0;
+  let skippedTotal = 0;
+
   let errorsCount = 0;
   const errorSamples = [];
 
-  // set running + initial lease
   await runRef.set(
     {
       runType,
@@ -772,41 +812,55 @@ async function processUserFeeds(uid, runType, runId) {
       feedsCount: feeds.length,
       updatedAt: FieldValue.serverTimestamp(),
       processed: 0,
-      createdCount: 0,
-      updatedCount: 0,
+      added: 0,
+      updated: 0,
+      skipped: 0,
       errorsCount: 0,
       errorSamples: [],
-      leaseExpiresAt: Timestamp.fromMillis(Date.now() + LEASE_EXTENSION_MS),
     },
     { merge: true }
   );
 
-  // heartbeat keeps UI fresh + extends lease so cleanup won’t mark stale
+  // Heartbeat: keeps UI updated while running
   const writeHeartbeat = async () => {
     await runRef.set(
       {
         updatedAt: FieldValue.serverTimestamp(),
         processed: processedTotal,
-        createdCount: createdTotal,
-        updatedCount: updatedTotal,
+        added: addedTotal,
+        updated: updatedTotal,
+        skipped: skippedTotal,
         errorsCount,
         errorSamples,
-        leaseExpiresAt: Timestamp.fromMillis(Date.now() + LEASE_EXTENSION_MS),
       },
       { merge: true }
     );
   };
 
   const heartbeatTimer = setInterval(() => {
-    writeHeartbeat().catch((e) => logger.warn("heartbeat failed", { runId, error: String(e?.message || e) }));
+    writeHeartbeat().catch((e) => logger.warn("heartbeat write failed", { runId, error: String(e?.message || e) }));
   }, HEARTBEAT_EVERY_MS);
 
   const bulkWriter = db.bulkWriter();
   bulkWriter.onWriteError((error) => {
     const code = error?.code;
-    const retryable = code === 4 || code === 8 || code === 10 || code === 13 || code === 14;
-    if (retryable && error.failedAttempts < 3) return true;
-    logger.error("BulkWriter write failed", { error: String(error) });
+    const retryable =
+      code === 4 ||  // DEADLINE_EXCEEDED
+      code === 8 ||  // RESOURCE_EXHAUSTED
+      code === 10 || // ABORTED
+      code === 13 || // INTERNAL
+      code === 14;   // UNAVAILABLE
+
+    if (retryable && error.failedAttempts < 5) return true;
+
+    // IMPORTANT: log the real error object so you see the cause
+    logger.error("BulkWriter write failed", {
+      code,
+      message: error?.message,
+      name: error?.name,
+      failedAttempts: error?.failedAttempts,
+      docPath: error?.documentRef?.path,
+    });
     return false;
   });
 
@@ -819,14 +873,17 @@ async function processUserFeeds(uid, runType, runId) {
           try {
             const summary = await processOneFeed(uid, feed, bulkWriter);
             processedTotal += summary.processed;
-            createdTotal += summary.createdCount;
-            updatedTotal += summary.updatedCount;
+            addedTotal += summary.added;
+            updatedTotal += summary.updated;
+            skippedTotal += summary.skipped;
           } catch (err) {
             errorsCount += 1;
             const msg = String(err?.message || err);
-            logger.warn("feed failed", { uid, url: feed.url, error: msg });
 
-            if (errorSamples.length < MAX_ERROR_SAMPLES) errorSamples.push({ url: feed.url, error: msg });
+            // keep only a few samples so doc doesn't grow forever
+            if (errorSamples.length < 8) errorSamples.push(`${feed.url} :: ${msg}`);
+
+            logger.warn("feed failed", { uid, url: feed.url, error: msg });
           }
         })
       )
@@ -843,75 +900,40 @@ async function processUserFeeds(uid, runType, runId) {
         updatedAt: FieldValue.serverTimestamp(),
         durationMs,
         processed: processedTotal,
-        createdCount: createdTotal,
-        updatedCount: updatedTotal,
+        added: addedTotal,
+        updated: updatedTotal,
+        skipped: skippedTotal,
         errorsCount,
         errorSamples,
-        leaseExpiresAt: Timestamp.fromMillis(Date.now() + LEASE_EXTENSION_MS),
       },
       { merge: true }
     );
+
+    return {
+      runId,
+      feedsCount: feeds.length,
+      processed: processedTotal,
+      added: addedTotal,
+      updated: updatedTotal,
+      skipped: skippedTotal,
+      durationMs,
+      errorsCount,
+    };
   } finally {
     clearInterval(heartbeatTimer);
-    await releaseRunLock(uid, runId).catch(() => {});
   }
 }
 
-// ------------------------ CLEANUP: MARK STALE RUNS ------------------------
-exports.cleanupStaleFetchRunsV2 = onSchedule(
-  { region: REGION, schedule: "*/10 * * * *", timeZone: TIME_ZONE },
-  async () => {
-    // This scans ONLY recent-ish stuck runs. Keep limits small.
-    // Query all users is expensive; instead, scan collection group fetchRuns.
-    const now = Date.now();
-    const cutoff = Timestamp.fromMillis(now - 6 * 60 * 60 * 1000); // last 6h only
-
-    const snap = await db
-      .collectionGroup("fetchRuns")
-      .where("createdAt", ">=", cutoff)
-      .where("status", "in", ["running", "enqueued"])
-      .limit(200)
-      .get();
-
-    if (snap.empty) return null;
-
-    const bw = db.bulkWriter();
-
-    let marked = 0;
-
-    snap.docs.forEach((d) => {
-      const r = d.data() || {};
-      const lease = r.leaseExpiresAt?.toMillis ? r.leaseExpiresAt.toMillis() : 0;
-
-      // if lease expired + grace, mark stale
-      if (lease && lease + STALE_GRACE_MS < now) {
-        bw.set(
-          d.ref,
-          {
-            status: "failed_stale",
-            finishedAt: FieldValue.serverTimestamp(),
-            updatedAt: FieldValue.serverTimestamp(),
-            error: "Run lease expired (function likely timed out/crashed). Marked stale by cleanup job.",
-          },
-          { merge: true }
-        );
-        marked += 1;
-      }
-    });
-
-    await bw.close();
-    logger.info("cleanupStaleFetchRunsV2", { candidates: snap.size, marked });
-    return null;
-  }
-);
-
 // ------------------------ CLOUD FUNCTIONS ------------------------
+
 exports.pollNowV2 = onCall({ region: REGION }, async (req) => {
   if (!req.auth?.uid) throw new HttpsError("unauthenticated", "You must be signed in.");
+
   try {
     return await enqueueUserRun(req.auth.uid, "manual");
   } catch (err) {
-    throw new HttpsError("internal", err instanceof Error ? err.message : String(err));
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new HttpsError("internal", msg);
   }
 });
 
@@ -926,10 +948,11 @@ exports.pollGreenhouseFeedsV2 = onSchedule(
     await Promise.all(
       usersSnap.docs.map((u) =>
         limitEnq(async () => {
+          const uid = u.id;
           try {
-            await enqueueUserRun(u.id, "scheduled");
+            await enqueueUserRun(uid, "scheduled");
           } catch (err) {
-            logger.error("scheduled enqueue failed", { uid: u.id, error: String(err?.message || err) });
+            logger.error("scheduled enqueue failed", { uid, error: String(err?.message || err) });
           }
         })
       )
@@ -959,7 +982,6 @@ exports.pollUserTaskV2 = onTaskDispatched(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
 
-      // best-effort mark failed (if we still have time)
       await fetchRunRef(uid, runId).set(
         {
           status: "failed",
@@ -968,9 +990,7 @@ exports.pollUserTaskV2 = onTaskDispatched(
           error: msg,
         },
         { merge: true }
-      ).catch(() => {});
-
-      await releaseRunLock(uid, runId).catch(() => {});
+      );
 
       logger.error("task failed", { uid, runType, runId, error: msg });
       throw err;
