@@ -1,5 +1,10 @@
-// src/pages/Home.jsx — NO `active` anywhere, and polling button removed.
-// Adds only feeds, archive/restore, and “Reset feeds” trigger.
+// src/pages/Home.jsx
+// Replaces “Reset feeds (remove old fields)” with a manual sync trigger (runSyncNow)
+// Calls the Gen2 HTTP function:
+//   https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
+//
+// NOTE: This uses `fetch` directly because runSyncNow is an HTTP onRequest endpoint
+// (not a callable function). So we don’t use httpsCallable here.
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -12,7 +17,6 @@ import {
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
-import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 
@@ -73,7 +77,9 @@ export default function Home({ user }) {
   const [url, setUrl] = useState("");
   const [feeds, setFeeds] = useState([]);
   const [busyArchiveId, setBusyArchiveId] = useState(null);
-  const [busyReset, setBusyReset] = useState(false);
+
+  const [busyRunNow, setBusyRunNow] = useState(false);
+  const [lastRunSummary, setLastRunSummary] = useState(null);
 
   useEffect(() => {
     const feedsRef = collection(db, "users", user.uid, "feeds");
@@ -131,18 +137,47 @@ export default function Home({ user }) {
     }
   }
 
-  async function resetFeeds() {
-    setBusyReset(true);
+  async function runSyncNow() {
+    setBusyRunNow(true);
+    setLastRunSummary(null);
+
     try {
-      const functions = getFunctions(undefined, "us-central1");
-      const callFn = httpsCallable(functions, "resetFeedsV1");
-      const res = await callFn({});
-      showToast(res?.data?.message || "Feeds reset completed.", "success");
+      const projectId =
+        import.meta?.env?.VITE_FIREBASE_PROJECT_ID ||
+        process.env?.REACT_APP_FIREBASE_PROJECT_ID;
+
+      if (!projectId) {
+        showToast(
+          "Missing project id env. Add VITE_FIREBASE_PROJECT_ID (Vite) or REACT_APP_FIREBASE_PROJECT_ID (CRA).",
+          "error"
+        );
+        return;
+      }
+
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(
+        user.uid
+      )}`;
+
+      const resp = await fetch(endpoint, { method: "GET" });
+      const data = await resp.json().catch(() => ({}));
+
+      if (!resp.ok) {
+        const msg = data?.error || "Manual run failed (HTTP error).";
+        showToast(msg, "error");
+        return;
+      }
+
+      setLastRunSummary(data);
+
+      // Nice toast line
+      const scanned = Number(data?.scanned || 0);
+      const updated = Number(data?.updated || 0);
+      showToast(`Sync complete — scanned ${scanned}, wrote ${updated}`, "success");
     } catch (e) {
       console.error(e);
-      showToast(e?.message || "Reset failed.", "error");
+      showToast(e?.message || "Manual run failed.", "error");
     } finally {
-      setBusyReset(false);
+      setBusyRunNow(false);
     }
   }
 
@@ -190,17 +225,29 @@ export default function Home({ user }) {
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
             <button
-              onClick={resetFeeds}
-              disabled={busyReset}
+              onClick={runSyncNow}
+              disabled={busyRunNow}
               className="btn-secondary w-full sm:w-auto uppercase tracking-widest text-[11px] font-black"
             >
-              {busyReset ? "Resetting..." : "Reset feeds (remove old fields)"}
+              {busyRunNow ? "Running..." : "Run sync now"}
             </button>
           </div>
 
           <p className="mt-3 text-[11px] text-gray-400">
-            Reset keeps only: company, url, source, createdAt, archivedAt, lastCheckedAt, lastError.
+            This triggers the backend ingestion immediately (no need to wait 1 hour).
+            It also writes a summary into <span className="font-mono">users/{user.uid}/syncRuns</span>.
           </p>
+
+          {lastRunSummary ? (
+            <div className="mt-4 rounded-xl ring-1 ring-gray-200 bg-white p-4">
+              <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                Last manual run summary
+              </div>
+              <div className="mt-2 text-xs font-mono text-gray-800 whitespace-pre-wrap break-words">
+                {JSON.stringify(lastRunSummary, null, 2)}
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="md:col-span-2">
