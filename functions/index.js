@@ -14,6 +14,7 @@
  *
  * ✅ Run summary saved to Firestore:
  * - users/{uid}/syncRuns/{runId}
+ *   includes startedAt, finishedAt, durationMs
  *
  * ⚠️ Firestore TTL must be enabled on field "expireAt" for collection group "jobs"
  */
@@ -26,14 +27,11 @@ const { onRequest } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
 
-// ✅ p-limit CommonJS import fix
+// p-limit CommonJS import fix
 const pLimitPkg = require("p-limit");
 const pLimit = pLimitPkg.default ?? pLimitPkg;
 
-// ✅ Admin init
-if (!admin.apps.length) {
-  admin.initializeApp();
-}
+if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
 /**
@@ -44,19 +42,19 @@ const db = admin.firestore();
 const REGION = "us-central1";
 const FEED_CONCURRENCY = 15;
 
-const RECENT_WINDOW_MINUTES = 65; // only write jobs updated within last 65 mins
-const TTL_DAYS = 3;               // TTL expiration window (3 days)
+const RECENT_WINDOW_MINUTES = 65;
+const TTL_DAYS = 3;
 
 const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
 
+// Fields we NEVER write anymore (for visibility in syncRuns)
+const REMOVED_FIELDS = ["contentHtml", "isRemote", "applyUrl"];
 
 /**
  * ----------------------------
  * LOCATION FILTER CONSTANTS
  * ----------------------------
  */
-
-// 1) US States (full names)
 const US_STATES = [
   "Alabama","Arizona","Arkansas","California","Colorado","Connecticut","District of Columbia","Florida","Georgia",
   "Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maryland","Massachusetts","Michigan","Minnesota",
@@ -64,14 +62,12 @@ const US_STATES = [
   "Pennsylvania","Rhode Island","Tennessee","Texas","Utah","Virginia","Washington","Wisconsin",
 ];
 
-// 2) US State abbreviations
 const US_STATE_ABBREVIATIONS = [
   "AL","AZ","AR","CA","CO","CT","DC","FL","GA","ID","IL","IN","IA","KS","KY","LA",
   "MD","MA","MI","MN","MO","NE","NV","NH","NJ","NM","NY","NC","OK","PA","RI","TN",
   "TX","UT","VA","WA","WI",
 ];
 
-// 3) US Cities
 const US_CITIES = [
   "Albuquerque","Anaheim","Ann Arbor","Arlington","Atlanta","Austin","Bakersfield","Baltimore","Baton Rouge","Bellevue",
   "Birmingham","Boise","Boston","Boulder","Brooklyn","Buffalo","Burbank","Cambridge","Charlotte","Chicago","Cincinnati",
@@ -88,7 +84,6 @@ const US_CITIES = [
   "Tysons","Virginia Beach","Washington","West Palm Beach","Wichita",
 ];
 
-// 4) Remote-only (USA-specific) strings
 const REMOTE_US_ONLY = [
   "US-Remote","US Remote","US (Remote)","United States - Remote","Remote US","Remote USA","Remote-USA",
   "Remote in United States","Remote in the US","Remote - USA","Remote - US: All locations","Remote - US: Select locations",
@@ -123,51 +118,80 @@ exports.syncRecentJobsHourly = onSchedule(
       new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
     );
 
-    logger.info(`syncRecentJobsHourly start recentCutoff=${recentCutoff.toDate().toISOString()}`);
-
     const userIds = await listUserIdsToProcess();
-    logger.info(`Users to process: ${userIds.length}`);
 
     for (const userId of userIds) {
+      const startedAt = admin.firestore.Timestamp.now();
+      const runId = String(startedAt.toMillis());
+      const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
+
+      // Write "RUNNING" immediately so your UI can show progress if you want later
+      await runRef.set(
+        {
+          ok: true,
+          userId,
+          source: "syncRecentJobsHourly",
+          runType: "scheduled",
+          status: "RUNNING",
+          startedAt,
+          ranAt: startedAt,
+          recentCutoffIso: recentCutoff.toDate().toISOString(),
+          removedFields: REMOVED_FIELDS,
+        },
+        { merge: true }
+      );
+
       try {
         const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
-        await writeRunSummary({
-          userId,
-          source: "syncRecentJobsHourly",
-          now,
-          recentCutoff,
-          summary,
-        });
+
+        const finishedAt = admin.firestore.Timestamp.now();
+        const durationMs = finishedAt.toMillis() - startedAt.toMillis();
+
+        await runRef.set(
+          {
+            status: "DONE",
+            finishedAt,
+            durationMs,
+
+            // your preferred counters
+            ok: true,
+            scanned: summary.jobsFetched,
+            updated: summary.jobsWritten,
+            jobsWritten: summary.jobsWritten,
+
+            // extra breakdown (optional but useful)
+            feedsProcessed: summary.feedsProcessed,
+            failedFeeds: summary.failedFeeds,
+            jobsFetched: summary.jobsFetched,
+            jobsKeptRecent: summary.jobsKeptRecent,
+          },
+          { merge: true }
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        logger.error(`User sync failed userId=${userId}: ${msg}`);
+        logger.error(`Scheduled user sync failed userId=${userId}: ${msg}`);
 
-        // still write a run summary for visibility
-        await writeRunSummary({
-          userId,
-          source: "syncRecentJobsHourly",
-          now,
-          recentCutoff,
-          summary: {
+        const finishedAt = admin.firestore.Timestamp.now();
+        const durationMs = finishedAt.toMillis() - startedAt.toMillis();
+
+        await runRef.set(
+          {
             ok: false,
+            status: "FAILED",
             error: msg,
-            feedsProcessed: 0,
-            failedFeeds: 0,
-            jobsFetched: 0,
-            jobsKeptRecent: 0,
-            jobsWritten: 0,
+            finishedAt,
+            durationMs,
           },
-        });
+          { merge: true }
+        );
       }
     }
-
-    logger.info("syncRecentJobsHourly done.");
   }
 );
 
 /**
  * =====================================================================================
- * 2) MANUAL HTTP: Run sync now for one user (debug endpoint)
+ * 2) MANUAL HTTP: Run sync now for one user
  * =====================================================================================
  *
  * Trigger:
@@ -176,37 +200,91 @@ exports.syncRecentJobsHourly = onSchedule(
 exports.runSyncNow = onRequest(
   { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: true },
   async (req, res) => {
-    try {
-      const userId = String(req.query.userId || "").trim();
-      if (!userId) return res.status(400).json({ error: "Missing userId query param." });
+    const userId = String(req.query.userId || "").trim();
+    if (!userId) return res.status(400).json({ error: "Missing userId query param." });
 
-      const now = admin.firestore.Timestamp.now();
-      const recentCutoff = admin.firestore.Timestamp.fromDate(
-        new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
-      );
+    const startedAt = admin.firestore.Timestamp.now();
+    const runId = String(startedAt.toMillis());
+    const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
 
-      const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
+    const now = admin.firestore.Timestamp.now();
+    const recentCutoff = admin.firestore.Timestamp.fromDate(
+      new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
+    );
 
-      await writeRunSummary({
+    await runRef.set(
+      {
+        ok: true,
         userId,
         source: "runSyncNow",
-        now,
-        recentCutoff,
-        summary,
-      });
+        runType: "manual",
+        status: "RUNNING",
+        startedAt,
+        ranAt: startedAt,
+        recentCutoffIso: recentCutoff.toDate().toISOString(),
+        removedFields: REMOVED_FIELDS,
+      },
+      { merge: true }
+    );
 
-      // Return the style you requested (plus extra helpful fields)
-      return res.json({
+    try {
+      const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
+
+      const finishedAt = admin.firestore.Timestamp.now();
+      const durationMs = finishedAt.toMillis() - startedAt.toMillis();
+
+      const response = {
         ok: true,
         userId,
         dryRun: false,
-        scanned: summary.jobsFetched,          // closest equivalent to your example
-        updated: summary.jobsWritten,          // closest equivalent to your example
+        scanned: summary.jobsFetched,
+        updated: summary.jobsWritten,
+        removedFields: REMOVED_FIELDS,
+        ranAt: startedAt,
+        recentCutoffIso: recentCutoff.toDate().toISOString(),
+        finishedAt,
+        durationMs,
         ...summary,
-      });
+      };
+
+      await runRef.set(
+        {
+          status: "DONE",
+          finishedAt,
+          durationMs,
+
+          ok: true,
+          scanned: summary.jobsFetched,
+          updated: summary.jobsWritten,
+          jobsWritten: summary.jobsWritten,
+
+          feedsProcessed: summary.feedsProcessed,
+          failedFeeds: summary.failedFeeds,
+          jobsFetched: summary.jobsFetched,
+          jobsKeptRecent: summary.jobsKeptRecent,
+        },
+        { merge: true }
+      );
+
+      return res.json(response);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("runSyncNow failed:", e);
+
+      const finishedAt = admin.firestore.Timestamp.now();
+      const durationMs = finishedAt.toMillis() - startedAt.toMillis();
+
+      await runRef.set(
+        {
+          ok: false,
+          status: "FAILED",
+          error: msg,
+          finishedAt,
+          durationMs,
+        },
+        { merge: true }
+      );
+
       return res.status(500).json({ error: msg });
     }
   }
@@ -240,7 +318,6 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   const limiter = pLimit(FEED_CONCURRENCY);
   const bw = db.bulkWriter();
 
-  // bulk writer error handling
   bw.onWriteError((err) => {
     logger.error("BulkWriter error:", err);
     return false;
@@ -302,6 +379,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
 
+          // ✅ Only write fields we keep
           bw.set(
             jobRef,
             {
@@ -342,10 +420,6 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   await Promise.all(tasks);
   await bw.close();
 
-  logger.info(
-    `User synced userId=${userId} feedsProcessed=${feedsProcessed} failedFeeds=${failedFeeds} jobsFetched=${jobsFetched} keptRecent=${jobsKeptRecent} jobsWritten=${jobsWritten}`
-  );
-
   return {
     ok: true,
     feedsProcessed,
@@ -354,45 +428,6 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     jobsKeptRecent,
     jobsWritten,
   };
-}
-
-/**
- * ----------------------------
- * WRITE RUN SUMMARY DOC
- * ----------------------------
- */
-async function writeRunSummary({ userId, source, now, recentCutoff, summary }) {
-  try {
-    const runId = String(now.toMillis());
-    const ref = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
-
-    const doc = {
-      ok: Boolean(summary?.ok),
-      userId,
-      source,
-      ranAt: now,
-      recentCutoffIso: recentCutoff.toDate().toISOString(),
-
-      // keep your preferred keys (meaningful mapping)
-      dryRun: false,
-      scanned: Number(summary?.jobsFetched || 0),
-      updated: Number(summary?.jobsWritten || 0),
-
-      // extra useful breakdown
-      feedsProcessed: Number(summary?.feedsProcessed || 0),
-      failedFeeds: Number(summary?.failedFeeds || 0),
-      jobsFetched: Number(summary?.jobsFetched || 0),
-      jobsKeptRecent: Number(summary?.jobsKeptRecent || 0),
-      jobsWritten: Number(summary?.jobsWritten || 0),
-
-      // optional error
-      error: summary?.error || null,
-    };
-
-    await ref.set(doc, { merge: true });
-  } catch (e) {
-    logger.error(`writeRunSummary failed userId=${userId}:`, e);
-  }
 }
 
 /**
@@ -451,7 +486,7 @@ async function fetchJson(url) {
     method: "GET",
     headers: {
       accept: "application/json,text/plain,*/*",
-      "user-agent": "firebase-functions-job-sync/5.0",
+      "user-agent": "firebase-functions-job-sync/6.0",
     },
   });
 
@@ -474,7 +509,7 @@ async function safeReadText(resp) {
 /**
  * ----------------------------
  * NORMALIZATION (MINIMAL)
- * - contentHtml, isRemote, applyUrl removed
+ * - NO contentHtml, NO isRemote, NO applyUrl
  * ----------------------------
  */
 function normalizeJobMinimal(rawJob, ctx) {
