@@ -50,9 +50,6 @@ const TTL_DAYS = 3;
 
 const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
 
-// Fields we NEVER write anymore (for visibility in syncRuns)
-const REMOVED_FIELDS = ["contentHtml", "isRemote", "applyUrl"];
-
 /**
  * ----------------------------
  * LOCATION FILTER CONSTANTS
@@ -138,7 +135,7 @@ exports.syncRecentJobsHourly = onSchedule(
           startedAt,
           ranAt: startedAt,
           recentCutoffIso: recentCutoff.toDate().toISOString(),
-          removedFields: REMOVED_FIELDS,
+          
         },
         { merge: true }
       );
@@ -229,7 +226,7 @@ exports.runSyncNow = onRequest(
         startedAt,
         ranAt: startedAt,
         recentCutoffIso: recentCutoff.toDate().toISOString(),
-        removedFields: REMOVED_FIELDS,
+        
       },
       { merge: true }
     );
@@ -246,7 +243,7 @@ exports.runSyncNow = onRequest(
         dryRun: false,
         scanned: summary.jobsFetched,
         updated: summary.jobsWritten,
-        removedFields: REMOVED_FIELDS,
+        
 
         // ✅ NEW
         feedsCount: summary.feedsCount,
