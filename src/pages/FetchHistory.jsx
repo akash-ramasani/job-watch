@@ -35,6 +35,17 @@ function fmtSince(tsOrDate) {
   return "just now";
 }
 
+function fmtDuration(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (n < 1000) return `${Math.round(n)}ms`;
+  const s = n / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s - m * 60);
+  return `${m}m ${String(rem).padStart(2, "0")}s`;
+}
+
 export default function FetchHistory({ user }) {
   const [runs, setRuns] = useState([]);
   const [openId, setOpenId] = useState(null);
@@ -50,11 +61,18 @@ export default function FetchHistory({ user }) {
 
   const renderRunItem = (r) => {
     const isOpen = openId === r.id;
+
+    // Keep your existing labels (but do not show source/userId anywhere)
     const isManual = String(r.source || "").toLowerCase().match(/manual|runsyncnow|http/);
     const hasError = r.ok === false || Boolean(r.error);
-    const scanned = r.scanned || 0;
-    const updated = r.updated || 0;
-    const written = r.jobsWritten || updated;
+
+    // Key numbers users actually need
+    const scanned = Number(r.scanned ?? 0);
+    const fetched = Number(r.jobsFetched ?? 0);
+    const written = Number(r.jobsWritten ?? r.updated ?? 0);
+    const keptRecent = Number(r.jobsKeptRecent ?? 0);
+    const durationMs = Number(r.durationMs ?? 0);
+    const recentCutoffIso = r.recentCutoffIso ? new Date(r.recentCutoffIso) : null;
 
     return (
       <li
@@ -64,16 +82,27 @@ export default function FetchHistory({ user }) {
       >
         {/* Hover accent line */}
         <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-        
+
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1.5">
-              <span className={`text-[10px] font-black uppercase tracking-tight ${isManual ? 'text-indigo-600' : 'text-gray-400'}`}>
+              <span
+                className={`text-[10px] font-black uppercase tracking-tight ${
+                  isManual ? "text-indigo-600" : "text-gray-400"
+                }`}
+              >
                 {isManual ? "Manual Run" : "Scheduled Sync"}
               </span>
               <span className="text-gray-300">|</span>
-              <span className={`text-[10px] font-black uppercase ${hasError ? 'text-red-500' : 'text-emerald-500'}`}>
+              <span className={`text-[10px] font-black uppercase ${hasError ? "text-red-500" : "text-emerald-500"}`}>
                 {hasError ? "Failed" : "OK"}
+              </span>
+
+              {/* ✅ Jobs added shown in the main header row (NOT right corner) */}
+              <span className="text-gray-300">|</span>
+              <span className="text-[10px] font-black uppercase text-gray-400 tracking-tight">
+                Jobs Added{" "}
+                <span className="text-gray-900">{written.toLocaleString()}</span>
               </span>
             </div>
 
@@ -86,15 +115,13 @@ export default function FetchHistory({ user }) {
             </div>
           </div>
 
-          <div className="flex items-center gap-6 flex-shrink-0">
-            <div className="hidden sm:flex flex-col items-end min-w-[80px]">
-              <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
-                New Jobs
-              </span>
-              <span className="text-sm font-bold text-gray-900">{written}</span>
-            </div>
-            
-            <div className={`p-1.5 rounded-lg transition-all ${isOpen ? 'bg-indigo-50 text-indigo-600 rotate-180' : 'text-gray-300'}`}>
+          {/* ✅ Right side now ONLY chevron (no job count) */}
+          <div className="flex items-center flex-shrink-0">
+            <div
+              className={`p-1.5 rounded-lg transition-all ${
+                isOpen ? "bg-indigo-50 text-indigo-600 rotate-180" : "text-gray-300"
+              }`}
+            >
               <svg className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
               </svg>
@@ -112,45 +139,72 @@ export default function FetchHistory({ user }) {
               className="overflow-hidden"
             >
               <div className="mt-5 pt-5 border-t border-gray-100 space-y-5">
-                
-                {/* Metrics Summary Row */}
+                {/* ✅ Removed Outcome / New data ingested entirely.
+                    Keep a compact, useful metrics row. */}
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-700 bg-gray-50/50 p-4 rounded-xl ring-1 ring-inset ring-gray-100">
-                   <div>
-                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">Scanned</span>
-                     <span className="font-bold">{scanned.toLocaleString()}</span>
-                   </div>
-                   <span className="text-gray-300">•</span>
-                   <div>
-                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">Updated</span>
-                     <span className="font-bold">{updated.toLocaleString()}</span>
-                   </div>
-                   <span className="text-gray-300">•</span>
-                   <div>
-                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">Jobs Written</span>
-                     <span className="font-bold text-indigo-600">{written.toLocaleString()}</span>
-                   </div>
+                  
+                  <div>
+                    <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
+                      Duration
+                    </span>
+                    <span className="font-bold">{fmtDuration(durationMs)}</span>
+                  </div>
+
+                  <span className="text-gray-300">•</span>
+
+                  <div>
+                    <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
+                      Scanned
+                    </span>
+                    <span className="font-bold">{scanned.toLocaleString()}</span>
+                  </div>
+
+                  <span className="text-gray-300">•</span>
+
+                  <div>
+                    <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
+                      Fetched
+                    </span>
+                    <span className="font-bold">{fetched.toLocaleString()}</span>
+                  </div>
+
+                  <span className="text-gray-300">•</span>
+
+                  <div>
+                    <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
+                      Kept Recent
+                    </span>
+                    <span className="font-bold">{keptRecent.toLocaleString()}</span>
+                  </div>
                 </div>
 
-                {/* Detail Information */}
+                {/* Secondary detail tiles (still useful, minimal) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="bg-white p-4 rounded-xl ring-1 ring-inset ring-gray-200 shadow-sm">
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Ran At (Precise)</div>
+                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                      Ran At (Precise)
+                    </div>
                     <div className="text-sm font-bold text-gray-800">{fmtDateTimeFull(r.ranAt)}</div>
                   </div>
+
                   <div className="bg-white p-4 rounded-xl ring-1 ring-inset ring-gray-200 shadow-sm">
-                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Recent Cutoff</div>
+                    <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
+                      Recent Cutoff
+                    </div>
                     <div className="text-sm font-bold text-gray-800">
-                      {r.recentCutoffIso ? fmtDateTimeFull(new Date(r.recentCutoffIso)) : "—"}
+                      {recentCutoffIso ? fmtDateTimeFull(recentCutoffIso) : "—"}
                     </div>
                   </div>
                 </div>
 
-                {/* Error Box */}
+                {/* Error Box (keep, concise) */}
                 {hasError && (
                   <div className="p-4 rounded-xl bg-red-50 border border-red-100">
-                    <span className="text-[10px] font-black uppercase text-red-700 tracking-widest block mb-2">Technical Error log</span>
+                    <span className="text-[10px] font-black uppercase text-red-700 tracking-widest block mb-2">
+                      Error
+                    </span>
                     <p className="text-[11px] font-mono text-red-800 leading-relaxed break-all whitespace-pre-wrap">
-                      {r.error || "Critical failure recorded. Check ingestion function logs for more info."}
+                      {r.error || "Failure recorded. Check ingestion function logs for details."}
                     </p>
                   </div>
                 )}
@@ -167,9 +221,7 @@ export default function FetchHistory({ user }) {
       {/* HEADER SECTION */}
       <div className="mb-10">
         <h1 className="text-3xl font-black text-gray-900 tracking-tight">Sync History</h1>
-        <p className="text-sm text-gray-500 mt-2 font-medium">
-          Detailed activity logs for your background ingestion tasks.
-        </p>
+        <p className="text-sm text-gray-500 mt-2 font-medium">Detailed activity logs for your background ingestion tasks.</p>
       </div>
 
       {/* MAIN CONTAINER */}
@@ -177,11 +229,11 @@ export default function FetchHistory({ user }) {
         {/* Sub-header */}
         <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/30 flex items-center justify-between">
           <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Activity Log</h3>
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Listening</span>
-            </div>
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Listening</span>
           </div>
+        </div>
 
         {runs.length === 0 ? (
           <div className="flex-grow flex flex-col items-center justify-center py-32 text-center">
@@ -189,20 +241,14 @@ export default function FetchHistory({ user }) {
             <p className="text-xs text-gray-300 mt-2">Waiting for first execution...</p>
           </div>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {runs.map((r) => renderRunItem(r))}
-          </ul>
+          <ul className="divide-y divide-gray-100">{runs.map((r) => renderRunItem(r))}</ul>
         )}
 
         {/* Footer info */}
         <div className="bg-gray-50/50 py-8 border-t border-gray-100 flex items-center justify-center">
           <div className="flex flex-col items-center gap-1">
-            <span className="text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">
-              End of History
-            </span>
-            <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">
-              Showing last 60 events
-            </span>
+            <span className="text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">End of History</span>
+            <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">Showing last 60 events</span>
           </div>
         </div>
       </div>
