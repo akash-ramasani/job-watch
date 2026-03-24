@@ -1,9 +1,10 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx"; // Import the Toast hook
 
-export default function Login({ onSwitch, onForgot }) {
+export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -32,7 +33,7 @@ export default function Login({ onSwitch, onForgot }) {
         <div className="mx-auto w-full max-w-sm">
           <h2 className="text-3xl font-bold tracking-tight text-gray-900">Sign in</h2>
           <p className="mt-2 text-sm text-gray-500">
-            New here? <button onClick={onSwitch} className="font-semibold text-indigo-600 hover:text-indigo-500">Create account</button>
+            New here? <Link to="/signup" className="font-semibold text-indigo-600 hover:text-indigo-500">Create account</Link>
           </p>
 
           <form onSubmit={onSubmit} className="mt-10 space-y-6">
@@ -49,7 +50,7 @@ export default function Login({ onSwitch, onForgot }) {
                 <input id="remember" type="checkbox" className="size-4 rounded border-gray-300 text-indigo-600" />
                 <label htmlFor="remember" className="text-sm text-gray-900">Remember me</label>
               </div>
-              <button onClick={onForgot} className="text-sm font-semibold text-indigo-600">Forgot password?</button>
+              <Link to="/forgot-password" className="text-sm font-semibold text-indigo-600">Forgot password?</Link>
             </div>
             {err && <div className="text-red-500 text-sm">{err}</div>}
             <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Signing in..." : "Sign in"}</button>

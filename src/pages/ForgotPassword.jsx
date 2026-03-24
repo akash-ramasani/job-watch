@@ -1,9 +1,10 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx"; // Import the Toast hook
 
-export default function ForgotPassword({ onBack }) {
+export default function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast(); // Initialize Toast
@@ -49,13 +50,12 @@ export default function ForgotPassword({ onBack }) {
               {busy ? "Sending..." : "Send Link"}
             </button>
             
-            <button 
-              type="button"
-              onClick={onBack} 
-              className="w-full text-center text-sm font-semibold text-indigo-600 mt-4 hover:text-indigo-500"
+            <Link 
+              to="/login"
+              className="block w-full text-center text-sm font-semibold text-indigo-600 mt-4 hover:text-indigo-500"
             >
               &larr; Back to login
-            </button>
+            </Link>
           </form>
         </div>
       </div>

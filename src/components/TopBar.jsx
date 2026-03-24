@@ -1,10 +1,12 @@
 // src/components/TopBar.jsx
 import React, { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { Link, useLocation } from "react-router-dom";
 import { useToast } from "./Toast/ToastProvider.jsx"; // Import the Toast hook
 
-export default function TopBar({ user, userMeta, page, setPage, onLogout }) {
+export default function TopBar({ user, userMeta, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const location = useLocation();
   const { showToast } = useToast(); // Initialize toast
 
   // Handle logout with a feedback toast
@@ -18,22 +20,22 @@ export default function TopBar({ user, userMeta, page, setPage, onLogout }) {
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
           <div className="flex items-center gap-10">
-            <button
-              onClick={() => setPage("home")}
+            <Link
+              to="/"
               className="flex items-center gap-2 transition-opacity hover:opacity-80"
             >
               <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
                 <span className="text-white font-bold text-lg">J</span>
               </div>
               <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
-            </button>
+            </Link>
 
             {user && (
               <div className="hidden md:flex items-center gap-1">
-                <NavButton active={page === "home"} onClick={() => setPage("home")}>Dashboard</NavButton>
-                <NavButton active={page === "jobs"} onClick={() => setPage("jobs")}>Jobs</NavButton>
-                <NavButton active={page === "history"} onClick={() => setPage("history")}>History</NavButton>
-                <NavButton active={page === "profile"} onClick={() => setPage("profile")}>Settings</NavButton>
+                <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
+                <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
+                <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
+                <NavButton active={location.pathname === "/profile"} to="/profile">Settings</NavButton>
               </div>
             )}
           </div>
@@ -71,10 +73,10 @@ export default function TopBar({ user, userMeta, page, setPage, onLogout }) {
             className="md:hidden border-t border-gray-100 bg-white"
           >
             <div className="space-y-1 px-4 py-4">
-              <MobileNavButton active={page === "home"} onClick={() => { setPage("home"); setIsMenuOpen(false); }}>Dashboard</MobileNavButton>
-              <MobileNavButton active={page === "jobs"} onClick={() => { setPage("jobs"); setIsMenuOpen(false); }}>Jobs</MobileNavButton>
-              <MobileNavButton active={page === "history"} onClick={() => { setPage("history"); setIsMenuOpen(false); }}>History</MobileNavButton>
-              <MobileNavButton active={page === "profile"} onClick={() => { setPage("profile"); setIsMenuOpen(false); }}>Settings</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/"} to="/" onClick={() => setIsMenuOpen(false)}>Dashboard</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Settings</MobileNavButton>
               <button 
                 onClick={() => {
                   handleLogoutClick();
@@ -92,10 +94,10 @@ export default function TopBar({ user, userMeta, page, setPage, onLogout }) {
   );
 }
 
-function NavButton({ active, children, onClick }) {
+function NavButton({ active, children, to }) {
   return (
-    <button
-      onClick={onClick}
+    <Link
+      to={to}
       className={`relative px-4 py-2 text-sm font-medium transition-colors ${
         active ? "text-indigo-600" : "text-gray-500 hover:text-gray-900"
       }`}
@@ -107,19 +109,20 @@ function NavButton({ active, children, onClick }) {
           className="absolute bottom-[-22px] left-0 right-0 h-[2px] bg-indigo-600" 
         />
       )}
-    </button>
+    </Link>
   );
 }
 
-function MobileNavButton({ active, children, onClick }) {
+function MobileNavButton({ active, children, onClick, to }) {
   return (
-    <button
+    <Link
+      to={to}
       onClick={onClick}
       className={`block w-full rounded-lg px-4 py-3 text-left text-base font-medium ${
         active ? "bg-indigo-50 text-indigo-700" : "text-gray-600 hover:bg-gray-50"
       }`}
     >
       {children}
-    </button>
+    </Link>
   );
 }

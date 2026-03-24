@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { auth, db } from "./firebase";
 
 // Components
@@ -22,20 +23,15 @@ import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [mode, setMode] = useState("login");
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState("home");
   const [userMeta, setUserMeta] = useState(null);
+
+  const location = useLocation();
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setLoading(false);
-      // If user logs out, reset to home and login mode
-      if (!u) {
-        setPage("home");
-        setMode("login");
-      }
     });
     return () => unsub();
   }, []);
@@ -61,23 +57,27 @@ export default function App() {
     }
 
     if (!user) {
-      if (mode === "login") return <Login onSwitch={() => setMode("signup")} onForgot={() => setMode("forgot")} />;
-      if (mode === "signup") return <Signup onSwitch={() => setMode("login")} />;
-      if (mode === "forgot") return <ForgotPassword onBack={() => setMode("login")} />;
+      return (
+        <Routes location={location} key={location.pathname}>
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      );
     }
 
     // Authenticated Navigation
-    switch (page) {
-      case "jobs":
-        return <Jobs user={user} userMeta={userMeta} />;
-      case "profile":
-        return <Profile user={user} userMeta={userMeta} />;
-      case "history":
-        return <FetchHistory user={user} />;
-      default:
-        return <Home user={user} />;
-    }
-  }, [loading, user, mode, page, userMeta]);
+    return (
+      <Routes location={location} key={location.pathname}>
+        <Route path="/" element={<Home user={user} />} />
+        <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} />} />
+        <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
+        <Route path="/history" element={<FetchHistory user={user} />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    );
+  }, [loading, user, userMeta, location]);
 
   return (
     <ToastProvider>
@@ -86,20 +86,31 @@ export default function App() {
           <TopBar 
             user={user} 
             userMeta={userMeta} 
-            page={page} 
-            setPage={setPage} 
             onLogout={() => signOut(auth)} 
           />
         )}
 
         {!user ? (
-          <div className="h-full">{content}</div>
+          <div className="h-full">
+            <AnimatePresence mode="wait">
+              <motion.div 
+                key={location.pathname} 
+                initial={{ opacity: 0, y: 10 }} 
+                animate={{ opacity: 1, y: 0 }} 
+                exit={{ opacity: 0, y: -10 }}
+                transition={{ duration: 0.2 }}
+                className="h-full"
+              >
+                {content}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         ) : (
           <main className="py-10">
             <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
               <AnimatePresence mode="wait">
                 <motion.div 
-                  key={page} 
+                  key={location.pathname} 
                   initial={{ opacity: 0, y: 10 }} 
                   animate={{ opacity: 1, y: 0 }} 
                   exit={{ opacity: 0, y: -10 }}

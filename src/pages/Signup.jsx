@@ -1,10 +1,11 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useToast } from "../components/Toast/ToastProvider.jsx"; // Added Import
 
-export default function Signup({ onSwitch }) {
+export default function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
@@ -48,9 +49,9 @@ export default function Signup({ onSwitch }) {
             <h2 className="text-3xl font-bold tracking-tight text-gray-900">Create account</h2>
             <p className="mt-2 text-sm text-gray-500">
               Already have an account?{' '}
-              <button onClick={onSwitch} className="font-semibold text-indigo-600 hover:text-indigo-500">
+              <Link to="/login" className="font-semibold text-indigo-600 hover:text-indigo-500">
                 Sign in instead
-              </button>
+              </Link>
             </p>
           </div>
 
