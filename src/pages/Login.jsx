@@ -39,11 +39,11 @@ export default function Login() {
           <form onSubmit={onSubmit} className="mt-10 space-y-6">
             <div>
               <label className="block text-sm font-medium text-gray-900">Email address</label>
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="input-standard mt-2" />
+              <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className="input-standard mt-2" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-900">Password</label>
-              <input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="input-standard mt-2" />
+              <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input-standard mt-2" />
             </div>
             <div className="flex items-center justify-between">
               <div className="flex gap-2">

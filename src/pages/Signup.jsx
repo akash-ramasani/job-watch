@@ -64,6 +64,7 @@ export default function Signup() {
                     <input
                       type="text"
                       required
+                      autoComplete="given-name"
                       value={firstName}
                       onChange={(e) => setFirstName(e.target.value)}
                       className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
@@ -76,6 +77,7 @@ export default function Signup() {
                     <input
                       type="text"
                       required
+                      autoComplete="family-name"
                       value={lastName}
                       onChange={(e) => setLastName(e.target.value)}
                       className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
@@ -90,6 +92,7 @@ export default function Signup() {
                   <input
                     type="email"
                     required
+                    autoComplete="username"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
@@ -103,6 +106,7 @@ export default function Signup() {
                   <input
                     type="password"
                     required
+                    autoComplete="new-password"
                     minLength={6}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
