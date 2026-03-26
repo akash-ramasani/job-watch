@@ -285,6 +285,7 @@ export default function LandingPage() {
 
       {/* ═══ PUBLIC NAVBAR ═══ */}
       <nav className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/80 backdrop-blur-md">
+        <div className="absolute inset-0 hero-gradient opacity-[0.03] -z-10" />
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
