@@ -4,8 +4,7 @@ import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
 import { collection, query, orderBy, getDocs } from "firebase/firestore";
 import { db } from "../firebase";
-
-const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+import { ADMIN_UID } from "../App.jsx";
 
 /* ── Feature & testimonial data ────────────────────────────── */
 
@@ -215,15 +214,17 @@ export default function Home({ user, userMeta }) {
               </svg>
               Browse Jobs
             </Link>
-            <Link
-              to="/feeds"
-              className="inline-flex items-center gap-2 rounded-full bg-white/20 backdrop-blur-sm px-5 py-2.5 text-sm font-semibold hover:bg-white/30 transition-colors"
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12.75 19.5v-.75a7.5 7.5 0 00-7.5-7.5H4.5m0-6.75h.75c7.87 0 14.25 6.38 14.25 14.25v.75M6 18.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
-              </svg>
-              Manage Feeds
-            </Link>
+            {isAdmin && (
+              <Link
+                to="/feeds"
+                className="inline-flex items-center gap-2 rounded-full bg-white/20 backdrop-blur-sm px-5 py-2.5 text-sm font-semibold hover:bg-white/30 transition-colors"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12.75 19.5v-.75a7.5 7.5 0 00-7.5-7.5H4.5m0-6.75h.75c7.87 0 14.25 6.38 14.25 14.25v.75M6 18.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+                </svg>
+                Manage Feeds
+              </Link>
+            )}
             <Link
               to="/history"
               className="inline-flex items-center gap-2 rounded-full bg-white/20 backdrop-blur-sm px-5 py-2.5 text-sm font-semibold hover:bg-white/30 transition-colors"

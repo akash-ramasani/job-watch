@@ -22,6 +22,8 @@ import ScrollToTop from "./components/ScrollToTop.jsx";
 
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 
+export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -72,7 +74,16 @@ export default function App() {
     return (
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<Home user={user} userMeta={userMeta} />} />
-        <Route path="/feeds" element={<Feeds user={user} />} />
+        <Route
+          path="/feeds"
+          element={
+            user.uid === ADMIN_UID ? (
+              <Feeds user={user} />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
         <Route path="/history" element={<FetchHistory user={user} />} />

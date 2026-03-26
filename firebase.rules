@@ -1,0 +1,39 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. User Metadata Rules
+    // Allows users to read/write only their own profile information
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // 2. Nested Collections (feeds, companies, fetchRuns)
+      // Standard rules for sub-collections inside a user document
+      match /{allSubcollections=**} {
+        // Admin's feeds, jobs, and companies are readable by everyone authenticated
+        allow read: if request.auth != null && (userId == "7Tojjo8l5PZIYctPmdwncf7PC133" || request.auth.uid == userId);
+        // Only the user themselves can write to their subcollections
+        allow write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // 3. Collection Group Rules for "jobs"
+    // Allows Jobs.jsx to fetch jobs globally if the data matches the admin or the user
+    match /{path=**}/jobs/{jobId} {
+      allow read: if request.auth != null && (resource.data.uid == request.auth.uid || resource.data.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
+      // Write is handled by Cloud Functions or user-specific rules
+    }
+    
+    match /interestedUsers/{docId} {
+      allow create: if true;
+      allow read: if request.auth != null && (request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
+    }
+
+    
+    // Helper function to extract UID from path if needed
+    function userIdFromPath(path) {
+      return path[1]; // Returns 'uid' from /users/{uid}/...
+    }
+  }
+}

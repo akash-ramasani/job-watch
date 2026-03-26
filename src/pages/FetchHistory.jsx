@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
+import { ADMIN_UID } from "../App.jsx";
 import {
   AreaChart,
   Area,
@@ -72,7 +73,7 @@ export default function FetchHistory({ user }) {
 
   useEffect(() => {
     if (!user?.uid) return;
-    const ref = collection(db, "users", user.uid, "syncRuns");
+    const ref = collection(db, "users", ADMIN_UID, "syncRuns");
     const q = query(ref, orderBy("ranAt", "desc"), limit(60));
     return onSnapshot(q, (snap) => {
       setRuns(snap.docs.map((d) => ({ id: d.id, ...d.data() })));

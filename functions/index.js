@@ -208,7 +208,9 @@ exports.runSyncNow = onRequest(
   { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: true },
   async (req, res) => {
     const userId = String(req.query.userId || "").trim();
+    const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
     if (!userId) return res.status(400).json({ error: "Missing userId query param." });
+    if (userId !== ADMIN_UID) return res.status(403).json({ error: "Forbidden: Only the admin can trigger sync." });
 
     const startedAt = admin.firestore.Timestamp.now();
     const runId = String(startedAt.toMillis());
@@ -460,23 +462,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
  * ----------------------------
  */
 async function listUserIdsToProcess() {
-  if (ONLY_USER_ID) return [ONLY_USER_ID];
-
-  const users = [];
-  let last = null;
-
-  while (true) {
-    let q = db.collection("users").orderBy(admin.firestore.FieldPath.documentId()).limit(500);
-    if (last) q = q.startAfter(last);
-
-    const snap = await q.get();
-    if (snap.empty) break;
-
-    for (const d of snap.docs) users.push(d.id);
-    last = snap.docs[snap.docs.length - 1].id;
-  }
-
-  return users;
+  return ["7Tojjo8l5PZIYctPmdwncf7PC133"];
 }
 
 /**

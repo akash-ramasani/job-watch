@@ -12,6 +12,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import { ADMIN_UID } from "../App.jsx";
 
 const URL_RULES = {
   greenhouse: {
@@ -82,7 +83,7 @@ export default function Feeds({ user }) {
   const [lastRunSummary, setLastRunSummary] = useState(null);
 
   useEffect(() => {
-    const feedsRef = collection(db, "users", user.uid, "feeds");
+    const feedsRef = collection(db, "users", ADMIN_UID, "feeds");
     const qFeeds = query(feedsRef, orderBy("createdAt", "desc"));
     return onSnapshot(qFeeds, (snap) =>
       setFeeds(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
@@ -114,7 +115,7 @@ export default function Feeds({ user }) {
     }
 
     try {
-      await addDoc(collection(db, "users", user.uid, "feeds"), {
+      await addDoc(collection(db, "users", ADMIN_UID, "feeds"), {
         company: cleanCompany,
         url: v.normalizedUrl,
         source,
@@ -144,7 +145,7 @@ export default function Feeds({ user }) {
         showToast("Missing project id env.", "error");
         return;
       }
-      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(user.uid)}`;
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}`;
       const resp = await fetch(endpoint, { method: "GET" });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
@@ -164,7 +165,7 @@ export default function Feeds({ user }) {
   async function archiveFeed(feedId) {
     setBusyArchiveId(feedId);
     try {
-      await updateDoc(doc(db, "users", user.uid, "feeds", feedId), { archivedAt: serverTimestamp() });
+      await updateDoc(doc(db, "users", ADMIN_UID, "feeds", feedId), { archivedAt: serverTimestamp() });
       showToast("Feed archived", "info");
     } catch (err) {
       console.error(err);
@@ -177,7 +178,7 @@ export default function Feeds({ user }) {
   async function restoreFeed(feedId) {
     setBusyArchiveId(feedId);
     try {
-      await updateDoc(doc(db, "users", user.uid, "feeds", feedId), { archivedAt: null });
+      await updateDoc(doc(db, "users", ADMIN_UID, "feeds", feedId), { archivedAt: null });
       showToast("Feed restored to active", "success");
     } catch (err) {
       console.error(err);
@@ -218,7 +219,7 @@ export default function Feeds({ user }) {
 
           <p className="mt-3 text-[11px] text-gray-400">
             This triggers the backend ingestion immediately (no need to wait 1 hour).
-            It also writes a summary into <span className="font-mono">users/{user.uid}/syncRuns</span>.
+            It also writes a summary into <span className="font-mono">users/{ADMIN_UID}/syncRuns</span>.
           </p>
 
           {lastRunSummary ? (

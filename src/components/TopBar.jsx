@@ -3,6 +3,7 @@ import React, { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Link, useLocation } from "react-router-dom";
 import { useToast } from "./Toast/ToastProvider.jsx";
+import { ADMIN_UID } from "../App.jsx";
 
 export default function TopBar({ user, userMeta, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -32,7 +33,9 @@ export default function TopBar({ user, userMeta, onLogout }) {
             {user && (
               <div className="hidden md:flex items-center gap-1">
                 <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
-                <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
+                {user.uid === ADMIN_UID && (
+                  <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
+                )}
                 <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
                 <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
                 <NavButton active={location.pathname === "/profile"} to="/profile">Profile</NavButton>
@@ -74,7 +77,9 @@ export default function TopBar({ user, userMeta, onLogout }) {
           >
             <div className="space-y-1 px-4 py-4">
               <MobileNavButton active={location.pathname === "/"} to="/" onClick={() => setIsMenuOpen(false)}>Dashboard</MobileNavButton>
-              <MobileNavButton active={location.pathname === "/feeds"} to="/feeds" onClick={() => setIsMenuOpen(false)}>Feeds</MobileNavButton>
+              {user.uid === ADMIN_UID && (
+                <MobileNavButton active={location.pathname === "/feeds"} to="/feeds" onClick={() => setIsMenuOpen(false)}>Feeds</MobileNavButton>
+              )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
               <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
               <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Profile</MobileNavButton>

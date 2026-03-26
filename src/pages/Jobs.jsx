@@ -13,6 +13,7 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import { ADMIN_UID } from "../App.jsx";
 
 const PAGE_SIZE = 50;
 
@@ -107,7 +108,7 @@ export default function Jobs({ user }) {
     let cancelled = false;
     (async () => {
       try {
-        const companiesRef = collection(db, "users", user.uid, "companies");
+        const companiesRef = collection(db, "users", ADMIN_UID, "companies");
         const qCompanies = query(companiesRef, orderBy("companyName", "asc"), limit(1000));
         const snap = await getDocs(qCompanies);
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -123,9 +124,9 @@ export default function Jobs({ user }) {
     async (isFirstPage = true) => {
       setLoading(true);
       setIsProcessing(true);
-
+  
       try {
-        const jobsCol = collection(db, "users", user.uid, "jobs");
+        const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
         const constraints = [];
 
         if (selectedKeys.length > 0) {
