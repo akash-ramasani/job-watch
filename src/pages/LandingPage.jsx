@@ -21,7 +21,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Auto-Sync Feeds",
-    desc: "Connect Greenhouse & AshbyHQ job boards once — JobWatch syncs new postings automatically every hour.",
+    desc: "Connect Greenhouse, AshbyHQ & Eightfold.ai job boards once — JobWatch syncs new postings automatically every hour.",
   },
   {
     icon: (
@@ -525,7 +525,7 @@ export default function LandingPage() {
               {
                 step: "01",
                 title: "Add Your Feeds",
-                desc: "Paste a Greenhouse or AshbyHQ job board URL and we'll start watching it immediately.",
+                desc: "Paste a Greenhouse, AshbyHQ or Eightfold.ai job board URL and we'll start watching it immediately.",
               },
               {
                 step: "02",
@@ -918,6 +918,7 @@ export default function LandingPage() {
               <ul className="space-y-2.5">
                 <li><a href="https://boards-api.greenhouse.io" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Greenhouse API</a></li>
                 <li><a href="https://developers.ashbyhq.com" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">AshbyHQ Docs</a></li>
+                <li><a href="https://eightfold.ai" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Eightfold.ai</a></li>
                 <li><a href="https://firebase.google.com" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Firebase</a></li>
               </ul>
             </div>
