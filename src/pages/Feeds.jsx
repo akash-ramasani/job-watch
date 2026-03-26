@@ -32,8 +32,19 @@ const URL_RULES = {
   microsoft: {
     label: "Microsoft Careers API",
     placeholder: "https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&...",
-    isValid: (u) =>
-      /^https:\/\/apply\.careers\.microsoft\.com\/api\/pcsx\/search\?/i.test(u),
+    isValid: (u) => /\/api\/pcsx\/search/i.test(u),
+    normalize: (u) => u.trim(),
+  },
+  paypal: {
+    label: "PayPal (Eightfold) API",
+    placeholder: "https://paypal.eightfold.ai/api/pcsx/search?domain=paypal.com&...",
+    isValid: (u) => /\/api\/pcsx\/search/i.test(u),
+    normalize: (u) => u.trim(),
+  },
+  eightfold: {
+    label: "Eightfold.ai API",
+    placeholder: "https://<company>.eightfold.ai/api/pcsx/search?domain=<company>.com&...",
+    isValid: (u) => /\/api\/pcsx\/search/i.test(u),
     normalize: (u) => u.trim(),
   },
 };
@@ -42,13 +53,19 @@ function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
   if (u.includes("api.ashbyhq.com/posting-api/job-board/")) return "ashby";
-  if (u.includes("apply.careers.microsoft.com/api/pcsx/search")) return "microsoft";
+  if (u.includes("/api/pcsx/search")) {
+    if (u.includes("paypal.eightfold.ai")) return "paypal";
+    if (u.includes("careers.microsoft.com")) return "microsoft";
+    return "eightfold";
+  }
   return "greenhouse";
 }
 
 function prettySourceLabel(source) {
   if (source === "ashby") return "AshbyHQ";
   if (source === "microsoft") return "Microsoft Careers";
+  if (source === "paypal") return "PayPal (Eightfold)";
+  if (source === "eightfold") return "Eightfold.ai";
   return "Greenhouse";
 }
 
@@ -65,8 +82,8 @@ function validateUrlForSource(source, rawUrl) {
       error:
         source === "ashby"
           ? "Ashby URL should look like: https://api.ashbyhq.com/posting-api/job-board/<company>"
-          : source === "microsoft"
-            ? "Microsoft URL should look like: https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&..."
+          : (source === "microsoft" || source === "paypal" || source === "eightfold")
+            ? "Eightfold/Microsoft URL should look like: https://<domain>/api/pcsx/search?domain=<domain>&..."
             : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
   }
@@ -203,8 +220,9 @@ export default function Feeds({ user }) {
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Connect <span className="font-semibold">Greenhouse</span>,{" "}
-            <span className="font-semibold">AshbyHQ</span>, and{" "}
-            <span className="font-semibold">Microsoft Careers</span> job boards.
+            <span className="font-semibold">AshbyHQ</span>,{" "}
+            <span className="font-semibold">Microsoft Careers</span>, and{" "}
+            <span className="font-semibold">Eightfold.ai</span> (PayPal, etc.) job boards.
           </p>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -280,6 +298,11 @@ export default function Feeds({ user }) {
                   Microsoft:{" "}
                   <span className="font-mono">
                     https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&amp;...
+                  </span>
+                  <br />
+                  PayPal / Eightfold:{" "}
+                  <span className="font-mono">
+                    https://paypal.eightfold.ai/api/pcsx/search?domain=paypal.com&amp;...
                   </span>
                 </p>
               </div>

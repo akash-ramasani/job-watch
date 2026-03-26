@@ -471,7 +471,7 @@ async function listUserIdsToProcess() {
  * ----------------------------
  */
 async function fetchJobsFromFeed(url, source, recentCutoffMs) {
-  if (source.includes("microsoft")) {
+  if (source.includes("microsoft") || source.includes("paypal") || source.includes("eightfold")) {
     return await fetchMicrosoftJobsPaginated(url, recentCutoffMs);
   }
 
@@ -667,13 +667,14 @@ function normalizeJobMinimal(rawJob, ctx) {
     };
   }
 
-  // Microsoft Careers source
-  if (source.includes("microsoft")) {
+  // Eightfold-based sources (Microsoft, PayPal, etc.)
+  if (source.includes("microsoft") || source.includes("paypal") || source.includes("eightfold")) {
     const externalId = rawJob.id != null ? String(rawJob.id)
       : (rawJob.displayJobId != null ? String(rawJob.displayJobId) : null);
 
+    const domain = source.includes("microsoft") ? "careers.microsoft.com" : "paypal.eightfold.ai";
     const jobUrl = rawJob.positionUrl
-      ? `https://careers.microsoft.com${rawJob.positionUrl}`
+      ? `https://${domain}${rawJob.positionUrl}`
       : null;
     if (!externalId && !jobUrl) return null;
 
@@ -702,15 +703,16 @@ function normalizeJobMinimal(rawJob, ctx) {
     if (rawJob.workLocationOption) meta["Work Location"] = rawJob.workLocationOption;
     if (rawJob.displayJobId) meta["Job ID"] = rawJob.displayJobId;
 
+    const sourceName = source.includes("microsoft") ? "microsoft" : (source.includes("paypal") ? "paypal" : "eightfold");
     const jobDocId = makeJobDocId({
-      source: "microsoft",
+      source: sourceName,
       companyKey,
       externalId: externalId || jobUrl,
     });
 
     return {
       jobDocId,
-      source: "microsoft",
+      source: sourceName,
       companyKey,
       companyName,
       externalId,
