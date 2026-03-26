@@ -60,6 +60,48 @@ const TESTIMONIALS = [
     quote: "Love how clean and fast the interface is. The filtering makes it so easy to find relevant roles across multiple companies.",
     avatar: "JW",
   },
+  {
+    name: "Emily Rodriguez",
+    role: "Frontend Engineer, UT Austin",
+    quote: "I used to miss application windows all the time. With JobWatch, I’m always early and way more confident applying.",
+    avatar: "ER",
+  },
+  {
+    name: "Rahul Mehta",
+    role: "Software Engineer, IIT Bombay",
+    quote: "The company tracking feature is insanely useful. I can focus on preparing instead of constantly refreshing job pages.",
+    avatar: "RM",
+  },
+  {
+    name: "Samantha Lee",
+    role: "Product Manager, NYU",
+    quote: "Super intuitive and actually fun to use. It feels like having a personal assistant for job hunting.",
+    avatar: "SL",
+  },
+  {
+    name: "Daniel Kim",
+    role: "Backend Engineer, UCLA",
+    quote: "I landed multiple interviews thanks to how quickly I could apply after getting alerts. Speed really matters.",
+    avatar: "DK",
+  },
+  {
+    name: "Aisha Khan",
+    role: "AI/ML Student, Carnegie Mellon",
+    quote: "Filtering by role and location saved me so much time. I only see what actually matters to me.",
+    avatar: "AK",
+  },
+  {
+    name: "Marcus Johnson",
+    role: "Computer Engineering, Purdue",
+    quote: "Clean design, fast updates, and no clutter. Exactly what I needed during recruiting season.",
+    avatar: "MJ",
+  },
+  {
+    name: "Sophia Martinez",
+    role: "Software Engineer, University of Washington",
+    quote: "I love how reliable the alerts are. I don’t worry about missing opportunities anymore.",
+    avatar: "SM",
+  },
 ];
 
 const fadeUp = {

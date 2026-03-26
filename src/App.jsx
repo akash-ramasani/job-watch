@@ -17,6 +17,7 @@ import Feeds from "./pages/Feeds.jsx";
 import Profile from "./pages/Profile.jsx";
 import FetchHistory from "./pages/FetchHistory.jsx";
 import Footer from "./components/Footer.jsx";
+import ScrollToTop from "./components/ScrollToTop.jsx";
 
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 
@@ -124,6 +125,7 @@ export default function App() {
               </div>
             </main>
             <Footer />
+            <ScrollToTop />
           </>
         )}
       </div>
