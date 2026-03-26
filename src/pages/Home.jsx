@@ -48,8 +48,9 @@ function prettySourceLabel(source) {
 function validateUrlForSource(source, rawUrl) {
   const cleanUrl = (rawUrl || "").trim();
   if (!cleanUrl) return { ok: false, error: "Please enter a URL." };
-  if (!/^https:\/\
+  if (!/^https:\/\//i.test(cleanUrl)) {
     return { ok: false, error: "Please use a valid https:// URL." };
+  }
 
   const rules = URL_RULES[source] || URL_RULES.greenhouse;
   if (!rules.isValid(cleanUrl)) {
