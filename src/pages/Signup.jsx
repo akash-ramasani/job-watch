@@ -57,6 +57,12 @@ export default function Signup() {
       <div className="flex w-full flex-col justify-center px-4 py-12 sm:px-6 lg:w-[45%] lg:flex-none lg:px-20 xl:px-24">
         <div className="mx-auto w-full max-w-sm">
           <div>
+            <div className="flex items-center gap-2 mb-8">
+              <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <span className="text-white font-bold text-lg">J</span>
+              </div>
+              <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
+            </div>
             <h2 className="text-3xl font-bold tracking-tight text-gray-900">Create account</h2>
             <p className="mt-2 text-sm text-gray-500">
               Already have an account?{' '}

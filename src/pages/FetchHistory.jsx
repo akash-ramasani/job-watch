@@ -204,11 +204,11 @@ export default function FetchHistory({ user }) {
   };
 
   return (
-    <div className="py-10 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
+    <div className="page-wrapper">
 
-      <div className="mb-10">
-        <h1 className="text-3xl font-black text-gray-900 tracking-tight">Sync History</h1>
-        <p className="text-sm text-gray-500 mt-2 font-medium">Detailed activity logs for your background ingestion tasks.</p>
+      <div className="page-header">
+        <h1>Sync History</h1>
+        <p>Detailed activity logs for your background ingestion tasks.</p>
       </div>
 
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px]">

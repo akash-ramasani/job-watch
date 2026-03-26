@@ -57,6 +57,24 @@ body {
   @apply text-[11px] font-bold uppercase tracking-widest text-gray-400;
 }
 
+/* 7. Page Layout: Consistent structure across all authenticated pages */
+.page-wrapper {
+  @apply space-y-12 py-6;
+  font-family: 'Ubuntu', sans-serif;
+}
+
+.page-header {
+  @apply mb-10;
+}
+
+.page-header h1 {
+  @apply text-2xl font-bold text-gray-900 tracking-tight;
+}
+
+.page-header p {
+  @apply text-sm text-gray-500 mt-1;
+}
+
 /* 7. Hero Section: Animated gradient background */
 @keyframes gradient-shift {
   0%, 100% { background-position: 0% 50%; }

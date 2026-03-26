@@ -134,7 +134,12 @@ export default function Profile({ user, userMeta }) {
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-12 py-10" style={{ fontFamily: 'Ubuntu, sans-serif' }}>
+    <form onSubmit={handleSave} className="page-wrapper">
+
+      <div className="page-header">
+        <h1>Profile</h1>
+        <p>Manage your personal information, notifications, and preferences.</p>
+      </div>
 
       <div className="section-grid">
         <div>

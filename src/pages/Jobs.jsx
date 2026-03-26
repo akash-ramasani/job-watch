@@ -305,12 +305,12 @@ export default function Jobs({ user }) {
   );
 
   return (
-    <div className="py-8 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
+    <div className="page-wrapper">
 
-      <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 text-center md:text-left">
+      <div className="page-header flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Opportunities</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1>Opportunities</h1>
+          <p>
             {selectedKeys.length === 0 ? "Viewing all companies" : `Filtering ${selectedKeys.length} company(ies)`}
           </p>
         </div>
