@@ -65,6 +65,7 @@ export default function Login() {
       </div>
       <div className="relative hidden w-0 flex-1 lg:block">
         <img className="absolute inset-0 size-full object-cover" src="https://images.unsplash.com/photo-1496917756835-20cb06e75b4e?auto=format&fit=crop&w=1908&q=80" alt="Workspace" />
+        <div className="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-white to-transparent" />
       </div>
     </div>
   );
