@@ -41,9 +41,25 @@ export default function Profile({ user, userMeta }) {
       } else {
         showToast("Notification permission denied.", "info");
       }
-    } catch (err) {
-      console.error(err);
-      showToast("Failed to enable push: " + err.message, "error");
+    } catch (e) {
+      console.error("Failed to enable push:", e);
+      showToast(e.message || "Failed to enable notifications.", "error");
+    }
+  }
+
+  async function testNotification() {
+    if (Notification.permission === "granted") {
+      try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification("JobWatch Sync Complete", {
+          body: "Success! We scanned 145 jobs and added 12 new roles for you.",
+          icon: "/vite.svg"
+        });
+      } catch (err) {
+        showToast("Error showing notification: " + err.message, "error");
+      }
+    } else {
+      showToast("Please enable notifications above first.", "error");
     }
   }
 
@@ -248,6 +264,15 @@ export default function Profile({ user, userMeta }) {
             >
               Enable Notifications
             </button>
+            {pushStatus === "granted" && (
+              <button
+                type="button"
+                onClick={testNotification}
+                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-emerald-600 hover:text-emerald-500 border border-emerald-100 bg-white rounded shadow-sm transition-colors"
+              >
+                Test Alert UI
+              </button>
+            )}
             {pushStatus === "granted" && (
               <span className="text-[10px] tracking-widest uppercase font-black text-emerald-600 flex items-center">
                 <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
