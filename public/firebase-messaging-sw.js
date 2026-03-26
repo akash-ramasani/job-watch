@@ -2,13 +2,15 @@
 importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-messaging-compat.js');
 
+const urlParams = new URL(location).searchParams;
+
 firebase.initializeApp({
-  apiKey: "AIzaSyA-JxL9ApR6q2XMTH_BDHk-liMHC2Zqe6k",
-  authDomain: "greenhouse-jobs-scrapper.firebaseapp.com",
-  projectId: "greenhouse-jobs-scrapper",
-  storageBucket: "greenhouse-jobs-scrapper.firebasestorage.app",
-  messagingSenderId: "778274987006",
-  appId: "1:778274987006:web:a463f8c51edab30ba43eaf"
+  apiKey: urlParams.get("apiKey"),
+  authDomain: urlParams.get("authDomain"),
+  projectId: urlParams.get("projectId"),
+  storageBucket: urlParams.get("storageBucket"),
+  messagingSenderId: urlParams.get("messagingSenderId"),
+  appId: urlParams.get("appId")
 });
 
 const messaging = firebase.messaging();

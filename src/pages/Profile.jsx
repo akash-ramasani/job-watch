@@ -28,7 +28,17 @@ export default function Profile({ user, userMeta }) {
       setPushStatus(permission);
       
       if (permission === "granted") {
-        const token = await getToken(messaging, { vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY });
+        // Construct the custom service worker URL with all required Firebase environment variables
+        const swUrl = `/firebase-messaging-sw.js?apiKey=${import.meta.env.VITE_FIREBASE_API_KEY}&authDomain=${import.meta.env.VITE_FIREBASE_AUTH_DOMAIN}&projectId=${import.meta.env.VITE_FIREBASE_PROJECT_ID}&storageBucket=${import.meta.env.VITE_FIREBASE_STORAGE_BUCKET}&messagingSenderId=${import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID}&appId=${import.meta.env.VITE_FIREBASE_APP_ID}`;
+        
+        // Manually register the SW so Firebase uses our custom configured instance
+        const registration = await navigator.serviceWorker.register(swUrl);
+        
+        const token = await getToken(messaging, { 
+          vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
+          serviceWorkerRegistration: registration 
+        });
+        
         if (token) {
           await setDoc(doc(db, "users", user.uid), {
             fcmTokens: [token]
