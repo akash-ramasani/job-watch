@@ -3,9 +3,6 @@ import { db } from "../firebase";
 import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 
-/**
- * Precise timing format: Feb 12, 2026, 01:03:05 PM
- */
 function fmtDateTimeFull(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
   if (!d || Number.isNaN(d.getTime())) return "—";
@@ -19,9 +16,6 @@ function fmtDateTimeFull(tsOrDate) {
   });
 }
 
-/**
- * Relative time for the title: 7m ago
- */
 function fmtSince(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
   if (!d || Number.isNaN(d.getTime())) return "—";
@@ -62,11 +56,9 @@ export default function FetchHistory({ user }) {
   const renderRunItem = (r) => {
     const isOpen = openId === r.id;
 
-    // Keep your existing labels (but do not show source/userId anywhere)
     const isManual = String(r.source || "").toLowerCase().match(/manual|runsyncnow|http/);
     const hasError = r.ok === false || Boolean(r.error);
 
-    // Key numbers users actually need
     const scanned = Number(r.scanned ?? 0);
     const fetched = Number(r.jobsFetched ?? 0);
     const written = Number(r.jobsWritten ?? r.updated ?? 0);
@@ -80,7 +72,7 @@ export default function FetchHistory({ user }) {
         className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500 cursor-pointer"
         onClick={() => setOpenId(isOpen ? null : r.id)}
       >
-        {/* Hover accent line */}
+
         <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
 
         <div className="flex items-center justify-between gap-4">
@@ -98,7 +90,6 @@ export default function FetchHistory({ user }) {
                 {hasError ? "Failed" : "OK"}
               </span>
 
-              {/* ✅ Jobs added shown in the main header row (NOT right corner) */}
               <span className="text-gray-300">|</span>
               <span className="text-[10px] font-black uppercase text-gray-400 tracking-tight">
                 Jobs Added{" "}
@@ -115,7 +106,6 @@ export default function FetchHistory({ user }) {
             </div>
           </div>
 
-          {/* ✅ Right side now ONLY chevron (no job count) */}
           <div className="flex items-center flex-shrink-0">
             <div
               className={`p-1.5 rounded-lg transition-all ${
@@ -139,10 +129,9 @@ export default function FetchHistory({ user }) {
               className="overflow-hidden"
             >
               <div className="mt-5 pt-5 border-t border-gray-100 space-y-5">
-                {/* ✅ Removed Outcome / New data ingested entirely.
-                    Keep a compact, useful metrics row. */}
+
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-700 bg-gray-50/50 p-4 rounded-xl ring-1 ring-inset ring-gray-100">
-                  
+
                   <div>
                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
                       Duration
@@ -178,7 +167,6 @@ export default function FetchHistory({ user }) {
                   </div>
                 </div>
 
-                {/* Secondary detail tiles (still useful, minimal) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="bg-white p-4 rounded-xl ring-1 ring-inset ring-gray-200 shadow-sm">
                     <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">
@@ -197,7 +185,6 @@ export default function FetchHistory({ user }) {
                   </div>
                 </div>
 
-                {/* Error Box (keep, concise) */}
                 {hasError && (
                   <div className="p-4 rounded-xl bg-red-50 border border-red-100">
                     <span className="text-[10px] font-black uppercase text-red-700 tracking-widest block mb-2">
@@ -218,15 +205,14 @@ export default function FetchHistory({ user }) {
 
   return (
     <div className="py-10 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
-      {/* HEADER SECTION */}
+
       <div className="mb-10">
         <h1 className="text-3xl font-black text-gray-900 tracking-tight">Sync History</h1>
         <p className="text-sm text-gray-500 mt-2 font-medium">Detailed activity logs for your background ingestion tasks.</p>
       </div>
 
-      {/* MAIN CONTAINER */}
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px]">
-        {/* Sub-header */}
+
         <div className="px-6 py-4 border-b border-gray-100 bg-gray-50/30 flex items-center justify-between">
           <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">Activity Log</h3>
           <div className="flex items-center gap-2">
@@ -244,7 +230,6 @@ export default function FetchHistory({ user }) {
           <ul className="divide-y divide-gray-100">{runs.map((r) => renderRunItem(r))}</ul>
         )}
 
-        {/* Footer info */}
         <div className="bg-gray-50/50 py-8 border-t border-gray-100 flex items-center justify-center">
           <div className="flex flex-col items-center gap-1">
             <span className="text-[10px] font-black text-gray-300 uppercase tracking-[0.3em]">End of History</span>

@@ -1,15 +1,14 @@
-// src/components/TopBar.jsx
+
 import React, { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Link, useLocation } from "react-router-dom";
-import { useToast } from "./Toast/ToastProvider.jsx"; // Import the Toast hook
+import { useToast } from "./Toast/ToastProvider.jsx"; 
 
 export default function TopBar({ user, userMeta, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
-  const { showToast } = useToast(); // Initialize toast
+  const { showToast } = useToast(); 
 
-  // Handle logout with a feedback toast
   const handleLogoutClick = () => {
     onLogout();
     showToast("Signed out successfully", "success");
@@ -48,7 +47,7 @@ export default function TopBar({ user, userMeta, onLogout }) {
                     {userMeta?.fullName || "User"}
                   </span>
                   <button
-                    onClick={handleLogoutClick} // Updated to use the wrapper
+                    onClick={handleLogoutClick} 
                     className="text-[11px] font-bold uppercase tracking-wider text-gray-400 hover:text-indigo-600 transition-colors"
                   >
                     Sign Out &rarr;

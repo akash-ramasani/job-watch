@@ -25,11 +25,11 @@ export default function JobSyncNotification({ user }) {
           const runId = change.doc.id;
 
           if (run.finishedAt && (run.status === "DONE" || run.status === "FAILED")) {
-            // Avoid triggering again for the identical run logic
+
             if (lastRunId.current === runId) return;
 
             const finishedMs = run.finishedAt.toMillis();
-            // Show if it finished while using the app, or if it finished within the last 5 minutes before opening
+
             const isRecent = finishedMs > mountTime.current || (Date.now() - finishedMs < 5 * 60 * 1000);
 
             if (isRecent) {
@@ -42,7 +42,6 @@ export default function JobSyncNotification({ user }) {
                 error: run.error || null,
               });
 
-              // Auto dismiss after 6 seconds
               setTimeout(() => {
                 setNotification((current) => (current?.id === runId ? null : current));
               }, 6000);

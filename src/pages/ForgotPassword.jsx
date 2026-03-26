@@ -2,12 +2,12 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { sendPasswordResetEmail } from "firebase/auth";
 import { auth } from "../firebase";
-import { useToast } from "../components/Toast/ToastProvider.jsx"; // Import the Toast hook
+import { useToast } from "../components/Toast/ToastProvider.jsx"; 
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const { showToast } = useToast(); // Initialize Toast
+  const { showToast } = useToast(); 
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -28,7 +28,7 @@ export default function ForgotPassword() {
         <div className="mx-auto w-full max-w-sm">
           <h2 className="text-3xl font-bold tracking-tight text-gray-900">Reset Password</h2>
           <p className="mt-2 text-sm text-gray-500">We'll send a link to your email.</p>
-          
+
           <form onSubmit={onSubmit} className="mt-10 space-y-6">
             <div>
               <label className="block text-sm font-medium text-gray-900 mb-2">Email address</label>
@@ -42,7 +42,7 @@ export default function ForgotPassword() {
                 className="input-standard" 
               />
             </div>
-            
+
             <button 
               type="submit" 
               disabled={busy} 
@@ -50,7 +50,7 @@ export default function ForgotPassword() {
             >
               {busy ? "Sending..." : "Send Link"}
             </button>
-            
+
             <Link 
               to="/login"
               className="block w-full text-center text-sm font-semibold text-indigo-600 mt-4 hover:text-indigo-500"

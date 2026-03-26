@@ -1,10 +1,3 @@
-// src/pages/Home.jsx
-// Replaces “Reset feeds (remove old fields)” with a manual sync trigger (runSyncNow)
-// Calls the Gen2 HTTP function:
-//   https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
-//
-// NOTE: This uses `fetch` directly because runSyncNow is an HTTP onRequest endpoint
-// (not a callable function). So we don’t use httpsCallable here.
 
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -55,7 +48,7 @@ function prettySourceLabel(source) {
 function validateUrlForSource(source, rawUrl) {
   const cleanUrl = (rawUrl || "").trim();
   if (!cleanUrl) return { ok: false, error: "Please enter a URL." };
-  if (!/^https:\/\//i.test(cleanUrl))
+  if (!/^https:\/\
     return { ok: false, error: "Please use a valid https:// URL." };
 
   const rules = URL_RULES[source] || URL_RULES.greenhouse;
@@ -106,7 +99,6 @@ export default function Home({ user }) {
       return;
     }
 
-    // Duplicate check (case-insensitive)
     const candidate = (v.normalizedUrl || "").toLowerCase();
     const isDuplicate = feeds.some((f) => (f.url || "").toLowerCase() === candidate);
     if (isDuplicate) {
@@ -169,7 +161,6 @@ export default function Home({ user }) {
 
       setLastRunSummary(data);
 
-      // Nice toast line
       const scanned = Number(data?.scanned || 0);
       const updated = Number(data?.updated || 0);
       showToast(`Sync complete — scanned ${scanned}, wrote ${updated}`, "success");

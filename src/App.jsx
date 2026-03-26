@@ -1,4 +1,4 @@
-// src/App.jsx
+
 import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
@@ -6,20 +6,17 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { auth, db } from "./firebase";
 
-// Components
 import TopBar from "./components/TopBar.jsx";
 import JobSyncNotification from "./components/JobSyncNotification.jsx";
 
-// Pages
 import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
 import ForgotPassword from "./pages/ForgotPassword.jsx";
-import Home from "./pages/Home.jsx"; // This is now your main landing page
+import Home from "./pages/Home.jsx"; 
 import Jobs from "./pages/Jobs.jsx";
 import Profile from "./pages/Profile.jsx";
 import FetchHistory from "./pages/FetchHistory.jsx";
 
-// Import ToastProvider (Capital 'Toast' for Case Sensitivity Fix)
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 
 export default function App() {
@@ -68,7 +65,6 @@ export default function App() {
       );
     }
 
-    // Authenticated Navigation
     return (
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<Home user={user} />} />

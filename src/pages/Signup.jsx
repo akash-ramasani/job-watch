@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { useToast } from "../components/Toast/ToastProvider.jsx"; // Added Import
+import { useToast } from "../components/Toast/ToastProvider.jsx"; 
 
 export default function Signup() {
   const [email, setEmail] = useState("");
@@ -13,7 +13,7 @@ export default function Signup() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const { showToast } = useToast(); // Initialize Toast
+  const { showToast } = useToast(); 
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -21,7 +21,7 @@ export default function Signup() {
     setBusy(true);
     try {
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      
+
       await setDoc(doc(db, "users", cred.user.uid), {
         email: cred.user.email,
         firstName: firstName.trim(),

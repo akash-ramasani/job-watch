@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
-import { useToast } from "../components/Toast/ToastProvider.jsx"; // Import the Toast hook
+import { useToast } from "../components/Toast/ToastProvider.jsx"; 
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -10,7 +10,7 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const { showToast } = useToast(); // Using the showToast hook
+  const { showToast } = useToast(); 
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -18,10 +18,10 @@ export default function Login() {
     setBusy(true);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
-      showToast("Logged in successfully!", "success"); // Success toast
+      showToast("Logged in successfully!", "success"); 
     } catch (e2) {
       setErr(e2.message || "Login failed");
-      showToast("Login failed. Please try again.", "error"); // Error toast
+      showToast("Login failed. Please try again.", "error"); 
     } finally {
       setBusy(false);
     }

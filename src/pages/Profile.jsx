@@ -7,7 +7,7 @@ import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 export default function Profile({ user, userMeta }) {
   const { showToast } = useToast();
-  
+
   const [formData, setFormData] = useState({
     firstName: "",
     lastName: "",
@@ -17,7 +17,7 @@ export default function Profile({ user, userMeta }) {
     region: "",
     postalCode: ""
   });
-  
+
   const [busy, setBusy] = useState(false);
   const [pushStatus, setPushStatus] = useState(Notification.permission);
 
@@ -26,12 +26,12 @@ export default function Profile({ user, userMeta }) {
       if (!messaging) throw new Error("Push messaging is not supported by your browser.");
       const permission = await Notification.requestPermission();
       setPushStatus(permission);
-      
+
       if (permission === "granted") {
-        const token = await getToken(messaging, { 
+        const token = await getToken(messaging, {
           vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY
         });
-        
+
         if (token) {
           await setDoc(doc(db, "users", user.uid), {
             fcmTokens: [token]
@@ -47,7 +47,6 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
-  // Sync Firestore metadata to local state
   useEffect(() => {
     if (userMeta) {
       setFormData({
@@ -62,7 +61,6 @@ export default function Profile({ user, userMeta }) {
     }
   }, [userMeta]);
 
-  // Handle Firebase Email Verification
   async function handleVerify() {
     try {
       await sendEmailVerification(user);
@@ -72,7 +70,6 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
-  // Save profile updates to Firestore
   async function handleSave(e) {
     e.preventDefault();
     setBusy(true);
@@ -82,7 +79,7 @@ export default function Profile({ user, userMeta }) {
         fullName: `${formData.firstName} ${formData.lastName}`.trim(),
         updatedAt: serverTimestamp()
       }, { merge: true });
-      
+
       showToast("Profile updated successfully", "success");
     } catch (error) {
       console.error("Save Error:", error);
@@ -98,7 +95,7 @@ export default function Profile({ user, userMeta }) {
 
   return (
     <form onSubmit={handleSave} className="space-y-12 py-10" style={{ fontFamily: 'Ubuntu, sans-serif' }}>
-      {/* Profile Section */}
+
       <div className="section-grid">
         <div>
           <h2 className="text-base font-semibold text-gray-900 uppercase tracking-widest text-[10px] font-black">Personal Information</h2>
@@ -108,7 +105,7 @@ export default function Profile({ user, userMeta }) {
         </div>
 
         <div className="grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
-          {/* First Name */}
+
           <div className="sm:col-span-3">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">First name</label>
             <div className="mt-2">
@@ -122,7 +119,6 @@ export default function Profile({ user, userMeta }) {
             </div>
           </div>
 
-          {/* Last Name */}
           <div className="sm:col-span-3">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">Last name</label>
             <div className="mt-2">
@@ -136,7 +132,6 @@ export default function Profile({ user, userMeta }) {
             </div>
           </div>
 
-          {/* Email with Verification Logic */}
           <div className="sm:col-span-4">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">Email address</label>
             <div className="mt-2 relative flex items-center">
@@ -164,7 +159,6 @@ export default function Profile({ user, userMeta }) {
             </div>
           </div>
 
-          {/* University/Education */}
           <div className="sm:col-span-4">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">University</label>
             <div className="mt-2">
@@ -179,7 +173,6 @@ export default function Profile({ user, userMeta }) {
             </div>
           </div>
 
-          {/* Location Details */}
           <div className="sm:col-span-3">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">Country</label>
             <div className="mt-2">
@@ -238,8 +231,7 @@ export default function Profile({ user, userMeta }) {
         </div>
       </div>
 
-      {/* Notifications Section */}
-      <div className="section-grid mt-12 border-t border-gray-200 pt-12">
+      <div className="section-grid mt-12">
         <div>
           <h2 className="text-base font-semibold text-gray-900 uppercase tracking-widest text-[10px] font-black">Push Notifications</h2>
           <p className="mt-1 text-sm text-gray-500">
@@ -271,7 +263,6 @@ export default function Profile({ user, userMeta }) {
         </div>
       </div>
 
-      {/* Action Buttons */}
       <div className="mt-6 flex items-center justify-end">
         <button
           type="submit"

@@ -2,7 +2,7 @@ importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-app-compat.js'
 importScripts('https://www.gstatic.com/firebasejs/10.9.0/firebase-messaging-compat.js');
 
 firebase.initializeApp({
-  // Use atob() to decode the base64 string, effectively bypassing all GitHub automated secret scanners!
+
   apiKey: atob("QUl6YVN5QS1KeEw5QXBSNnEyWE1USF9CREhrLWxpTUhDMlpxZTZr"),
   authDomain: "greenhouse-jobs-scrapper.firebaseapp.com",
   projectId: "greenhouse-jobs-scrapper",
@@ -15,7 +15,7 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
   console.log('[firebase-messaging-sw.js] Received background message ', payload);
-  
+
   const notificationTitle = payload.notification?.title || "JobWatch";
   const notificationOptions = {
     body: payload.notification?.body || "",

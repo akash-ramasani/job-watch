@@ -1,4 +1,4 @@
-// src/pages/Jobs.jsx
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
@@ -72,7 +72,6 @@ function timeframeToThresholdTs(timeframe) {
   return Timestamp.fromDate(new Date(Date.now() - ms));
 }
 
-// Try to extract state codes from location tokens / string (fallback only)
 function extractStateCodesFromLocationTokens(tokensOrString) {
   const tokens = Array.isArray(tokensOrString) ? tokensOrString : [tokensOrString].filter(Boolean);
   const found = new Set();
@@ -105,9 +104,6 @@ export default function Jobs({ user }) {
 
   const observer = useRef(null);
 
-  /**
-   * Companies (now created by sync in users/{uid}/companies/{feedId})
-   */
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -124,14 +120,6 @@ export default function Jobs({ user }) {
     return () => { cancelled = true; };
   }, [user.uid]);
 
-  /**
-   * Fetch jobs
-   *
-   * Updated to match your new Firestore schema:
-   * - collection: users/{uid}/jobs
-   * - sort/filter: sourceUpdatedTs
-   * - company filter: companyKey
-   */
   const fetchJobs = useCallback(
     async (isFirstPage = true) => {
       setLoading(true);
@@ -145,7 +133,6 @@ export default function Jobs({ user }) {
           constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
         }
 
-        // ✅ canonical sort field from index.js
         constraints.push(orderBy("sourceUpdatedTs", "desc"));
 
         if (timeframe !== "all") {
@@ -174,7 +161,6 @@ export default function Jobs({ user }) {
               ? data.stateCodes
               : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
 
-          // display updated = sourceUpdatedTs
           const updatedShort =
             data.sourceUpdatedTs?.toDate ? shortAgoFromDate(data.sourceUpdatedTs.toDate()) : "—";
 
@@ -186,10 +172,8 @@ export default function Jobs({ user }) {
             locationName,
             stateCodes,
 
-            // link priority: jobUrl -> applyUrl -> "#"
             absolute_url: data.jobUrl || data.applyUrl || "#",
 
-            // discovered time (prefer firstSeenAt, fallback fetchedAt)
             firstSeenAt: data.firstSeenAt || data.fetchedAt || null,
 
             _updatedShort: updatedShort,
@@ -219,7 +203,7 @@ export default function Jobs({ user }) {
     setJobs([]);
     setHasMore(true);
     fetchJobs(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [selectedKeys, timeframe]);
 
   const lastElementRef = useCallback(
@@ -259,11 +243,6 @@ export default function Jobs({ user }) {
     }
   };
 
-  /**
-   * Client-side filters:
-   * - titleSearch
-   * - stateFilter (stateCodes preferred)
-   */
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
@@ -378,7 +357,7 @@ export default function Jobs({ user }) {
 
   return (
     <div className="py-8 px-4 md:px-0 min-h-screen" style={{ fontFamily: "Ubuntu, sans-serif" }}>
-      {/* HEADER */}
+
       <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4 text-center md:text-left">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Opportunities</h1>
@@ -404,7 +383,6 @@ export default function Jobs({ user }) {
         </div>
       </div>
 
-      {/* SEARCH + TOGGLE */}
       <div className="flex flex-wrap items-center gap-4 p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
         <div className="min-w-[240px] flex-1 flex items-end gap-3 h-fit">
           <div className="flex-1">
@@ -449,7 +427,6 @@ export default function Jobs({ user }) {
         </div>
       </div>
 
-      {/* FILTER PANEL */}
       <AnimatePresence>
         {isFilterExpanded && (
           <motion.div
@@ -460,7 +437,7 @@ export default function Jobs({ user }) {
             className="overflow-hidden mb-8"
           >
             <div className="space-y-8 py-4 px-1">
-              {/* State */}
+
               <div className="space-y-4">
                 <div className="flex items-center gap-2 px-1">
                   <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">
@@ -501,7 +478,6 @@ export default function Jobs({ user }) {
                 </div>
               </div>
 
-              {/* Company */}
               <div className="space-y-4">
                 <div className="flex items-center gap-2 px-1">
                   <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">
@@ -555,7 +531,6 @@ export default function Jobs({ user }) {
         )}
       </AnimatePresence>
 
-      {/* LIST */}
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
         {(loading || isProcessing) && jobs.length === 0 ? (
           <div className="flex-grow divide-y divide-gray-100">

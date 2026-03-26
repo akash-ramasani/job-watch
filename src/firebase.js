@@ -18,7 +18,6 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-// Analytics & Messaging are browser-only
 export let analytics = null;
 export let messaging = null;
 
