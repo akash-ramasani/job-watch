@@ -18,14 +18,15 @@ import {
 function fmtDateTimeFull(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
   if (!d || Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString(undefined, {
+  return d.toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
     year: "numeric",
     month: "short",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  });
+  }) + " PT";
 }
 
 function fmtSince(tsOrDate) {
@@ -87,8 +88,16 @@ export default function FetchHistory({ user }) {
       .filter((r) => r.ranAt?.toDate)
       .map((r) => {
         const d = r.ranAt.toDate();
+        const label = d.toLocaleString("en-US", {
+          timeZone: "America/Los_Angeles",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
         return {
-          label: `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+          label,
           written: Number(r.jobsWritten ?? r.updated ?? 0),
           scanned: Number(r.scanned ?? 0),
           fetched: Number(r.jobsFetched ?? 0),

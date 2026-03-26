@@ -34,6 +34,10 @@ const admin = require("firebase-admin");
 const pLimitPkg = require("p-limit");
 const pLimit = pLimitPkg.default ?? pLimitPkg;
 
+const Anthropic = require("@anthropic-ai/sdk");
+const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
+const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
+
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
@@ -968,6 +972,165 @@ exports.deleteSpacexJobs = onRequest(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("deleteSpacexJobs failed:", e);
+      return res.status(500).json({ error: msg });
+    }
+  }
+);
+
+/**
+ * =====================================================================================
+ * 🤖 AI ASSISTANT: Chat with your job data
+ * =====================================================================================
+ *
+ * Trigger:
+ * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
+ */
+exports.askAssistant = onRequest(
+  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: true },
+  async (req, res) => {
+    try {
+      const { messages, userId } = req.body;
+      const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+      
+      const activeUserId = userId || ADMIN_UID; // Default to admin for now if missing
+      
+      if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: "Messages array is required." });
+      }
+
+      const tools = [
+        {
+          name: "list_feeds",
+          description: "List all active job feeds/companies for the user.",
+          input_schema: {
+            type: "object",
+            properties: {},
+          },
+        },
+        {
+          name: "get_recent_jobs",
+          description: "Fetch the most recent job listings across all sources.",
+          input_schema: {
+            type: "object",
+            properties: {
+              limit: { type: "number", description: "Number of jobs to fetch (default: 10)" },
+            },
+          },
+        },
+        {
+          name: "search_jobs",
+          description: "Search for jobs by title or company name in the recent results.",
+          input_schema: {
+            type: "object",
+            properties: {
+              query: { type: "string", description: "Search query (title or company)" },
+              limit: { type: "number", description: "Number of results (default: 5)" },
+            },
+            required: ["query"],
+          },
+        },
+        {
+          name: "get_sync_status",
+          description: "Check the status of the latest job sync runs.",
+          input_schema: {
+            type: "object",
+            properties: {
+              limit: { type: "number", description: "Number of latest runs (default: 3)" },
+            },
+          },
+        },
+      ];
+
+      let currentMessages = [...messages];
+      let finalResponse = null;
+
+      // Tool handling loop
+      while (true) {
+        const response = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 1024,
+          tools: tools,
+          messages: currentMessages,
+          system: `You are the JobWatch AI Assistant. You help users manage their job tracking, sync data, and analyze market trends.
+          You have access to the user's specific job listings, feeds, and sync history via tools.
+          Always be concise, professional, and helpful. 
+          IMPORTANT: All timestamps and dates in your responses must be in Pacific Time (PT). 
+          Current User ID: ${activeUserId}`,
+        });
+
+        if (response.stop_reason !== "tool_use") {
+          finalResponse = response;
+          break;
+        }
+
+        // Handle tool calls
+        const toolResults = [];
+        for (const block of response.content) {
+          if (block.type === "tool_use") {
+            const toolName = block.name;
+            const args = block.input;
+            const toolId = block.id;
+
+            let resultData;
+            try {
+              switch (toolName) {
+                case "list_feeds": {
+                  const snap = await db.collection("users").doc(activeUserId).collection("feeds").where("archivedAt", "==", null).get();
+                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  break;
+                }
+                case "get_recent_jobs": {
+                  const limit = args.limit || 10;
+                  const snap = await db.collection("users").doc(activeUserId).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(limit).get();
+                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  break;
+                }
+                case "search_jobs": {
+                  const query = args.query.toLowerCase();
+                  const limit = args.limit || 5;
+                  const snap = await db.collection("users").doc(activeUserId).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(50).get();
+                  resultData = snap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .filter(j => (j.title && j.title.toLowerCase().includes(query)) || (j.companyName && j.companyName.toLowerCase().includes(query)))
+                    .slice(0, limit);
+                  break;
+                }
+                case "get_sync_status": {
+                  const limit = args.limit || 3;
+                  const snap = await db.collection("users").doc(activeUserId).collection("syncRuns").orderBy("startedAt", "desc").limit(limit).get();
+                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  break;
+                }
+                default:
+                  resultData = { error: "Unknown tool" };
+              }
+            } catch (err) {
+              resultData = { error: err.message };
+            }
+
+            toolResults.push({
+              type: "tool_result",
+              tool_use_id: toolId,
+              content: JSON.stringify(resultData),
+            });
+          }
+        }
+
+        // Add assistant's response and tool results to history
+        currentMessages.push({ role: "assistant", content: response.content });
+        currentMessages.push({ role: "user", content: toolResults });
+      }
+
+      return res.json({
+        ok: true,
+        response: {
+          role: "assistant",
+          content: finalResponse.content[0].text,
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error("askAssistant failed:", e);
       return res.status(500).json({ error: msg });
     }
   }
