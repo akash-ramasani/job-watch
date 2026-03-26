@@ -19,11 +19,17 @@ export default function Profile({ user, userMeta }) {
   });
 
   const [busy, setBusy] = useState(false);
-  const [pushStatus, setPushStatus] = useState(Notification.permission);
+  const [pushStatus, setPushStatus] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
 
   async function handleEnablePush() {
+    if (typeof Notification === "undefined") {
+      showToast("Push notifications are not supported in this Safari tab. Please add to Home Screen first.", "error");
+      return;
+    }
     try {
-      if (!messaging) throw new Error("Push messaging is not supported by your browser.");
+      if (!messaging) throw new Error("Firebase Messaging not initialized.");
       const permission = await Notification.requestPermission();
       setPushStatus(permission);
 
@@ -48,18 +54,19 @@ export default function Profile({ user, userMeta }) {
   }
 
   async function testNotification() {
-    if (Notification.permission === "granted") {
-      try {
-        const reg = await navigator.serviceWorker.ready;
-        await reg.showNotification("JobWatch Sync Complete", {
-          body: "Success! We scanned 145 jobs and added 12 new roles for you.",
-          icon: "/vite.svg"
-        });
-      } catch (err) {
-        showToast("Error showing notification: " + err.message, "error");
-      }
-    } else {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
       showToast("Please enable notifications above first.", "error");
+      return;
+    }
+
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      await reg.showNotification("JobWatch Sync Complete", {
+        body: "Success! We scanned 145 jobs and added 12 new roles for you.",
+        icon: "/vite.svg"
+      });
+    } catch (err) {
+      showToast("Error showing notification: " + err.message, "error");
     }
   }
 
