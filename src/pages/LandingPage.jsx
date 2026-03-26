@@ -151,7 +151,7 @@ const fadeUp = {
 };
 
 const STATS = [
-  { value: "40K+", label: "Jobs Tracked" },
+  { value: "33K+", label: "Jobs Tracked" },
   { value: "650+", label: "Companies" },
   { value: "99.9%", label: "Uptime" },
   { value: "<1min", label: "Alert Speed" },
@@ -284,7 +284,7 @@ export default function LandingPage() {
     <div style={{ fontFamily: "Ubuntu, sans-serif" }}>
 
       {/* ═══ PUBLIC NAVBAR ═══ */}
-      <nav className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/80 backdrop-blur-md">
+      <nav className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md">
         <div className="absolute inset-0 hero-gradient opacity-[0.03] -z-10" />
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
@@ -403,7 +403,7 @@ export default function LandingPage() {
       </section>
 
       {/* ═══ TRUSTED COMPANIES (Marquee) ═══ */}
-      <section className="relative py-24 bg-gray-50/50 overflow-hidden border-y border-gray-100">
+      <section className="relative py-24 bg-gray-50/50 overflow-hidden">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-12">
             <div>
