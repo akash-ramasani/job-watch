@@ -388,7 +388,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
         jobsFetched += rawJobs.length;
 
         const normalized = rawJobs
-          .map((j) => normalizeJobMinimal(j, { source, companyName, companyKey: feedId, now }))
+          .map((j) => normalizeJobMinimal(j, { source, companyName, companyKey: feedId, now, url }))
           .filter(Boolean);
 
         const locationFiltered = normalized.filter(jobMatchesLocationFilter);
@@ -471,8 +471,8 @@ async function listUserIdsToProcess() {
  * ----------------------------
  */
 async function fetchJobsFromFeed(url, source, recentCutoffMs) {
-  if (source.includes("microsoft") || source.includes("paypal") || source.includes("eightfold")) {
-    return await fetchMicrosoftJobsPaginated(url, recentCutoffMs);
+  if (source.includes("eightfold") || source.includes("microsoft") || source.includes("paypal")) {
+    return await fetchEightfoldJobsPaginated(url, recentCutoffMs);
   }
 
   const json = await fetchJson(url);
@@ -496,11 +496,11 @@ async function fetchJobsFromFeed(url, source, recentCutoffMs) {
 }
 
 /**
- * Paginated fetcher for Microsoft Careers API.
+ * Paginated fetcher for Eightfold-based APIs (including Microsoft, PayPal, etc.).
  * Uses offset-based pagination (start=0, 10, 20, ...).
  * Stops early when jobs are older than recentCutoff to avoid unnecessary requests.
  */
-async function fetchMicrosoftJobsPaginated(baseUrl, recentCutoffMs) {
+async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
   const PAGE_SIZE = 10;
   const MAX_JOBS = 5000;
   const allPositions = [];
@@ -536,7 +536,7 @@ async function fetchMicrosoftJobsPaginated(baseUrl, recentCutoffMs) {
     if (offset >= totalCount) break;
   }
 
-  logger.info(`Microsoft pagination: fetched ${allPositions.length} total positions`);
+  logger.info(`Eightfold pagination: fetched ${allPositions.length} total positions`);
   return allPositions;
 }
 
@@ -572,7 +572,7 @@ async function safeReadText(resp) {
  * ----------------------------
  */
 function normalizeJobMinimal(rawJob, ctx) {
-  const { source, companyName, companyKey, now } = ctx;
+  const { source, companyName, companyKey, now, url } = ctx;
   if (!rawJob || typeof rawJob !== "object") return null;
 
   if (source.includes("greenhouse")) {
@@ -667,12 +667,20 @@ function normalizeJobMinimal(rawJob, ctx) {
     };
   }
 
-  // Eightfold-based sources (Microsoft, PayPal, etc.)
-  if (source.includes("microsoft") || source.includes("paypal") || source.includes("eightfold")) {
+  if (source.includes("eightfold") || source.includes("microsoft") || source.includes("paypal")) {
     const externalId = rawJob.id != null ? String(rawJob.id)
       : (rawJob.displayJobId != null ? String(rawJob.displayJobId) : null);
 
-    const domain = source.includes("microsoft") ? "careers.microsoft.com" : "paypal.eightfold.ai";
+    let domain = "careers.microsoft.com";
+    try {
+      if (url) {
+        const urlObj = new URL(url);
+        domain = urlObj.hostname;
+      }
+    } catch (e) {
+      // fallback
+    }
+
     const jobUrl = rawJob.positionUrl
       ? `https://${domain}${rawJob.positionUrl}`
       : null;
@@ -703,7 +711,7 @@ function normalizeJobMinimal(rawJob, ctx) {
     if (rawJob.workLocationOption) meta["Work Location"] = rawJob.workLocationOption;
     if (rawJob.displayJobId) meta["Job ID"] = rawJob.displayJobId;
 
-    const sourceName = source.includes("microsoft") ? "microsoft" : (source.includes("paypal") ? "paypal" : "eightfold");
+    const sourceName = "eightfold";
     const jobDocId = makeJobDocId({
       source: sourceName,
       companyKey,

@@ -1,5 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   addDoc,
   collection,
@@ -29,20 +30,8 @@ const URL_RULES = {
       /^https:\/\/api\.ashbyhq\.com\/posting-api\/job-board\/[^/?#]+(?:\?.*)?$/i.test(u),
     normalize: (u) => u.trim(),
   },
-  microsoft: {
-    label: "Microsoft Careers API",
-    placeholder: "https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&...",
-    isValid: (u) => /\/api\/pcsx\/search/i.test(u),
-    normalize: (u) => u.trim(),
-  },
-  paypal: {
-    label: "PayPal (Eightfold) API",
-    placeholder: "https://paypal.eightfold.ai/api/pcsx/search?domain=paypal.com&...",
-    isValid: (u) => /\/api\/pcsx\/search/i.test(u),
-    normalize: (u) => u.trim(),
-  },
   eightfold: {
-    label: "Eightfold.ai API",
+    label: "Eightfold.ai / Microsoft Careers API",
     placeholder: "https://<company>.eightfold.ai/api/pcsx/search?domain=<company>.com&...",
     isValid: (u) => /\/api\/pcsx\/search/i.test(u),
     normalize: (u) => u.trim(),
@@ -53,18 +42,12 @@ function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
   if (u.includes("api.ashbyhq.com/posting-api/job-board/")) return "ashby";
-  if (u.includes("/api/pcsx/search")) {
-    if (u.includes("paypal.eightfold.ai")) return "paypal";
-    if (u.includes("careers.microsoft.com")) return "microsoft";
-    return "eightfold";
-  }
+  if (u.includes("/api/pcsx/search")) return "eightfold";
   return "greenhouse";
 }
 
 function prettySourceLabel(source) {
   if (source === "ashby") return "AshbyHQ";
-  if (source === "microsoft") return "Microsoft Careers";
-  if (source === "paypal") return "PayPal (Eightfold)";
   if (source === "eightfold") return "Eightfold.ai";
   return "Greenhouse";
 }
@@ -82,7 +65,7 @@ function validateUrlForSource(source, rawUrl) {
       error:
         source === "ashby"
           ? "Ashby URL should look like: https://api.ashbyhq.com/posting-api/job-board/<company>"
-          : (source === "microsoft" || source === "paypal" || source === "eightfold")
+          : source === "eightfold"
             ? "Eightfold/Microsoft URL should look like: https://<domain>/api/pcsx/search?domain=<domain>&..."
             : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
@@ -92,8 +75,10 @@ function validateUrlForSource(source, rawUrl) {
 
 export default function Feeds({ user }) {
   const { showToast } = useToast();
-  const [company, setCompany] = useState("");
-  const [url, setUrl] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const [company, setCompany] = useState(searchParams.get("company") || "");
+  const [url, setUrl] = useState(searchParams.get("url") || "");
   const [feeds, setFeeds] = useState([]);
   const [busyArchiveId, setBusyArchiveId] = useState(null);
   const [busyRunNow, setBusyRunNow] = useState(false);
@@ -220,9 +205,8 @@ export default function Feeds({ user }) {
           </h2>
           <p className="mt-1 text-sm text-gray-500">
             Connect <span className="font-semibold">Greenhouse</span>,{" "}
-            <span className="font-semibold">AshbyHQ</span>,{" "}
-            <span className="font-semibold">Microsoft Careers</span>, and{" "}
-            <span className="font-semibold">Eightfold.ai</span> (PayPal, etc.) job boards.
+            <span className="font-semibold">AshbyHQ</span>, and{" "}
+            <span className="font-semibold">Eightfold.ai</span> (Microsoft, PayPal, Nvidia, etc.) job boards.
           </p>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -295,14 +279,9 @@ export default function Feeds({ user }) {
                     https://api.ashbyhq.com/posting-api/job-board/&lt;company&gt;
                   </span>
                   <br />
-                  Microsoft:{" "}
+                  Eightfold / Microsoft:{" "}
                   <span className="font-mono">
-                    https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&amp;...
-                  </span>
-                  <br />
-                  PayPal / Eightfold:{" "}
-                  <span className="font-mono">
-                    https://paypal.eightfold.ai/api/pcsx/search?domain=paypal.com&amp;...
+                    https://&lt;domain&gt;.eightfold.ai/api/pcsx/search?domain=&lt;domain&gt;.com&amp;...
                   </span>
                 </p>
               </div>

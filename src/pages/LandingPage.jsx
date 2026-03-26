@@ -159,9 +159,9 @@ const STATS = [
 
 const FEATURED_COMPANIES = [
   { name: "Microsoft", domain: "microsoft.com" },
-  { name: "LinkedIn", domain: "linkedin.com" },
+  { name: "NVIDIA", domain: "nvidia.com" },
+  { name: "PayPal", domain: "paypal.com" },
   { name: "Google DeepMind", domain: "deepmind.com" },
-  { name: "OpenAI", domain: "openai.com" },
   { name: "Anthropic", domain: "anthropic.com" },
   { name: "xAI", domain: "x.ai" },
   { name: "Airbnb", domain: "airbnb.com" },
@@ -335,7 +335,7 @@ export default function LandingPage() {
             >
               <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6">
                 <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-                Now tracking Greenhouse & AshbyHQ
+                Now tracking Greenhouse, AshbyHQ & Eightfold.ai
               </span>
             </motion.div>
 
@@ -615,6 +615,18 @@ export default function LandingPage() {
                   <p className="opacity-90 mt-2">› Syncing <span className="text-cyan-400">Microsoft Careers</span>...</p>
                   <p className="text-emerald-400 ml-4 font-semibold">✔ Smart pagination complete (stopped at cutoff)</p>
                   <p className="text-emerald-400 ml-4 font-semibold">✔ Extracted 42 new roles</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 2.2 }}>
+                  <p className="opacity-90 mt-2">› Syncing <span className="text-indigo-400">PayPal Careers</span>...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Eightfold API sync successful</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Extracted 19 new roles</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 2.6 }}>
+                  <p className="opacity-90 mt-2">› Syncing <span className="text-green-400">NVIDIA Careers</span>...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Smart pagination complete</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Extracted 31 new roles</p>
                 </motion.div>
 
                 <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 2.5 }}>

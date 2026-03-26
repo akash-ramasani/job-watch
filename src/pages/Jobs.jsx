@@ -358,7 +358,7 @@ export default function Jobs({ user }) {
               Company
             </label>
             <input
-              placeholder="e.g. Microsoft — Tab to complete, Enter to select"
+              placeholder="e.g. NVIDIA or Microsoft — Tab to complete, Enter to select"
               className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full"
               value={companySearch}
               onChange={(e) => setCompanySearch(e.target.value)}
