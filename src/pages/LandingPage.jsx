@@ -151,16 +151,16 @@ const fadeUp = {
 };
 
 const STATS = [
-  { value: "10K+", label: "Jobs Tracked" },
+  { value: "40K+", label: "Jobs Tracked" },
   { value: "650+", label: "Companies" },
   { value: "99.9%", label: "Uptime" },
   { value: "<1min", label: "Alert Speed" },
 ];
 
 const FEATURED_COMPANIES = [
-  { name: "Microsoft", domain: "microsoft.com" },
+  { name: "Morgan Stanley", domain: "morganstanley.com" },
+  { name: "BNY Mellon", domain: "bnymellon.com" },
   { name: "NVIDIA", domain: "nvidia.com" },
-  { name: "PayPal", domain: "paypal.com" },
   { name: "Google DeepMind", domain: "deepmind.com" },
   { name: "Anthropic", domain: "anthropic.com" },
   { name: "xAI", domain: "x.ai" },
