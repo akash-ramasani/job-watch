@@ -66,7 +66,7 @@ export default function App() {
 
     return (
       <Routes location={location} key={location.pathname}>
-        <Route path="/" element={<Home user={user} />} />
+        <Route path="/" element={<Home user={user} userMeta={userMeta} />} />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
         <Route path="/history" element={<FetchHistory user={user} />} />
