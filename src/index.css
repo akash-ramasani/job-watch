@@ -104,3 +104,28 @@ body {
 .testimonial-card:hover {
   @apply bg-indigo-50/50;
 }
+
+/* 10. Marquee Animations */
+@keyframes scroll-left {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(calc(-50% - 1rem)); } 
+}
+
+.animate-marquee {
+  animation: scroll-left 70s linear infinite;
+}
+
+@keyframes scroll-right {
+  0% { transform: translateX(calc(-50% - 1rem)); }
+  100% { transform: translateX(0); }
+}
+
+.animate-marquee-reverse {
+  animation: scroll-right 70s linear infinite;
+}
+
+/* Smooth pausing handled by group-hover scaling in React */
+.group:hover .animate-marquee,
+.group:hover .animate-marquee-reverse {
+  animation-play-state: paused;
+}

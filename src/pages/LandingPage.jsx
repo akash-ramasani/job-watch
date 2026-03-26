@@ -363,67 +363,73 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ═══ TRUSTED COMPANIES ═══ */}
-      <section className="relative py-24 overflow-hidden">
-        {/* Background accents */}
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white via-indigo-50/30 to-white" />
-        <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 h-px w-3/4 bg-gradient-to-r from-transparent via-indigo-200 to-transparent" />
-
-        <div className="relative mx-auto max-w-7xl px-6 lg:px-8">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.6 }}
-            className="text-center mb-14"
-          >
-            <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-5">
-              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-indigo-500" />
-              {FEATURED_COMPANIES.length}+ Companies
-            </span>
-            <p className="text-2xl sm:text-4xl font-bold text-gray-900 tracking-tight">
-              Tracking the companies you want to work at
-            </p>
-            <p className="mt-4 text-base text-gray-500 max-w-lg mx-auto">
-              From AI labs to fintech unicorns — every new opening, the moment it's posted.
-            </p>
-          </motion.div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true }}
-            transition={{ duration: 0.8, delay: 0.2 }}
-            className="relative rounded-3xl bg-white ring-1 ring-gray-200 shadow-xl shadow-gray-100/50 overflow-hidden"
-          >
-            <div className="grid grid-cols-4 gap-px bg-gray-200/60 sm:grid-cols-7">
-              {FEATURED_COMPANIES.map((company) => (
-                <div
-                  key={company.domain}
-                  className="group bg-white p-5 sm:p-6 flex items-center justify-center cursor-default relative overflow-hidden"
-                >
-                  <img
-                    src={`https://img.logo.dev/${company.domain}?token=${LOGO_DEV_KEY}&size=128`}
-                    alt={company.name}
-                    width={158}
-                    height={48}
-                    className="max-h-7 sm:max-h-8 w-full object-contain grayscale opacity-50 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-500 group-hover:scale-110"
-                    loading="lazy"
-                  />
-                  {/* In-cell tooltip */}
-                  <div className="absolute inset-0 flex items-end justify-center pb-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <span className="rounded-md bg-gray-900/80 backdrop-blur-sm px-2 py-0.5 text-[9px] font-semibold text-white whitespace-nowrap">
-                      {company.name}
-                    </span>
-                  </div>
-                </div>
-              ))}
+      {/* ═══ TRUSTED COMPANIES (Marquee) ═══ */}
+      <section className="relative py-24 bg-gray-50/50 overflow-hidden border-y border-gray-100">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-6 mb-12">
+            <div>
+              <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+                Tracking Top Companies
+              </h2>
+              <p className="text-3xl font-bold text-gray-900 tracking-tight">
+                Your pipeline, automated
+              </p>
             </div>
-          </motion.div>
+            <p className="text-sm text-gray-500 max-w-sm sm:text-right">
+              Currently monitoring {FEATURED_COMPANIES.length}+ industry leaders for new opportunities every hour.
+            </p>
+          </div>
         </div>
 
-        {/* Bottom gradient line */}
-        <div className="pointer-events-none absolute left-1/2 bottom-0 -translate-x-1/2 h-px w-3/4 bg-gradient-to-r from-transparent via-indigo-200 to-transparent" />
+        {/* Marquee Track 1 (Left) */}
+        <div className="relative mt-10 w-full overflow-hidden flex group">
+          <div className="absolute left-0 top-0 bottom-0 w-16 sm:w-32 bg-gradient-to-r from-gray-50/50 to-transparent z-10 pointer-events-none" />
+          <div className="absolute right-0 top-0 bottom-0 w-16 sm:w-32 bg-gradient-to-l from-gray-50/50 to-transparent z-10 pointer-events-none" />
+
+          <div className="flex gap-4 sm:gap-6 px-4 animate-marquee min-w-max transition-transform duration-[2000ms] ease-out">
+            {[...FEATURED_COMPANIES.slice(0, Math.ceil(FEATURED_COMPANIES.length / 2)), ...FEATURED_COMPANIES.slice(0, Math.ceil(FEATURED_COMPANIES.length / 2))].map((company, i) => (
+              <div
+                key={`${company.domain}-row1-${i}`}
+                className="group/card flex items-center gap-4 h-20 w-48 sm:h-24 sm:w-56 rounded-2xl bg-white border border-gray-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_20px_-8px_rgba(79,70,229,0.15)] hover:border-indigo-100 transition-all duration-300 px-6 cursor-default"
+              >
+                <img
+                  src={`https://img.logo.dev/${company.domain}?token=${LOGO_DEV_KEY}&size=128`}
+                  alt={`${company.name} logo`}
+                  className="max-h-8 w-8 object-contain grayscale opacity-50 group-hover/card:grayscale-0 group-hover/card:opacity-100 transition-all duration-500"
+                  loading="lazy"
+                />
+                <span className="text-sm font-semibold text-gray-500 group-hover/card:text-gray-900 transition-colors duration-300 truncate">
+                  {company.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Marquee Track 2 (Right) */}
+        <div className="relative mt-4 sm:mt-6 w-full overflow-hidden flex group">
+          <div className="absolute left-0 top-0 bottom-0 w-16 sm:w-32 bg-gradient-to-r from-gray-50/50 to-transparent z-10 pointer-events-none" />
+          <div className="absolute right-0 top-0 bottom-0 w-16 sm:w-32 bg-gradient-to-l from-gray-50/50 to-transparent z-10 pointer-events-none" />
+
+          <div className="flex gap-4 sm:gap-6 px-4 animate-marquee-reverse min-w-max transition-transform duration-[2000ms] ease-out">
+            {[...FEATURED_COMPANIES.slice(Math.ceil(FEATURED_COMPANIES.length / 2)), ...FEATURED_COMPANIES.slice(Math.ceil(FEATURED_COMPANIES.length / 2))].map((company, i) => (
+              <div
+                key={`${company.domain}-row2-${i}`}
+                className="group/card flex items-center gap-4 h-20 w-48 sm:h-24 sm:w-56 rounded-2xl bg-white border border-gray-100 shadow-[0_2px_8px_-4px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_20px_-8px_rgba(79,70,229,0.15)] hover:border-indigo-100 transition-all duration-300 px-6 cursor-default"
+              >
+                <img
+                  src={`https://img.logo.dev/${company.domain}?token=${LOGO_DEV_KEY}&size=128`}
+                  alt={`${company.name} logo`}
+                  className="max-h-8 w-8 object-contain grayscale opacity-50 group-hover/card:grayscale-0 group-hover/card:opacity-100 transition-all duration-500"
+                  loading="lazy"
+                />
+                <span className="text-sm font-semibold text-gray-500 group-hover/card:text-gray-900 transition-colors duration-300 truncate">
+                  {company.name}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {/* ═══ FEATURES ═══ */}
