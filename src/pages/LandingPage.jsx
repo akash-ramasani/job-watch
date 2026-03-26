@@ -1,6 +1,15 @@
 import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 /* ── Data ──────────────────────────────────────────────────── */
 
@@ -147,6 +156,33 @@ const STATS = [
   { value: "99.9%", label: "Uptime" },
   { value: "<1min", label: "Alert Speed" },
 ];
+
+const DEMO_CHART_DATA = [
+  { label: "Mon 08:00", written: 12 },
+  { label: "Mon 14:00", written: 28 },
+  { label: "Tue 08:00", written: 8 },
+  { label: "Tue 14:00", written: 42 },
+  { label: "Wed 08:00", written: 15 },
+  { label: "Wed 14:00", written: 35 },
+  { label: "Thu 08:00", written: 22 },
+  { label: "Thu 14:00", written: 51 },
+  { label: "Fri 08:00", written: 18 },
+  { label: "Fri 14:00", written: 44 },
+  { label: "Sat 08:00", written: 9 },
+  { label: "Sat 14:00", written: 31 },
+];
+
+function DemoTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg bg-gray-900 px-3 py-2 shadow-lg">
+      <p className="text-[10px] font-bold text-gray-400 mb-1">{label}</p>
+      <p className="text-xs font-semibold text-white">
+        Jobs: <span style={{ color: "#6366f1" }}>{payload[0].value}</span>
+      </p>
+    </div>
+  );
+}
 
 /* ── Component ─────────────────────────────────────────────── */
 
@@ -350,6 +386,59 @@ export default function LandingPage() {
               </motion.div>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ═══ LIVE CHART DEMO ═══ */}
+      <section className="py-24 bg-gray-50/50">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-12">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              Live Analytics
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Watch your pipeline grow
+            </p>
+            <p className="mt-4 text-base text-gray-500 max-w-xl mx-auto">
+              Every sync adds new jobs to your dashboard. Here's what a typical week looks like.
+            </p>
+          </div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="bg-white rounded-2xl ring-1 ring-gray-200 shadow-sm p-6 sm:p-8 max-w-3xl mx-auto"
+          >
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Jobs Added per Sync</h3>
+                <p className="text-2xl font-bold text-gray-900 mt-1">315</p>
+                <p className="text-xs text-gray-400">new jobs this week</p>
+              </div>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50">
+                <svg className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+                </svg>
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={DEMO_CHART_DATA} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+                <defs>
+                  <linearGradient id="colorDemo" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} allowDecimals={false} />
+                <Tooltip content={<DemoTooltip />} />
+                <Area type="monotone" dataKey="written" stroke="#6366f1" strokeWidth={2} fill="url(#colorDemo)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </motion.div>
         </div>
       </section>
 

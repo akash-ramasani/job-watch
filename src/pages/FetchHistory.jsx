@@ -1,7 +1,18 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { db } from "../firebase";
 import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+} from "recharts";
 
 function fmtDateTimeFull(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
@@ -40,6 +51,21 @@ function fmtDuration(ms) {
   return `${m}m ${String(rem).padStart(2, "0")}s`;
 }
 
+
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div className="rounded-lg bg-gray-900 px-3 py-2 shadow-lg">
+      <p className="text-[10px] font-bold text-gray-400 mb-1">{label}</p>
+      {payload.map((p) => (
+        <p key={p.name} className="text-xs font-semibold text-white">
+          {p.name}: <span style={{ color: p.color }}>{p.value}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export default function FetchHistory({ user }) {
   const [runs, setRuns] = useState([]);
   const [openId, setOpenId] = useState(null);
@@ -52,6 +78,32 @@ export default function FetchHistory({ user }) {
       setRuns(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     });
   }, [user?.uid]);
+
+  /* ── Chart data ──────────────────────────────────────── */
+  const chartData = useMemo(() => {
+    return [...runs]
+      .reverse()
+      .filter((r) => r.ranAt?.toDate)
+      .map((r) => {
+        const d = r.ranAt.toDate();
+        return {
+          label: `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`,
+          written: Number(r.jobsWritten ?? r.updated ?? 0),
+          scanned: Number(r.scanned ?? 0),
+          fetched: Number(r.jobsFetched ?? 0),
+        };
+      });
+  }, [runs]);
+
+  const totalJobsWritten = useMemo(
+    () => chartData.reduce((sum, d) => sum + d.written, 0),
+    [chartData]
+  );
+
+  const totalScanned = useMemo(
+    () => chartData.reduce((sum, d) => sum + d.scanned, 0),
+    [chartData]
+  );
 
   const renderRunItem = (r) => {
     const isOpen = openId === r.id;
@@ -79,9 +131,8 @@ export default function FetchHistory({ user }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 mb-1.5">
               <span
-                className={`text-[10px] font-black uppercase tracking-tight ${
-                  isManual ? "text-indigo-600" : "text-gray-400"
-                }`}
+                className={`text-[10px] font-black uppercase tracking-tight ${isManual ? "text-indigo-600" : "text-gray-400"
+                  }`}
               >
                 {isManual ? "Manual Run" : "Scheduled Sync"}
               </span>
@@ -108,9 +159,8 @@ export default function FetchHistory({ user }) {
 
           <div className="flex items-center flex-shrink-0">
             <div
-              className={`p-1.5 rounded-lg transition-all ${
-                isOpen ? "bg-indigo-50 text-indigo-600 rotate-180" : "text-gray-300"
-              }`}
+              className={`p-1.5 rounded-lg transition-all ${isOpen ? "bg-indigo-50 text-indigo-600 rotate-180" : "text-gray-300"
+                }`}
             >
               <svg className="size-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
@@ -210,6 +260,39 @@ export default function FetchHistory({ user }) {
         <h1>Sync History</h1>
         <p>Detailed activity logs for your background ingestion tasks.</p>
       </div>
+
+      {/* ═══ ANALYTICS CHART ═══ */}
+      {chartData.length > 1 && (
+        <div className="bg-white rounded-2xl ring-1 ring-gray-200 shadow-sm p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Jobs Added per Sync</h3>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{totalJobsWritten.toLocaleString()}</p>
+              <p className="text-xs text-gray-400">total jobs written</p>
+            </div>
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-50">
+              <svg className="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
+              </svg>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={chartData} margin={{ top: 5, right: 5, left: -20, bottom: 5 }}>
+              <defs>
+                <linearGradient id="colorJobs" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip />} />
+              <Area type="monotone" dataKey="written" stroke="#6366f1" strokeWidth={2} fill="url(#colorJobs)" name="Jobs Written" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px]">
 
