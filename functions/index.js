@@ -87,7 +87,7 @@ const US_CITIES = [
 const REMOTE_US_ONLY = [
   "US-Remote","US Remote","US (Remote)","United States - Remote","Remote US","Remote USA","Remote-USA",
   "Remote in United States","Remote in the US","Remote - USA","Remote - US: All locations","Remote - US: Select locations",
-  "Anywhere in the United States",
+  "Anywhere in the United States","United States","US",
 ];
 
 const NORM = {
@@ -381,7 +381,8 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           { merge: true }
         );
 
-        const rawJobs = await fetchJobsFromFeed(url, source);
+        const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
+        const rawJobs = await fetchJobsFromFeed(url, source, recentCutoffMs);
         jobsFetched += rawJobs.length;
 
         const normalized = rawJobs
@@ -483,7 +484,11 @@ async function listUserIdsToProcess() {
  * FETCHING
  * ----------------------------
  */
-async function fetchJobsFromFeed(url, source) {
+async function fetchJobsFromFeed(url, source, recentCutoffMs) {
+  if (source.includes("microsoft")) {
+    return await fetchMicrosoftJobsPaginated(url, recentCutoffMs);
+  }
+
   const json = await fetchJson(url);
 
   if (source.includes("greenhouse")) {
@@ -502,6 +507,51 @@ async function fetchJobsFromFeed(url, source) {
   if (Array.isArray(json?.jobs)) return json.jobs;
   if (Array.isArray(json)) return json;
   return [];
+}
+
+/**
+ * Paginated fetcher for Microsoft Careers API.
+ * Uses offset-based pagination (start=0, 10, 20, ...).
+ * Stops early when jobs are older than recentCutoff to avoid unnecessary requests.
+ */
+async function fetchMicrosoftJobsPaginated(baseUrl, recentCutoffMs) {
+  const PAGE_SIZE = 10;
+  const MAX_JOBS = 5000;
+  const allPositions = [];
+
+  // Parse URL and ensure start param can be manipulated
+  const urlObj = new URL(baseUrl);
+  let offset = parseInt(urlObj.searchParams.get("start") || "0", 10);
+
+  while (allPositions.length < MAX_JOBS) {
+    urlObj.searchParams.set("start", String(offset));
+    const json = await fetchJson(urlObj.toString());
+
+    const positions = json?.data?.positions;
+    if (!Array.isArray(positions) || positions.length === 0) break;
+
+    allPositions.push(...positions);
+
+    // Smart stop: if the oldest job on this page is older than our cutoff, stop
+    if (recentCutoffMs) {
+      const oldestOnPage = positions[positions.length - 1];
+      const oldestTs = (oldestOnPage?.postedTs || 0) * 1000; // epoch seconds → ms
+      if (oldestTs < recentCutoffMs) {
+        logger.info(`Microsoft pagination: stopping at offset=${offset}, oldest job on page is past cutoff`);
+        break;
+      }
+    }
+
+    // If we got fewer than PAGE_SIZE, we've reached the end
+    if (positions.length < PAGE_SIZE) break;
+
+    const totalCount = json?.data?.count || Infinity;
+    offset += PAGE_SIZE;
+    if (offset >= totalCount) break;
+  }
+
+  logger.info(`Microsoft pagination: fetched ${allPositions.length} total positions`);
+  return allPositions;
 }
 
 async function fetchJson(url) {
@@ -623,6 +673,64 @@ function normalizeJobMinimal(rawJob, ctx) {
       title,
       jobUrl,
       locationName: combinedLocation || primaryLoc || null,
+      locationTokens,
+      stateCodes,
+      sourceUpdatedTs,
+      sourceUpdatedIso,
+      meta,
+    };
+  }
+
+  // Microsoft Careers source
+  if (source.includes("microsoft")) {
+    const externalId = rawJob.id != null ? String(rawJob.id)
+      : (rawJob.displayJobId != null ? String(rawJob.displayJobId) : null);
+
+    const jobUrl = rawJob.positionUrl
+      ? `https://careers.microsoft.com${rawJob.positionUrl}`
+      : null;
+    if (!externalId && !jobUrl) return null;
+
+    const title = rawJob.name ? String(rawJob.name) : null;
+
+    // Combine locations array into a single string
+    const locationsArr = Array.isArray(rawJob.locations) ? rawJob.locations : [];
+    const standardizedArr = Array.isArray(rawJob.standardizedLocations) ? rawJob.standardizedLocations : [];
+    const locationName = locationsArr.join("; ") || null;
+
+    // postedTs is epoch seconds
+    const sourceUpdatedTs = rawJob.postedTs
+      ? admin.firestore.Timestamp.fromDate(new Date(rawJob.postedTs * 1000))
+      : now;
+    const sourceUpdatedIso = rawJob.postedTs
+      ? new Date(rawJob.postedTs * 1000).toISOString()
+      : null;
+
+    // Use standardized locations as tokens (contains city, state abbrev, country)
+    const allLocTokens = [...locationsArr, ...standardizedArr];
+    const locationTokens = extractLocationTokens(allLocTokens.join("; "));
+    const stateCodes = extractStateCodes(locationTokens);
+
+    const meta = {};
+    if (rawJob.department) meta["Department"] = rawJob.department;
+    if (rawJob.workLocationOption) meta["Work Location"] = rawJob.workLocationOption;
+    if (rawJob.displayJobId) meta["Job ID"] = rawJob.displayJobId;
+
+    const jobDocId = makeJobDocId({
+      source: "microsoft",
+      companyKey,
+      externalId: externalId || jobUrl,
+    });
+
+    return {
+      jobDocId,
+      source: "microsoft",
+      companyKey,
+      companyName,
+      externalId,
+      title,
+      jobUrl,
+      locationName,
       locationTokens,
       stateCodes,
       sourceUpdatedTs,

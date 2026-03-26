@@ -96,6 +96,7 @@ export default function Jobs({ user }) {
   const [hasMore, setHasMore] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState("");
+  const [companySearch, setCompanySearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
@@ -107,7 +108,7 @@ export default function Jobs({ user }) {
     (async () => {
       try {
         const companiesRef = collection(db, "users", user.uid, "companies");
-        const qCompanies = query(companiesRef, orderBy("companyName", "asc"), limit(500));
+        const qCompanies = query(companiesRef, orderBy("companyName", "asc"), limit(1000));
         const snap = await getDocs(qCompanies);
         const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         if (!cancelled) setCompanies(list);
@@ -225,6 +226,12 @@ export default function Jobs({ user }) {
     setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
+  const filteredCompanies = useMemo(() => {
+    const term = companySearch.trim().toLowerCase();
+    if (!term) return companies;
+    return companies.filter((c) => (c.companyName || "").toLowerCase().includes(term));
+  }, [companies, companySearch]);
+
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
@@ -321,9 +328,8 @@ export default function Jobs({ user }) {
               <button
                 key={id}
                 onClick={() => setTimeframe(id)}
-                className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${
-                  timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
-                }`}
+                className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${timeframe === id ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
+                  }`}
               >
                 {id === "all" ? "All Jobs" : `Last ${id}`}
               </button>
@@ -333,10 +339,10 @@ export default function Jobs({ user }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-4 p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
-        <div className="min-w-[240px] flex-1 flex items-end gap-3 h-fit">
-          <div className="flex-1">
+        <div className="min-w-0 flex-1 flex items-end gap-3 h-fit">
+          <div className="flex-1 min-w-[160px]">
             <label className="caps-label mb-2 block px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">
-              Job Title Search
+              Job Title
             </label>
             <input
               placeholder="e.g. Software Engineer"
@@ -346,13 +352,34 @@ export default function Jobs({ user }) {
             />
           </div>
 
+          <div className="flex-1 min-w-[160px]">
+            <label className="caps-label mb-2 block px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">
+              Company
+            </label>
+            <input
+              placeholder="e.g. Microsoft — Tab to complete, Enter to select"
+              className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full"
+              value={companySearch}
+              onChange={(e) => setCompanySearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Tab" && companySearch.trim() && filteredCompanies.length > 0) {
+                  e.preventDefault();
+                  setCompanySearch(filteredCompanies[0].companyName || "");
+                } else if (e.key === "Enter" && companySearch.trim() && filteredCompanies.length > 0) {
+                  e.preventDefault();
+                  toggleCompany(filteredCompanies[0].id);
+                  setCompanySearch("");
+                }
+              }}
+            />
+          </div>
+
           <button
             onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-            className={`h-11 w-11 flex items-center justify-center rounded-xl border transition-all ${
-              isFilterExpanded
-                ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
-                : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
-            }`}
+            className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
+              ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
+              : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
+              }`}
             aria-label={isFilterExpanded ? "Hide filters" : "Show filters"}
           >
             <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300">
@@ -365,6 +392,7 @@ export default function Jobs({ user }) {
           <button
             onClick={() => {
               setTitleSearch("");
+              setCompanySearch("");
               setStateFilter("");
               setTimeframe("1h");
               setSelectedKeys([]);
@@ -401,11 +429,10 @@ export default function Jobs({ user }) {
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button
                       onClick={() => setStateFilter("")}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                        stateFilter === ""
-                          ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
-                          : "text-gray-500 hover:text-gray-700"
-                      }`}
+                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === ""
+                        ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
+                        : "text-gray-500 hover:text-gray-700"
+                        }`}
                     >
                       All States
                     </button>
@@ -414,11 +441,10 @@ export default function Jobs({ user }) {
                       <button
                         key={s.code}
                         onClick={() => setStateFilter(s.code)}
-                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                          stateFilter === s.code
-                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
-                            : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-                        }`}
+                        className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${stateFilter === s.code
+                          ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
+                          : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
+                          }`}
                       >
                         {s.code} - {s.name}
                       </button>
@@ -435,32 +461,62 @@ export default function Jobs({ user }) {
                   <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                     {companies.length}
                   </span>
+                  {companySearch && (
+                    <span className="bg-indigo-100 text-indigo-600 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+                      {filteredCompanies.length} matches
+                    </span>
+                  )}
                 </div>
+
+                {selectedKeys.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 px-1">
+                    {selectedKeys.map((key) => {
+                      const comp = companies.find((c) => c.id === key);
+                      const label = comp?.companyName || key;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => toggleCompany(key)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors"
+                        >
+                          {label}
+                          <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                          </svg>
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => setSelectedKeys([])}
+                      className="px-2.5 py-1 rounded-full text-[11px] font-bold text-gray-400 hover:text-red-500 transition-colors"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                )}
 
                 <div className="flex w-full overflow-hidden">
                   <div className="inline-flex p-1 bg-gray-50 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-1">
                     <button
-                      onClick={() => setSelectedKeys([])}
-                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                        selectedKeys.length === 0
-                          ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
-                          : "text-gray-500 hover:text-gray-700"
-                      }`}
+                      onClick={() => { setSelectedKeys([]); setCompanySearch(""); }}
+                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.length === 0 && !companySearch
+                        ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
+                        : "text-gray-500 hover:text-gray-700"
+                        }`}
                     >
                       All Companies
                     </button>
 
-                    {companies.map((c) => {
+                    {filteredCompanies.map((c) => {
                       const label = c.companyName || "Unknown";
                       return (
                         <button
                           key={c.id}
                           onClick={() => toggleCompany(c.id)}
-                          className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${
-                            selectedKeys.includes(c.id)
-                              ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
-                              : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
-                          }`}
+                          className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${selectedKeys.includes(c.id)
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
+                            : "bg-white text-gray-500 ring-1 ring-inset ring-gray-200 hover:bg-gray-50"
+                            }`}
                         >
                           {label}
                         </button>

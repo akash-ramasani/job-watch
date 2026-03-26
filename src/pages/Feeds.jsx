@@ -28,17 +28,27 @@ const URL_RULES = {
       /^https:\/\/api\.ashbyhq\.com\/posting-api\/job-board\/[^/?#]+(?:\?.*)?$/i.test(u),
     normalize: (u) => u.trim(),
   },
+  microsoft: {
+    label: "Microsoft Careers API",
+    placeholder: "https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&...",
+    isValid: (u) =>
+      /^https:\/\/apply\.careers\.microsoft\.com\/api\/pcsx\/search\?/i.test(u),
+    normalize: (u) => u.trim(),
+  },
 };
 
 function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
   if (u.includes("api.ashbyhq.com/posting-api/job-board/")) return "ashby";
+  if (u.includes("apply.careers.microsoft.com/api/pcsx/search")) return "microsoft";
   return "greenhouse";
 }
 
 function prettySourceLabel(source) {
-  return source === "ashby" ? "AshbyHQ" : "Greenhouse";
+  if (source === "ashby") return "AshbyHQ";
+  if (source === "microsoft") return "Microsoft Careers";
+  return "Greenhouse";
 }
 
 function validateUrlForSource(source, rawUrl) {
@@ -54,7 +64,9 @@ function validateUrlForSource(source, rawUrl) {
       error:
         source === "ashby"
           ? "Ashby URL should look like: https://api.ashbyhq.com/posting-api/job-board/<company>"
-          : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
+          : source === "microsoft"
+            ? "Microsoft URL should look like: https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&..."
+            : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
   }
   return { ok: true, normalizedUrl: rules.normalize(cleanUrl) };
@@ -127,9 +139,7 @@ export default function Feeds({ user }) {
     setBusyRunNow(true);
     setLastRunSummary(null);
     try {
-      const projectId =
-        import.meta?.env?.VITE_FIREBASE_PROJECT_ID ||
-        process.env?.REACT_APP_FIREBASE_PROJECT_ID;
+      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
       if (!projectId) {
         showToast("Missing project id env.", "error");
         return;
@@ -191,8 +201,9 @@ export default function Feeds({ user }) {
             Job Board Sources
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            Connect <span className="font-semibold">Greenhouse</span> and{" "}
-            <span className="font-semibold">AshbyHQ</span> job boards.
+            Connect <span className="font-semibold">Greenhouse</span>,{" "}
+            <span className="font-semibold">AshbyHQ</span>, and{" "}
+            <span className="font-semibold">Microsoft Careers</span> job boards.
           </p>
 
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -263,6 +274,11 @@ export default function Feeds({ user }) {
                   AshbyHQ:{" "}
                   <span className="font-mono">
                     https://api.ashbyhq.com/posting-api/job-board/&lt;company&gt;
+                  </span>
+                  <br />
+                  Microsoft:{" "}
+                  <span className="font-mono">
+                    https://apply.careers.microsoft.com/api/pcsx/search?domain=microsoft.com&amp;...
                   </span>
                 </p>
               </div>
