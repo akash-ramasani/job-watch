@@ -34,7 +34,7 @@ export default function TopBar({ user, userMeta, onLogout }) {
                 <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
                 <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
                 <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
-                <NavButton active={location.pathname === "/profile"} to="/profile">Settings</NavButton>
+                <NavButton active={location.pathname === "/profile"} to="/profile">Profile</NavButton>
               </div>
             )}
           </div>
@@ -75,7 +75,7 @@ export default function TopBar({ user, userMeta, onLogout }) {
               <MobileNavButton active={location.pathname === "/"} to="/" onClick={() => setIsMenuOpen(false)}>Dashboard</MobileNavButton>
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
               <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
-              <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Settings</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Profile</MobileNavButton>
               <button 
                 onClick={() => {
                   handleLogoutClick();
