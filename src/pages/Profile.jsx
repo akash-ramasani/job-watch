@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { doc, serverTimestamp, setDoc, collection, getDocs, query, orderBy } from "firebase/firestore";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { sendEmailVerification } from "firebase/auth";
 import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
@@ -22,8 +22,6 @@ export default function Profile({ user, userMeta }) {
   const [pushStatus, setPushStatus] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
-  const [interestedUsers, setInterestedUsers] = useState([]);
-  const [loadingInterested, setLoadingInterested] = useState(true);
 
   async function handleEnablePush() {
     if (typeof Notification === "undefined") {
@@ -69,26 +67,6 @@ export default function Profile({ user, userMeta }) {
     }
   }, [userMeta]);
 
-  // Fetch interested users from Firestore
-  useEffect(() => {
-    async function fetchInterestedUsers() {
-      try {
-        const q = query(collection(db, "interestedUsers"), orderBy("submittedAt", "desc"));
-        const snapshot = await getDocs(q);
-        const users = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...doc.data(),
-        }));
-        setInterestedUsers(users);
-      } catch (err) {
-        console.error("Failed to fetch interested users:", err);
-      } finally {
-        setLoadingInterested(false);
-      }
-    }
-    fetchInterestedUsers();
-  }, []);
-
   async function handleVerify() {
     try {
       await sendEmailVerification(user);
@@ -120,18 +98,6 @@ export default function Profile({ user, userMeta }) {
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
-
-  function formatDate(timestamp) {
-    if (!timestamp) return "—";
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
 
   return (
     <form onSubmit={handleSave} className="page-wrapper">
@@ -308,69 +274,6 @@ export default function Profile({ user, userMeta }) {
         </div>
       </div>
 
-      {/* Notifications — Interested Users */}
-      {user?.uid === "7Tojjo8l5PZIYctPmdwncf7PC133" && (
-        <div className="section-grid mt-12 text-black">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900 uppercase tracking-widest text-[10px] font-black pb-1 border-b-2 border-indigo-500 inline-block">
-              Notifications
-            </h2>
-            <p className="mt-2 text-sm text-gray-500">
-              People who expressed interest in JobWatch. Reach out to welcome them!
-            </p>
-          </div>
-
-          <div className="md:col-span-2">
-            {loadingInterested ? (
-              <div className="flex items-center gap-2 text-sm text-gray-400 animate-pulse">
-                <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                Loading...
-              </div>
-            ) : interestedUsers.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-gray-400">
-                No interested users yet.
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-xl border border-gray-200 shadow-sm">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Name</th>
-                      <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Email</th>
-                      <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100 bg-white">
-                    {interestedUsers.map((entry) => (
-                      <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">
-                          {entry.name}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
-                          <a href={`mailto:${entry.email}`} className="text-indigo-600 hover:text-indigo-500 hover:underline">
-                            {entry.email}
-                          </a>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
-                          {formatDate(entry.submittedAt)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div className="bg-gray-50 px-4 py-2 text-right">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
-                    {interestedUsers.length} {interestedUsers.length === 1 ? "person" : "people"} interested
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="mt-6 flex items-center justify-end">
         <button
