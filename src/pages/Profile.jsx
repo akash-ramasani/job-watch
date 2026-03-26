@@ -33,6 +33,7 @@ export default function Profile({ user, userMeta }) {
         
         // Manually register the SW so Firebase uses our custom configured instance
         const registration = await navigator.serviceWorker.register(swUrl);
+        await navigator.serviceWorker.ready; // Force wait until the worker is fully active
         
         const token = await getToken(messaging, { 
           vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY,
