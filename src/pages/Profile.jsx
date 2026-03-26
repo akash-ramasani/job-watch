@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { doc, serverTimestamp, setDoc } from "firebase/firestore";
 import { sendEmailVerification } from "firebase/auth";
-import { db } from "../firebase";
+import { db, messaging } from "../firebase";
+import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 export default function Profile({ user, userMeta }) {
@@ -18,6 +19,30 @@ export default function Profile({ user, userMeta }) {
   });
   
   const [busy, setBusy] = useState(false);
+  const [pushStatus, setPushStatus] = useState(Notification.permission);
+
+  async function handleEnablePush() {
+    try {
+      if (!messaging) throw new Error("Push messaging is not supported by your browser.");
+      const permission = await Notification.requestPermission();
+      setPushStatus(permission);
+      
+      if (permission === "granted") {
+        const token = await getToken(messaging, { vapidKey: import.meta.env.VITE_FIREBASE_VAPID_KEY });
+        if (token) {
+          await setDoc(doc(db, "users", user.uid), {
+            fcmTokens: [token]
+          }, { merge: true });
+          showToast("Push notifications successfully enabled!", "success");
+        }
+      } else {
+        showToast("Notification permission denied.", "info");
+      }
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to enable push: " + err.message, "error");
+    }
+  }
 
   // Sync Firestore metadata to local state
   useEffect(() => {
@@ -206,6 +231,39 @@ export default function Profile({ user, userMeta }) {
                 className="input-standard"
               />
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Notifications Section */}
+      <div className="section-grid mt-12 border-t border-gray-200 pt-12">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 uppercase tracking-widest text-[10px] font-black">Push Notifications</h2>
+          <p className="mt-1 text-sm text-gray-500">
+            Receive desktop/mobile alerts when your background jobs finish running.
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-6 md:col-span-2">
+          <div className="sm:col-span-6 flex items-center gap-4">
+            <button
+              type="button"
+              onClick={handleEnablePush}
+              className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-500 border border-indigo-100 bg-white rounded shadow-sm transition-colors"
+            >
+              Enable Notifications
+            </button>
+            {pushStatus === "granted" && (
+              <span className="text-[10px] tracking-widest uppercase font-black text-emerald-600 flex items-center">
+                <svg className="h-4 w-4 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                </svg>
+                Active
+              </span>
+            )}
+            {pushStatus === "denied" && (
+              <span className="text-[10px] tracking-widest uppercase font-black text-red-500">Denied in Browser</span>
+            )}
           </div>
         </div>
       </div>

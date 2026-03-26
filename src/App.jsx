@@ -8,6 +8,7 @@ import { auth, db } from "./firebase";
 
 // Components
 import TopBar from "./components/TopBar.jsx";
+import JobSyncNotification from "./components/JobSyncNotification.jsx";
 
 // Pages
 import Login from "./pages/Login.jsx";
@@ -83,11 +84,14 @@ export default function App() {
     <ToastProvider>
       <div className="h-full bg-white">
         {user && (
-          <TopBar 
-            user={user} 
-            userMeta={userMeta} 
-            onLogout={() => signOut(auth)} 
-          />
+          <>
+            <JobSyncNotification user={user} />
+            <TopBar 
+              user={user} 
+              userMeta={userMeta} 
+              onLogout={() => signOut(auth)} 
+            />
+          </>
         )}
 
         {!user ? (

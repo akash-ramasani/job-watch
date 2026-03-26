@@ -1,7 +1,8 @@
 import { initializeApp } from "firebase/app";
 import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
-import { getAnalytics, isSupported } from "firebase/analytics";
+import { getAnalytics, isSupported as analyticsSupported } from "firebase/analytics";
+import { getMessaging, isSupported as messagingSupported } from "firebase/messaging";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -17,8 +18,14 @@ export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 
-// Analytics is browser-only
+// Analytics & Messaging are browser-only
 export let analytics = null;
-isSupported().then((ok) => {
+export let messaging = null;
+
+analyticsSupported().then((ok) => {
   if (ok) analytics = getAnalytics(app);
+});
+
+messagingSupported().then((ok) => {
+  if (ok) messaging = getMessaging(app);
 });

@@ -168,6 +168,9 @@ exports.syncRecentJobsHourly = onSchedule(
           },
           { merge: true }
         );
+
+        // Send Push Notification
+        await sendPushNotification(userId, summary, durationMs);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         logger.error(`Scheduled user sync failed userId=${userId}: ${msg}`);
@@ -276,6 +279,9 @@ exports.runSyncNow = onRequest(
         },
         { merge: true }
       );
+
+      // Send Push Notification
+      await sendPushNotification(userId, summary, durationMs);
 
       return res.json(response);
     } catch (e) {
@@ -753,6 +759,59 @@ function simpleChecksum(s) {
     h = (h * 31 + s.charCodeAt(i)) >>> 0;
   }
   return h.toString(16);
+}
+
+/**
+ * ----------------------------
+ * PUSH NOTIFICATIONS
+ * ----------------------------
+ */
+async function sendPushNotification(userId, summary, durationMs) {
+  try {
+    const userDoc = await db.collection("users").doc(userId).get();
+    if (!userDoc.exists) return;
+
+    const data = userDoc.data();
+    const tokens = data.fcmTokens || [];
+    if (!Array.isArray(tokens) || tokens.length === 0) return;
+
+    const added = summary.jobsWritten || 0;
+    const durationSec = (durationMs / 1000).toFixed(1);
+
+    const payload = {
+      notification: {
+        title: "Job Sync Complete",
+        body: `Added ${added} new jobs in ${durationSec}s.`,
+      },
+      data: {
+        click_action: "https://jobwatch.akashramasani.com/jobs",
+      },
+      tokens: tokens,
+    };
+
+    const response = await admin.messaging().sendEachForMulticast(payload);
+    
+    // Cleanup invalid tokens
+    const failedTokens = [];
+    response.responses.forEach((resp, idx) => {
+      if (!resp.success) {
+        if (resp.error?.code === 'messaging/invalid-registration-token' ||
+            resp.error?.code === 'messaging/registration-token-not-registered') {
+          failedTokens.push(tokens[idx]);
+        }
+      }
+    });
+
+    if (failedTokens.length > 0) {
+      await db.collection("users").doc(userId).update({
+        fcmTokens: admin.firestore.FieldValue.arrayRemove(...failedTokens)
+      });
+      logger.info(`Removed ${failedTokens.length} dead FCM tokens for user ${userId}`);
+    }
+
+  } catch (err) {
+    logger.error(`Error sending push notification to user ${userId}:`, err);
+  }
 }
 
 /**
