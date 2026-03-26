@@ -519,6 +519,89 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ═══ HOW IT WORKS (Terminal UI) ═══ */}
+      <section className="py-32 bg-white relative overflow-hidden">
+        {/* Subtle background glow */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-50/50 blur-[120px] rounded-full pointer-events-none" />
+        
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
+          <div className="text-center mb-16">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              Under the Hood
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Scraping at the speed of code
+            </p>
+            <p className="mt-4 text-base text-gray-500 max-w-xl mx-auto">
+              Our automated crawlers sync with ATS APIs every hour, normalizing job schemas so you get clean, instantly filterable data.
+            </p>
+          </div>
+
+          {/* Terminal Window */}
+          <motion.div
+            initial={{ opacity: 0, y: 40 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true, margin: "-100px" }}
+            transition={{ duration: 0.8 }}
+            className="w-full max-w-4xl mx-auto rounded-xl bg-[#0d1117] ring-1 ring-gray-900/5 shadow-2xl overflow-hidden"
+          >
+            {/* Terminal Header */}
+            <div className="flex items-center px-4 py-3 bg-[#161b22] border-b border-white/5">
+              <div className="flex gap-2">
+                <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                <div className="w-3 h-3 rounded-full bg-green-500/80" />
+              </div>
+              <div className="flex-1 text-center text-[11px] font-medium text-gray-400 font-mono tracking-wider opacity-60">
+                job-watch — node sync.js
+              </div>
+            </div>
+
+            {/* Terminal Content */}
+            <div className="p-6 font-mono text-xs sm:text-sm text-gray-300 leading-relaxed overflow-x-auto">
+              <div className="flex flex-col gap-1 w-max min-w-full">
+                <p className="text-indigo-400">➜ <span className="text-emerald-400">job-watch</span> <span className="text-white">sync --all</span></p>
+                <p className="opacity-60 text-gray-500">[10:42:01] Starting global sync cycle...</p>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 0.5 }}>
+                  <p className="opacity-90">› Syncing <span className="text-blue-400">Greenhouse API</span> (340 companies)...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Successfully extracted 1,240 new positions</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 1.2 }}>
+                  <p className="opacity-90 mt-2">› Syncing <span className="text-purple-400">AshbyHQ API</span> (215 companies)...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Successfully extracted 892 new positions</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 1.8 }}>
+                  <p className="opacity-90 mt-2">› Syncing <span className="text-cyan-400">Microsoft Careers</span>...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Smart pagination complete (stopped at cutoff)</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ Extracted 42 new roles</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 2.5 }}>
+                  <p className="opacity-60 text-gray-500 mt-3">[10:42:04] Normalizing schemas...</p>
+                  <p className="opacity-60 text-gray-500">[10:42:05] Applying text-embedding semantics...</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 3.2 }}>
+                  <p className="text-yellow-300 font-semibold mt-3">⚡ 15 roles matched active user alerts</p>
+                  <p className="opacity-90">› Dispatching FCM Push Notifications...</p>
+                  <p className="text-emerald-400 ml-4 font-semibold">✔ 15 notifications sent successfully</p>
+                </motion.div>
+
+                <motion.div initial={{ opacity: 0 }} whileInView={{ opacity: 1 }} transition={{ delay: 3.8 }}>
+                  <div className="mt-4 flex items-center gap-2">
+                    <span className="text-indigo-400">➜</span>
+                    <span className="w-2 h-4 bg-emerald-400 animate-pulse" />
+                  </div>
+                </motion.div>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </section>
+
       {/* ═══ LIVE CHART DEMO ═══ */}
       <section className="py-24 bg-gray-50/50">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
