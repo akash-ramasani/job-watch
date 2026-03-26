@@ -1,7 +1,11 @@
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Link } from "react-router-dom";
+import { collection, query, orderBy, getDocs } from "firebase/firestore";
+import { db } from "../firebase";
+
+const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
 /* ── Feature & testimonial data ────────────────────────────── */
 
@@ -117,6 +121,43 @@ const fadeUp = {
 
 export default function Home({ user, userMeta }) {
   const firstName = userMeta?.firstName || user?.displayName?.split(" ")[0] || "there";
+  const isAdmin = user?.uid === ADMIN_UID;
+
+  const [interestedUsers, setInterestedUsers] = useState([]);
+  const [loadingInterested, setLoadingInterested] = useState(true);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    async function fetchInterestedUsers() {
+      try {
+        const q = query(collection(db, "interestedUsers"), orderBy("submittedAt", "desc"));
+        const snapshot = await getDocs(q);
+        const users = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        setInterestedUsers(users);
+      } catch (err) {
+        console.error("Failed to fetch interested users:", err);
+      } finally {
+        setLoadingInterested(false);
+      }
+    }
+    fetchInterestedUsers();
+  }, [isAdmin]);
+
+  function formatDate(timestamp) {
+    if (!timestamp) return "—";
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
 
   return (
     <div className="page-wrapper !space-y-16">
@@ -193,8 +234,81 @@ export default function Home({ user, userMeta }) {
               Sync History
             </Link>
           </motion.div>
-        </div>
-      </motion.div>
+          </div>
+        </motion.div>
+
+      {/* ═══ ADMIN NOTIFICATIONS ═══ */}
+      {isAdmin && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6, duration: 0.6 }}
+        >
+          <div className="flex items-center justify-between mb-6">
+            <div>
+              <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-1">
+                Notifications
+              </h2>
+              <p className="text-xl font-bold text-gray-900">
+                People who expressed interest in JobWatch
+              </p>
+              <p className="mt-1 text-sm text-gray-500">
+                Reach out to welcome them!
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            {loadingInterested ? (
+              <div className="p-12 text-center">
+                <div className="inline-flex items-center gap-2 text-sm text-gray-400 animate-pulse">
+                  <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Syncing interests...
+                </div>
+              </div>
+            ) : interestedUsers.length === 0 ? (
+              <div className="p-12 text-center text-gray-400">
+                No interests captured yet.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-100">
+                  <thead className="bg-gray-50/50 text-[10px] font-black uppercase tracking-widest text-gray-400">
+                    <tr>
+                      <th className="px-6 py-4 text-left">Name</th>
+                      <th className="px-6 py-4 text-left">Email</th>
+                      <th className="px-6 py-4 text-left">Submitted</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-50">
+                    {interestedUsers.map((entry) => (
+                      <tr key={entry.id} className="hover:bg-indigo-50/30 transition-colors group">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-bold text-gray-900">{entry.name}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <a 
+                            href={`mailto:${entry.email}`}
+                            className="text-sm text-indigo-600 hover:text-indigo-700 hover:underline font-medium"
+                          >
+                            {entry.email}
+                          </a>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-400">
+                          {formatDate(entry.submittedAt)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </motion.div>
+      )}
 
       {/* ═══ FEATURE HIGHLIGHTS ═══ */}
       <div>
