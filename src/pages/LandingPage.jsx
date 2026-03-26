@@ -1,0 +1,578 @@
+import React from "react";
+import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
+
+/* ── Data ──────────────────────────────────────────────────── */
+
+const FEATURES = [
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12.75 19.5v-.75a7.5 7.5 0 00-7.5-7.5H4.5m0-6.75h.75c7.87 0 14.25 6.38 14.25 14.25v.75M6 18.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
+      </svg>
+    ),
+    title: "Auto-Sync Feeds",
+    desc: "Connect Greenhouse & AshbyHQ job boards once — JobWatch syncs new postings automatically every hour.",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+      </svg>
+    ),
+    title: "Push Notifications",
+    desc: "Get instant desktop & mobile alerts the moment a company posts a new role. Be the first to apply.",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+      </svg>
+    ),
+    title: "Smart Filters",
+    desc: "Filter by company, role title, location, and state. Find exactly the opportunity you're looking for.",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m0 0l.5 1.5m-.5-1.5h-9.5m0 0l-.5 1.5m.75-9l3-3 2.148 2.148A12.061 12.061 0 0116.5 7.605" />
+      </svg>
+    ),
+    title: "Sync History",
+    desc: "Full transparency — see exactly when each sync ran, how many jobs were found, and if anything failed.",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+      </svg>
+    ),
+    title: "Secure by Design",
+    desc: "Built on Firebase with per-user data isolation. Your feeds, your jobs, your data — always private.",
+  },
+  {
+    icon: (
+      <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+      </svg>
+    ),
+    title: "Mobile Ready",
+    desc: "Responsive design works beautifully on any device. Track jobs from your phone, tablet, or desktop.",
+  },
+];
+
+const TESTIMONIALS = [
+  {
+    name: "Priya Sharma",
+    role: "CS Graduate, Stanford",
+    quote: "JobWatch completely changed my job search. I saved hours every week by not having to check individual career pages.",
+    avatar: "PS",
+  },
+  {
+    name: "Alex Chen",
+    role: "SWE Intern, UC Berkeley",
+    quote: "The real-time notifications are a game-changer. I was one of the first to apply when Stripe opened new grad positions.",
+    avatar: "AC",
+  },
+  {
+    name: "Jordan Williams",
+    role: "Data Science, Georgia Tech",
+    quote: "Love how clean and fast the interface is. The filtering makes it so easy to find relevant roles across multiple companies.",
+    avatar: "JW",
+  },
+];
+
+const PRICING = [
+  {
+    name: "Free",
+    price: "$0",
+    period: "forever",
+    desc: "Perfect for getting started",
+    features: [
+      "Up to 3 job board feeds",
+      "Hourly auto-sync",
+      "Basic filters (title, company)",
+      "Push notifications",
+      "Sync history",
+    ],
+    cta: "Get Started",
+    highlight: false,
+  },
+  {
+    name: "Pro",
+    price: "$9",
+    period: "/month",
+    desc: "For serious job seekers",
+    features: [
+      "Unlimited job board feeds",
+      "15-minute sync intervals",
+      "Advanced filters & saved searches",
+      "Email digest notifications",
+      "CSV export",
+      "Priority support",
+    ],
+    cta: "Coming Soon",
+    highlight: true,
+  },
+  {
+    name: "Team",
+    price: "$29",
+    period: "/month",
+    desc: "For career centers & groups",
+    features: [
+      "Everything in Pro",
+      "Up to 10 team members",
+      "Shared feed library",
+      "Admin dashboard",
+      "API access",
+      "Custom integrations",
+    ],
+    cta: "Coming Soon",
+    highlight: false,
+  },
+];
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 24 },
+  visible: (i = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: { delay: i * 0.1, duration: 0.5, ease: "easeOut" },
+  }),
+};
+
+const STATS = [
+  { value: "10K+", label: "Jobs Tracked" },
+  { value: "650+", label: "Companies" },
+  { value: "99.9%", label: "Uptime" },
+  { value: "<1min", label: "Alert Speed" },
+];
+
+/* ── Component ─────────────────────────────────────────────── */
+
+export default function LandingPage() {
+  return (
+    <div style={{ fontFamily: "Ubuntu, sans-serif" }}>
+
+      {/* ═══ PUBLIC NAVBAR ═══ */}
+      <nav className="sticky top-0 z-50 w-full border-b border-gray-100 bg-white/80 backdrop-blur-md">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex h-16 items-center justify-between">
+            <Link to="/" className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <span className="text-white font-bold text-lg">J</span>
+              </div>
+              <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
+            </Link>
+
+            <div className="hidden sm:flex items-center gap-6">
+              <a href="#features" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">Features</a>
+              <a href="#pricing" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">Pricing</a>
+              <a href="#testimonials" className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors">Testimonials</a>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Link
+                to="/login"
+                className="text-sm font-semibold text-gray-700 hover:text-indigo-600 transition-colors"
+              >
+                Sign in
+              </Link>
+              <Link
+                to="/signup"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors"
+              >
+                Get Started
+              </Link>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      {/* ═══ HERO ═══ */}
+      <section className="relative overflow-hidden">
+        <div className="absolute inset-0 hero-gradient opacity-[0.03]" />
+        <div className="pointer-events-none absolute -right-40 top-0 h-[500px] w-[500px] rounded-full bg-indigo-100/50 blur-3xl" />
+        <div className="pointer-events-none absolute -left-40 bottom-0 h-[400px] w-[400px] rounded-full bg-violet-100/50 blur-3xl" />
+
+        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-24 sm:py-36">
+          <div className="text-center max-w-3xl mx-auto">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6 }}
+            >
+              <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6">
+                <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
+                Now tracking Greenhouse & AshbyHQ
+              </span>
+            </motion.div>
+
+            <motion.h1
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15, duration: 0.6 }}
+              className="text-4xl sm:text-6xl font-bold tracking-tight text-gray-900 leading-[1.1]"
+            >
+              Never miss a
+              <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent"> job opportunity </span>
+              again
+            </motion.h1>
+
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3, duration: 0.6 }}
+              className="mt-6 text-lg sm:text-xl text-gray-500 leading-relaxed max-w-2xl mx-auto"
+            >
+              JobWatch monitors company job boards in real time and notifies you the instant new positions are posted. Stop refreshing career pages — start applying faster.
+            </motion.p>
+
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.45, duration: 0.6 }}
+              className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4"
+            >
+              <Link
+                to="/signup"
+                className="w-full sm:w-auto rounded-xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
+              >
+                Start Tracking for Free →
+              </Link>
+              <a
+                href="#features"
+                className="w-full sm:w-auto rounded-xl border border-gray-200 bg-white px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50 transition-all"
+              >
+                See How It Works
+              </a>
+            </motion.div>
+          </div>
+
+          {/* Stats */}
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.6, duration: 0.6 }}
+            className="mt-20 grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-2xl mx-auto"
+          >
+            {STATS.map((s) => (
+              <div key={s.label} className="text-center">
+                <div className="text-2xl sm:text-3xl font-bold text-gray-900">{s.value}</div>
+                <div className="mt-1 text-xs font-semibold text-gray-400 uppercase tracking-widest">{s.label}</div>
+              </div>
+            ))}
+          </motion.div>
+        </div>
+      </section>
+
+      {/* ═══ FEATURES ═══ */}
+      <section id="features" className="py-24 bg-gray-50/50">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              Features
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Everything you need to land your dream role
+            </p>
+            <p className="mt-4 text-base text-gray-500 max-w-xl mx-auto">
+              From automatic job syncing to instant notifications, JobWatch handles the tedious parts so you can focus on what matters.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-3">
+            {FEATURES.map((f, i) => (
+              <motion.div
+                key={f.title}
+                custom={i}
+                initial="hidden"
+                whileInView="visible"
+                viewport={{ once: true, margin: "-60px" }}
+                variants={fadeUp}
+                className="relative rounded-2xl border border-gray-100 bg-white p-8 shadow-sm hover:shadow-lg hover:border-indigo-100 hover:-translate-y-1 transition-all duration-300"
+              >
+                <div className="inline-flex items-center justify-center rounded-xl bg-indigo-50 p-3 text-indigo-600 mb-5">
+                  {f.icon}
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">{f.title}</h3>
+                <p className="mt-2 text-sm text-gray-500 leading-relaxed">{f.desc}</p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ HOW IT WORKS ═══ */}
+      <section className="py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              How It Works
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Three steps to stay ahead
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-12 sm:grid-cols-3">
+            {[
+              {
+                step: "01",
+                title: "Add Your Feeds",
+                desc: "Paste a Greenhouse or AshbyHQ job board URL and we'll start watching it immediately.",
+              },
+              {
+                step: "02",
+                title: "We Monitor 24/7",
+                desc: "Our backend checks for new postings every hour and sends you a push notification instantly.",
+              },
+              {
+                step: "03",
+                title: "Apply First",
+                desc: "Filter, sort, and click through to apply — before the role even hits LinkedIn.",
+              },
+            ].map((item, i) => (
+              <motion.div
+                key={item.step}
+                custom={i}
+                initial="hidden"
+                whileInView="visible"
+                viewport={{ once: true, margin: "-60px" }}
+                variants={fadeUp}
+                className="text-center"
+              >
+                <div className="inline-flex items-center justify-center h-14 w-14 rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white text-lg font-bold mb-5 shadow-lg shadow-indigo-200">
+                  {item.step}
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">{item.title}</h3>
+                <p className="mt-2 text-sm text-gray-500 leading-relaxed max-w-xs mx-auto">{item.desc}</p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ PRICING ═══ */}
+      <section id="pricing" className="py-24 bg-gray-50/50">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              Pricing
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Start free, scale when ready
+            </p>
+            <p className="mt-4 text-base text-gray-500">
+              No credit card required. Upgrade or cancel anytime.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 sm:grid-cols-3 max-w-5xl mx-auto">
+            {PRICING.map((plan, i) => (
+              <motion.div
+                key={plan.name}
+                custom={i}
+                initial="hidden"
+                whileInView="visible"
+                viewport={{ once: true, margin: "-60px" }}
+                variants={fadeUp}
+                className={`relative rounded-2xl p-8 transition-all duration-300 ${plan.highlight
+                  ? "bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-xl shadow-indigo-200 scale-[1.03]"
+                  : "bg-white border border-gray-200 shadow-sm hover:shadow-lg hover:border-indigo-100"
+                  }`}
+              >
+                {plan.highlight && (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                    <span className="rounded-full bg-amber-400 px-4 py-1 text-[10px] font-black uppercase tracking-widest text-amber-900">
+                      Popular
+                    </span>
+                  </div>
+                )}
+
+                <h3 className={`text-lg font-bold ${plan.highlight ? "text-white" : "text-gray-900"}`}>
+                  {plan.name}
+                </h3>
+                <p className={`mt-1 text-sm ${plan.highlight ? "text-indigo-100" : "text-gray-500"}`}>
+                  {plan.desc}
+                </p>
+
+                <div className="mt-6 flex items-baseline gap-1">
+                  <span className={`text-4xl font-bold ${plan.highlight ? "text-white" : "text-gray-900"}`}>
+                    {plan.price}
+                  </span>
+                  <span className={`text-sm font-medium ${plan.highlight ? "text-indigo-200" : "text-gray-400"}`}>
+                    {plan.period}
+                  </span>
+                </div>
+
+                <ul className="mt-8 space-y-3">
+                  {plan.features.map((f) => (
+                    <li key={f} className="flex items-center gap-3 text-sm">
+                      <svg className={`h-4 w-4 flex-shrink-0 ${plan.highlight ? "text-indigo-200" : "text-indigo-500"}`} fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                      </svg>
+                      <span className={plan.highlight ? "text-indigo-50" : "text-gray-600"}>{f}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="mt-8">
+                  {plan.name === "Free" ? (
+                    <Link
+                      to="/signup"
+                      className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all ${plan.highlight
+                        ? "bg-white text-indigo-600 hover:bg-indigo-50"
+                        : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
+                        }`}
+                    >
+                      {plan.cta}
+                    </Link>
+                  ) : (
+                    <button
+                      disabled
+                      className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all cursor-not-allowed ${plan.highlight
+                        ? "bg-white/20 text-white/70"
+                        : "bg-gray-100 text-gray-400"
+                        }`}
+                    >
+                      {plan.cta}
+                    </button>
+                  )}
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ TESTIMONIALS ═══ */}
+      <section id="testimonials" className="py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-16">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              Testimonials
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Loved by students everywhere
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 gap-8 sm:grid-cols-3 max-w-4xl mx-auto">
+            {TESTIMONIALS.map((t, i) => (
+              <motion.div
+                key={t.name}
+                custom={i}
+                initial="hidden"
+                whileInView="visible"
+                viewport={{ once: true, margin: "-60px" }}
+                variants={fadeUp}
+                className="rounded-2xl bg-gray-50 p-7 hover:bg-indigo-50/50 transition-all duration-300"
+              >
+                <svg className="h-6 w-6 text-indigo-300 mb-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M11.3 2.1C6 3.2 2 7.7 2 13c0 3 1.3 5 3.5 5 1.8 0 3-1.2 3-3 0-1.7-1.2-3-2.8-3h-.3c.4-2.8 2.6-5.3 5.5-6.3L11.3 2.1zm10 0C16 3.2 12 7.7 12 13c0 3 1.3 5 3.5 5 1.8 0 3-1.2 3-3 0-1.7-1.2-3-2.8-3h-.3c.4-2.8 2.6-5.3 5.5-6.3L21.3 2.1z" />
+                </svg>
+                <p className="text-sm text-gray-600 leading-relaxed italic">"{t.quote}"</p>
+                <div className="mt-5 flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-xs font-black text-indigo-600">
+                    {t.avatar}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-900">{t.name}</p>
+                    <p className="text-xs text-gray-400">{t.role}</p>
+                  </div>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ═══ CTA ═══ */}
+      <section className="py-24">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <motion.div
+            initial={{ opacity: 0, y: 30 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="hero-gradient relative overflow-hidden rounded-3xl px-8 py-16 sm:px-16 sm:py-24 text-center text-white"
+          >
+            <div className="pointer-events-none absolute -right-20 -top-20 h-72 w-72 rounded-full bg-white/5" />
+            <div className="pointer-events-none absolute -left-10 -bottom-10 h-48 w-48 rounded-full bg-white/5" />
+
+            <div className="relative z-10">
+              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
+                Ready to supercharge your job search?
+              </h2>
+              <p className="mt-4 text-base sm:text-lg text-white/80 max-w-xl mx-auto">
+                Join hundreds of students who are already tracking opportunities with JobWatch. It's free to start.
+              </p>
+              <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+                <Link
+                  to="/signup"
+                  className="w-full sm:w-auto rounded-xl bg-white px-8 py-3.5 text-sm font-bold text-indigo-600 shadow-lg hover:bg-indigo-50 transition-all"
+                >
+                  Create Free Account →
+                </Link>
+                <Link
+                  to="/login"
+                  className="w-full sm:w-auto rounded-xl border border-white/30 px-8 py-3.5 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                >
+                  Sign In
+                </Link>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </section>
+
+      {/* ═══ FOOTER ═══ */}
+      <footer className="border-t border-gray-100 bg-gray-50/50">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="py-10 grid grid-cols-1 gap-8 sm:grid-cols-3">
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <div className="h-7 w-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+                  <span className="text-white font-bold text-sm">J</span>
+                </div>
+                <span className="text-lg font-bold tracking-tight text-gray-900">JobWatch</span>
+              </div>
+              <p className="text-sm text-gray-500 leading-relaxed max-w-xs">
+                Your intelligent job tracking dashboard. Never miss an opportunity again.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Product</h3>
+              <ul className="space-y-2.5">
+                <li><a href="#features" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Features</a></li>
+                <li><a href="#pricing" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Pricing</a></li>
+                <li><a href="#testimonials" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Testimonials</a></li>
+              </ul>
+            </div>
+
+            <div>
+              <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Resources</h3>
+              <ul className="space-y-2.5">
+                <li><a href="https://boards-api.greenhouse.io" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Greenhouse API</a></li>
+                <li><a href="https://developers.ashbyhq.com" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">AshbyHQ Docs</a></li>
+                <li><a href="https://firebase.google.com" target="_blank" rel="noreferrer" className="text-sm text-gray-600 hover:text-indigo-600 transition-colors">Firebase</a></li>
+              </ul>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-200 py-6 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <p className="text-xs text-gray-400">
+              &copy; {new Date().getFullYear()} JobWatch. All rights reserved.
+            </p>
+            <div className="flex items-center gap-4">
+              <span className="text-xs text-gray-400">Built with React + Firebase</span>
+              <span className="inline-flex h-2 w-2 rounded-full bg-emerald-400" title="All systems operational" />
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
