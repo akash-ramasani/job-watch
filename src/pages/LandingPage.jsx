@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -245,6 +245,38 @@ function DemoTooltip({ active, payload, label }) {
   );
 }
 
+/* ── Interactive Components ───────────────────────────────────────── */
+
+function MagneticButton({ children, className = "" }) {
+  const ref = useRef(null);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+
+  const handleMouse = (e) => {
+    const { clientX, clientY } = e;
+    const { height, width, left, top } = ref.current.getBoundingClientRect();
+    const middleX = clientX - (left + width / 2);
+    const middleY = clientY - (top + height / 2);
+    setPosition({ x: middleX * 0.15, y: middleY * 0.15 });
+  };
+
+  const reset = () => {
+    setPosition({ x: 0, y: 0 });
+  };
+
+  return (
+    <motion.div
+      ref={ref}
+      onMouseMove={handleMouse}
+      onMouseLeave={reset}
+      animate={{ x: position.x, y: position.y }}
+      transition={{ type: "spring", stiffness: 150, damping: 15, mass: 0.1 }}
+      className={`inline-block ${className}`}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 /* ── Component ─────────────────────────────────────────────── */
 
 export default function LandingPage() {
@@ -275,12 +307,14 @@ export default function LandingPage() {
               >
                 Sign in
               </Link>
-              <Link
-                to="/signup"
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors"
-              >
-                Get Started
-              </Link>
+              <MagneticButton>
+                <Link
+                  to="/signup"
+                  className="block rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors"
+                >
+                  Get Started
+                </Link>
+              </MagneticButton>
             </div>
           </div>
         </div>
@@ -331,18 +365,22 @@ export default function LandingPage() {
               transition={{ delay: 0.45, duration: 0.6 }}
               className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4"
             >
-              <Link
-                to="/signup"
-                className="w-full sm:w-auto rounded-xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
-              >
-                Start Tracking for Free →
-              </Link>
-              <a
-                href="#features"
-                className="w-full sm:w-auto rounded-xl border border-gray-200 bg-white px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50 transition-all"
-              >
-                See How It Works
-              </a>
+              <MagneticButton className="w-full sm:w-auto">
+                <Link
+                  to="/signup"
+                  className="block w-full text-center rounded-xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
+                >
+                  Start Tracking for Free →
+                </Link>
+              </MagneticButton>
+              <MagneticButton className="w-full sm:w-auto">
+                <a
+                  href="#features"
+                  className="block w-full text-center rounded-xl border border-gray-200 bg-white px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50 transition-all"
+                >
+                  See How It Works
+                </a>
+              </MagneticButton>
             </motion.div>
           </div>
 
@@ -523,7 +561,7 @@ export default function LandingPage() {
       <section className="py-32 bg-white relative overflow-hidden">
         {/* Subtle background glow */}
         <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-indigo-50/50 blur-[120px] rounded-full pointer-events-none" />
-        
+
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 relative z-10">
           <div className="text-center mb-16">
             <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
@@ -721,25 +759,29 @@ export default function LandingPage() {
 
                 <div className="mt-8">
                   {plan.name === "Free" ? (
-                    <Link
-                      to="/signup"
-                      className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all ${plan.highlight
-                        ? "bg-white text-indigo-600 hover:bg-indigo-50"
-                        : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
-                        }`}
-                    >
-                      {plan.cta}
-                    </Link>
+                    <MagneticButton className="w-full">
+                      <Link
+                        to="/signup"
+                        className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all ${plan.highlight
+                          ? "bg-white text-indigo-600 hover:bg-indigo-50"
+                          : "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-100"
+                          }`}
+                      >
+                        {plan.cta}
+                      </Link>
+                    </MagneticButton>
                   ) : (
-                    <button
-                      disabled
-                      className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all cursor-not-allowed ${plan.highlight
-                        ? "bg-white/20 text-white/70"
-                        : "bg-gray-100 text-gray-400"
-                        }`}
-                    >
-                      {plan.cta}
-                    </button>
+                    <MagneticButton className="w-full opacity-60">
+                      <button
+                        disabled
+                        className={`block w-full text-center rounded-xl py-3 text-sm font-bold transition-all cursor-not-allowed ${plan.highlight
+                          ? "bg-white/20 text-white/70"
+                          : "bg-gray-100 text-gray-400"
+                          }`}
+                      >
+                        {plan.cta}
+                      </button>
+                    </MagneticButton>
                   )}
                 </div>
               </motion.div>
@@ -811,18 +853,22 @@ export default function LandingPage() {
                 Join hundreds of students who are already tracking opportunities with JobWatch. It's free to start.
               </p>
               <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-                <Link
-                  to="/signup"
-                  className="w-full sm:w-auto rounded-xl bg-white px-8 py-3.5 text-sm font-bold text-indigo-600 shadow-lg hover:bg-indigo-50 transition-all"
-                >
-                  Create Free Account →
-                </Link>
-                <Link
-                  to="/login"
-                  className="w-full sm:w-auto rounded-xl border border-white/30 px-8 py-3.5 text-sm font-bold text-white hover:bg-white/10 transition-all"
-                >
-                  Sign In
-                </Link>
+                <MagneticButton className="w-full sm:w-auto">
+                  <Link
+                    to="/signup"
+                    className="block w-full text-center rounded-xl bg-white px-8 py-3.5 text-sm font-bold text-indigo-600 shadow-lg hover:bg-indigo-50 transition-all"
+                  >
+                    Create Free Account →
+                  </Link>
+                </MagneticButton>
+                <MagneticButton className="w-full sm:w-auto">
+                  <Link
+                    to="/login"
+                    className="block w-full text-center rounded-xl border border-white/30 px-8 py-3.5 text-sm font-bold text-white hover:bg-white/10 transition-all"
+                  >
+                    Sign In
+                  </Link>
+                </MagneticButton>
               </div>
             </div>
           </motion.div>
