@@ -2,13 +2,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
-  doc,
   getDocs,
   limit,
   orderBy,
   query,
   startAfter,
-  updateDoc,
   where,
   Timestamp,
 } from "firebase/firestore";
@@ -227,22 +225,6 @@ export default function Jobs({ user }) {
     setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   };
 
-  const toggleBookmark = async (e, job) => {
-    e.preventDefault();
-    const newState = !job.saved;
-
-    setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, saved: newState } : j)));
-
-    try {
-      await updateDoc(doc(db, job._path), { saved: newState });
-      showToast(newState ? "Job pinned" : "Pin removed", "info");
-    } catch (err) {
-      console.error("Bookmark update error:", err);
-      setJobs((prev) => prev.map((j) => (j.id === job.id ? { ...j, saved: !newState } : j)));
-      showToast("Error updating bookmark", "error");
-    }
-  };
-
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
@@ -262,17 +244,6 @@ export default function Jobs({ user }) {
       return true;
     });
   }, [jobs, titleSearch, stateFilter]);
-
-  const { bookmarkedJobs, regularJobs } = useMemo(() => {
-    const showPinnedSeparately = selectedKeys.length === 0 && timeframe === "all";
-    if (showPinnedSeparately) {
-      return {
-        bookmarkedJobs: filteredJobs.filter((j) => j.saved),
-        regularJobs: filteredJobs.filter((j) => !j.saved),
-      };
-    }
-    return { bookmarkedJobs: [], regularJobs: filteredJobs };
-  }, [filteredJobs, selectedKeys, timeframe]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -313,28 +284,6 @@ export default function Jobs({ user }) {
           </a>
 
           <div className="flex items-center gap-4 flex-shrink-0">
-            <button
-              onClick={(e) => toggleBookmark(e, job)}
-              className={`p-2 rounded-full transition-colors ${
-                job.saved ? "text-amber-500 bg-amber-50" : "text-gray-300 hover:bg-gray-100 hover:text-gray-500"
-              }`}
-              aria-label={job.saved ? "Unpin job" : "Pin job"}
-            >
-              <svg
-                className="size-5"
-                fill={job.saved ? "currentColor" : "none"}
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z"
-                />
-              </svg>
-            </button>
-
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">
               <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
                 Updated
@@ -545,24 +494,7 @@ export default function Jobs({ user }) {
           </div>
         ) : (
           <div className="flex-grow">
-            {bookmarkedJobs.length > 0 && (
-              <div className="bg-amber-50/30">
-                <div className="px-6 py-3 border-b border-amber-100/50 flex items-center gap-2">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">
-                    📌 Pinned for Review
-                  </span>
-                </div>
-                <ul className="divide-y divide-gray-100">{bookmarkedJobs.map((job) => renderJobItem(job))}</ul>
-                <div className="relative py-4 bg-white flex items-center px-6">
-                  <div className="flex-grow border-t border-dashed border-gray-200" />
-                  <span className="flex-shrink mx-4 text-[10px] font-black text-gray-300 uppercase tracking-widest">
-                    Recent Postings
-                  </span>
-                  <div className="flex-grow border-t border-dashed border-gray-200" />
-                </div>
-              </div>
-            )}
-            <ul className="divide-y divide-gray-100">{regularJobs.map((job) => renderJobItem(job))}</ul>
+            <ul className="divide-y divide-gray-100">{filteredJobs.map((job) => renderJobItem(job))}</ul>
           </div>
         )}
 
