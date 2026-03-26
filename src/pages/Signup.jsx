@@ -1,9 +1,10 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import InterestPopup from "../components/InterestPopup.jsx";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
@@ -12,8 +13,15 @@ export default function Signup() {
   const [lastName, setLastName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [showPopup, setShowPopup] = useState(false);
 
   const { showToast } = useToast();
+
+  // Auto-show the interest popup after 1.5s
+  useEffect(() => {
+    const timer = setTimeout(() => setShowPopup(true), 1500);
+    return () => clearTimeout(timer);
+  }, []);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -134,6 +142,20 @@ export default function Signup() {
                 </button>
               </div>
             </form>
+
+            {/* Interest CTA */}
+            <div className="mt-6 text-center">
+              <button
+                type="button"
+                onClick={() => setShowPopup(true)}
+                className="inline-flex items-center gap-2 text-sm font-semibold text-indigo-600 hover:text-indigo-500 transition-colors group"
+              >
+                <svg className="h-4 w-4 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                </svg>
+                Interested? Let us know!
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -145,6 +167,9 @@ export default function Signup() {
           className="absolute inset-0 size-full object-cover"
         />
       </div>
+
+      {/* Interest Popup Modal */}
+      <InterestPopup open={showPopup} onClose={() => setShowPopup(false)} />
     </div>
   );
 }

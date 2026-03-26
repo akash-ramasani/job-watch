@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, serverTimestamp, setDoc, collection, getDocs, query, orderBy } from "firebase/firestore";
 import { sendEmailVerification } from "firebase/auth";
 import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
@@ -22,6 +22,8 @@ export default function Profile({ user, userMeta }) {
   const [pushStatus, setPushStatus] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
   );
+  const [interestedUsers, setInterestedUsers] = useState([]);
+  const [loadingInterested, setLoadingInterested] = useState(true);
 
   async function handleEnablePush() {
     if (typeof Notification === "undefined") {
@@ -67,6 +69,26 @@ export default function Profile({ user, userMeta }) {
     }
   }, [userMeta]);
 
+  // Fetch interested users from Firestore
+  useEffect(() => {
+    async function fetchInterestedUsers() {
+      try {
+        const q = query(collection(db, "interestedUsers"), orderBy("submittedAt", "desc"));
+        const snapshot = await getDocs(q);
+        const users = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+        setInterestedUsers(users);
+      } catch (err) {
+        console.error("Failed to fetch interested users:", err);
+      } finally {
+        setLoadingInterested(false);
+      }
+    }
+    fetchInterestedUsers();
+  }, []);
+
   async function handleVerify() {
     try {
       await sendEmailVerification(user);
@@ -98,6 +120,18 @@ export default function Profile({ user, userMeta }) {
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
+
+  function formatDate(timestamp) {
+    if (!timestamp) return "—";
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
 
   return (
     <form onSubmit={handleSave} className="space-y-12 py-10" style={{ fontFamily: 'Ubuntu, sans-serif' }}>
@@ -266,6 +300,71 @@ export default function Profile({ user, userMeta }) {
               <span className="text-[10px] tracking-widest uppercase font-black text-red-500">Denied in Browser</span>
             )}
           </div>
+        </div>
+      </div>
+
+      {/* Notifications — Interested Users */}
+      <div className="section-grid mt-12">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 uppercase tracking-widest text-[10px] font-black pb-1 border-b-2 border-indigo-500 inline-block">
+            Notifications
+          </h2>
+          <p className="mt-2 text-sm text-gray-500">
+            People who expressed interest in JobWatch. Reach out to welcome them!
+          </p>
+        </div>
+
+        <div className="md:col-span-2">
+          {loadingInterested ? (
+            <div className="flex items-center gap-2 text-sm text-gray-400 animate-pulse">
+              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Loading...
+            </div>
+          ) : interestedUsers.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center">
+              <svg className="mx-auto h-10 w-10 text-gray-300" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+              </svg>
+              <p className="mt-3 text-sm text-gray-400">No interested users yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-gray-200 shadow-sm">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Name</th>
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Email</th>
+                    <th className="px-4 py-3 text-left text-[10px] font-black uppercase tracking-widest text-gray-400">Date</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {interestedUsers.map((entry) => (
+                    <tr key={entry.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 text-sm font-medium text-gray-900 whitespace-nowrap">
+                        {entry.name}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
+                        <a href={`mailto:${entry.email}`} className="text-indigo-600 hover:text-indigo-500 hover:underline">
+                          {entry.email}
+                        </a>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">
+                        {formatDate(entry.submittedAt)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="bg-gray-50 px-4 py-2 text-right">
+                <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+                  {interestedUsers.length} {interestedUsers.length === 1 ? "person" : "people"} interested
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
