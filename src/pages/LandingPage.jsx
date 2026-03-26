@@ -157,6 +157,67 @@ const STATS = [
   { value: "<1min", label: "Alert Speed" },
 ];
 
+const FEATURED_COMPANIES = [
+  { name: "Microsoft", domain: "microsoft.com" },
+  { name: "LinkedIn", domain: "linkedin.com" },
+  { name: "Google DeepMind", domain: "deepmind.com" },
+  { name: "OpenAI", domain: "openai.com" },
+  { name: "Anthropic", domain: "anthropic.com" },
+  { name: "xAI", domain: "x.ai" },
+  { name: "Airbnb", domain: "airbnb.com" },
+  { name: "Stripe", domain: "stripe.com" },
+  { name: "Dropbox", domain: "dropbox.com" },
+  { name: "Figma", domain: "figma.com" },
+  { name: "Asana", domain: "asana.com" },
+  { name: "Coinbase", domain: "coinbase.com" },
+  { name: "Robinhood", domain: "robinhood.com" },
+  { name: "Databricks", domain: "databricks.com" },
+  { name: "Cloudflare", domain: "cloudflare.com" },
+  { name: "Airtable", domain: "airtable.com" },
+  { name: "Lyft", domain: "lyft.com" },
+  { name: "DoorDash", domain: "doordash.com" },
+  { name: "Pinterest", domain: "pinterest.com" },
+  { name: "Roblox", domain: "roblox.com" },
+  { name: "Epic Games", domain: "epicgames.com" },
+  { name: "Nintendo", domain: "nintendo.com" },
+  { name: "GoDaddy", domain: "godaddy.com" },
+  { name: "Elastic", domain: "elastic.co" },
+  { name: "HubSpot", domain: "hubspot.com" },
+  { name: "MongoDB", domain: "mongodb.com" },
+  { name: "Qualtrics", domain: "qualtrics.com" },
+  { name: "Datadog", domain: "datadoghq.com" },
+  { name: "Celonis", domain: "celonis.com" },
+  { name: "Fastly", domain: "fastly.com" },
+  { name: "Checkr", domain: "checkr.com" },
+  { name: "PagerDuty", domain: "pagerduty.com" },
+  { name: "Intercom", domain: "intercom.com" },
+  { name: "Affirm", domain: "affirm.com" },
+  { name: "Roku", domain: "roku.com" },
+  { name: "Netlify", domain: "netlify.com" },
+  { name: "Docker", domain: "docker.com" },
+  { name: "CoreWeave", domain: "coreweave.com" },
+  { name: "Neuralink", domain: "neuralink.com" },
+  { name: "Notion", domain: "notion.so" },
+  { name: "Ramp", domain: "ramp.com" },
+  { name: "Brex", domain: "brex.com" },
+  { name: "Zapier", domain: "zapier.com" },
+  { name: "ElevenLabs", domain: "elevenlabs.io" },
+  { name: "Cohere", domain: "cohere.com" },
+  { name: "Harvey", domain: "harvey.ai" },
+  { name: "Fivetran", domain: "fivetran.com" },
+  { name: "Klaviyo", domain: "klaviyo.com" },
+  { name: "Verkada", domain: "verkada.com" },
+  { name: "Rubrik", domain: "rubrik.com" },
+  { name: "Samsara", domain: "samsara.com" },
+  { name: "Snowflake", domain: "snowflake.com" },
+  { name: "Supabase", domain: "supabase.com" },
+  { name: "Replit", domain: "replit.com" },
+  { name: "Cursor", domain: "cursor.com" },
+  { name: "Perplexity", domain: "perplexity.ai" },
+];
+
+const LOGO_DEV_KEY = import.meta.env.VITE_LOGO_DEV_KEY;
+
 const DEMO_CHART_DATA = [
   { label: "Mon 08:00", written: 12 },
   { label: "Mon 14:00", written: 28 },
@@ -300,6 +361,69 @@ export default function LandingPage() {
             ))}
           </motion.div>
         </div>
+      </section>
+
+      {/* ═══ TRUSTED COMPANIES ═══ */}
+      <section className="relative py-24 overflow-hidden">
+        {/* Background accents */}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white via-indigo-50/30 to-white" />
+        <div className="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 h-px w-3/4 bg-gradient-to-r from-transparent via-indigo-200 to-transparent" />
+
+        <div className="relative mx-auto max-w-7xl px-6 lg:px-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6 }}
+            className="text-center mb-14"
+          >
+            <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-5">
+              <span className="inline-flex h-1.5 w-1.5 rounded-full bg-indigo-500" />
+              {FEATURED_COMPANIES.length}+ Companies
+            </span>
+            <p className="text-2xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              Tracking the companies you want to work at
+            </p>
+            <p className="mt-4 text-base text-gray-500 max-w-lg mx-auto">
+              From AI labs to fintech unicorns — every new opening, the moment it's posted.
+            </p>
+          </motion.div>
+
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.8, delay: 0.2 }}
+            className="relative rounded-3xl bg-white ring-1 ring-gray-200 shadow-xl shadow-gray-100/50 overflow-hidden"
+          >
+            <div className="grid grid-cols-4 gap-px bg-gray-200/60 sm:grid-cols-7">
+              {FEATURED_COMPANIES.map((company) => (
+                <div
+                  key={company.domain}
+                  className="group bg-white p-5 sm:p-6 flex items-center justify-center cursor-default relative overflow-hidden"
+                >
+                  <img
+                    src={`https://img.logo.dev/${company.domain}?token=${LOGO_DEV_KEY}&size=128`}
+                    alt={company.name}
+                    width={158}
+                    height={48}
+                    className="max-h-7 sm:max-h-8 w-full object-contain grayscale opacity-50 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-500 group-hover:scale-110"
+                    loading="lazy"
+                  />
+                  {/* In-cell tooltip */}
+                  <div className="absolute inset-0 flex items-end justify-center pb-1.5 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <span className="rounded-md bg-gray-900/80 backdrop-blur-sm px-2 py-0.5 text-[9px] font-semibold text-white whitespace-nowrap">
+                      {company.name}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        </div>
+
+        {/* Bottom gradient line */}
+        <div className="pointer-events-none absolute left-1/2 bottom-0 -translate-x-1/2 h-px w-3/4 bg-gradient-to-r from-transparent via-indigo-200 to-transparent" />
       </section>
 
       {/* ═══ FEATURES ═══ */}
