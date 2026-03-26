@@ -24,3 +24,13 @@ dist-ssr
 *.sw?
 
 .env
+*.json
+!firebase.json
+!package*.json
+!tsconfig*.json
+!eslint.config.js
+!vercel.json
+!mcp-server/package.json
+!mcp-server/claude_desktop_config.json
+service-account.json
+**/service-account.json

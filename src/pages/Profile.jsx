@@ -171,6 +171,29 @@ export default function Profile({ user, userMeta }) {
           </div>
 
           <div className="sm:col-span-4">
+            <label className="block text-xs font-black uppercase tracking-widest text-gray-400">User ID (UID)</label>
+            <div className="mt-2 flex gap-2">
+              <input
+                type="text"
+                value={user?.uid || ""}
+                readOnly
+                className="input-standard bg-gray-50 font-mono text-xs text-gray-500 cursor-text flex-1"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(user?.uid || "");
+                  showToast("User ID copied to clipboard!", "success");
+                }}
+                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-500 border border-indigo-100 bg-white rounded shadow-sm transition-colors whitespace-nowrap"
+              >
+                Copy
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-gray-400 italic">Copy this ID for your MCP server configuration.</p>
+          </div>
+
+          <div className="sm:col-span-4">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">University</label>
             <div className="mt-2">
               <input

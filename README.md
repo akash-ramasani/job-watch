@@ -1,16 +1,49 @@
-# React + Vite
+# 🕵️‍♂️ JobWatch
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+JobWatch is a modern, high-performance job tracking and scraping platform built with **React 19**, **Vite**, and **Firebase**. It empowers job seekers by automating the monitoring of company job boards, filtering for specific locations/roles, and providing real-time push notifications.
 
-Currently, two official plugins are available:
+---
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+## 🚀 Key Features
 
-## React Compiler
+- **Automated Scraping**: Periodically monitors job boards (Greenhouse, Ashby, Eightfold, Microsoft, etc.) for new postings.
+- **Smart Filtering**: Built-in US city/state and "Remote" detection to keep your feed relevant.
+- **Real-time Notifications**: Native OS-level push notifications via Firebase Cloud Messaging (FCM).
+- **Personal Dashboard**: Manage multiple job feeds, track sync history, and search through thousands of collected listings.
+- **Premium UI**: Sleek, glassmorphic design built with Framer Motion and Tailwind CSS.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## 🤖 AI Assistant Integration (MCP)
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+This project includes a **Model Context Protocol (MCP)** server that allows you to connect JobWatch directly to AI assistants like **Claude Desktop**.
+
+### Why use it?
+- **Natural Language Search**: *"Show me the newest jobs at NVIDIA that were posted today."*
+- **System Monitoring**: *"When was the last successful sync? Did any feeds fail?"*
+- **Actionable AI**: *"Trigger a fresh job sync and summarize the results."*
+
+**Check out the [mcp-server/README.md](./mcp-server/README.md) for full setup instructions.**
+
+---
+
+## 📁 Project Structure
+
+- `src/`: React frontend with modular routing and state management.
+- `functions/`: Firebase Cloud Functions (Gen 2) for scheduled job scraping and push logic.
+- `mcp-server/`: The Model Context Protocol server for AI assistant connectivity.
+- `public/`: Assets and Service Worker configuration.
+
+---
+
+## 🛠️ Getting Started
+
+1.  **Clone the repo**: `git clone ...`
+2.  **Install dependencies**: `npm install`
+3.  **Setup Firebase**: Add your `.env` file with Firebase credentials (see `.env.example`).
+4.  **Run Dev Server**: `npm run dev`
+
+---
+
+## 📄 License
+MIT
