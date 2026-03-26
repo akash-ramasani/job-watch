@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { useToast } from "../components/Toast/ToastProvider.jsx"; 
+import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
@@ -13,10 +13,13 @@ export default function Signup() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const { showToast } = useToast(); 
+  const { showToast } = useToast();
 
   async function onSubmit(e) {
     e.preventDefault();
+    showToast("Registration is currently disabled.", "error");
+    return; // Prevent any Firebase signup attempts
+    
     setErr("");
     setBusy(true);
     try {
@@ -64,10 +67,11 @@ export default function Signup() {
                     <input
                       type="text"
                       required
+                      disabled
                       autoComplete="given-name"
                       value={firstName}
                       onChange={(e) => setFirstName(e.target.value)}
-                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white cursor-not-allowed opacity-75"
                     />
                   </div>
                 </div>
@@ -77,10 +81,11 @@ export default function Signup() {
                     <input
                       type="text"
                       required
+                      disabled
                       autoComplete="family-name"
                       value={lastName}
                       onChange={(e) => setLastName(e.target.value)}
-                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                      className="input-standard !bg-gray-50 border-transparent focus:!bg-white cursor-not-allowed opacity-75"
                     />
                   </div>
                 </div>
@@ -92,10 +97,11 @@ export default function Signup() {
                   <input
                     type="email"
                     required
+                    disabled
                     autoComplete="username"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white cursor-not-allowed opacity-75"
                   />
                 </div>
               </div>
@@ -106,11 +112,12 @@ export default function Signup() {
                   <input
                     type="password"
                     required
+                    disabled
                     autoComplete="new-password"
                     minLength={6}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white"
+                    className="input-standard !bg-gray-50 border-transparent focus:!bg-white cursor-not-allowed opacity-75"
                   />
                 </div>
               </div>

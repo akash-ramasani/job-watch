@@ -7,7 +7,6 @@ import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { auth, db } from "./firebase";
 
 import TopBar from "./components/TopBar.jsx";
-import JobSyncNotification from "./components/JobSyncNotification.jsx";
 
 import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
@@ -81,7 +80,6 @@ export default function App() {
       <div className="h-full bg-white">
         {user && (
           <>
-            <JobSyncNotification user={user} />
             <TopBar 
               user={user} 
               userMeta={userMeta} 
