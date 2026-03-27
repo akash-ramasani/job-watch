@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { db } from '../../firebase';
+import { collection, query, orderBy, limit, onSnapshot, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 
 export default function ChatAssistant({ user }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -12,6 +14,31 @@ export default function ChatAssistant({ user }) {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  // Load history on mount
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    async function loadHistory() {
+      const q = query(
+        collection(db, "users", user.uid, "chatHistory"),
+        orderBy("timestamp", "asc"),
+        limit(50)
+      );
+      
+      const snapshot = await getDocs(q);
+      const history = snapshot.docs.map(doc => ({
+        role: doc.data().role,
+        content: doc.data().content
+      }));
+
+      if (history.length > 0) {
+        setMessages(history);
+      }
+    }
+
+    loadHistory();
+  }, [user?.uid]);
 
   useEffect(() => {
     if (isOpen) {
@@ -27,16 +54,33 @@ export default function ChatAssistant({ user }) {
     scrollToBottom();
   }, [messages]);
 
+  const saveMessage = async (role, content) => {
+    if (!user?.uid) return;
+    try {
+      await addDoc(collection(db, "users", user.uid, "chatHistory"), {
+        role,
+        content,
+        timestamp: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("Error saving message:", error);
+    }
+  };
+
   const handleSend = async (e) => {
     if (e) e.preventDefault();
     if (!inputValue.trim() || loading) return;
 
-    const userMessage = { role: 'user', content: inputValue };
+    const userContent = inputValue.trim();
+    const userMessage = { role: 'user', content: userContent };
     const newMessages = [...messages, userMessage];
     
     setMessages(newMessages);
     setInputValue('');
     setLoading(true);
+
+    // Save user message to Firestore
+    saveMessage('user', userContent);
 
     try {
       const response = await fetch('https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant', {
@@ -50,12 +94,17 @@ export default function ChatAssistant({ user }) {
 
       const data = await response.json();
       if (data.ok) {
-        setMessages([...newMessages, data.response]);
+        const assistantMsg = data.response;
+        setMessages([...newMessages, assistantMsg]);
+        // Save assistant response to Firestore
+        saveMessage('assistant', assistantMsg.content);
       } else {
-        setMessages([...newMessages, { role: 'assistant', content: `Error: ${data.error || 'Something went wrong.'}` }]);
+        const errorMsg = { role: 'assistant', content: `Error: ${data.error || 'Something went wrong.'}` };
+        setMessages([...newMessages, errorMsg]);
       }
     } catch (error) {
-      setMessages([...newMessages, { role: 'assistant', content: 'Sorry, I failed to connect to the assistant.' }]);
+      const errorMsg = { role: 'assistant', content: 'Sorry, I failed to connect to the assistant.' };
+      setMessages([...newMessages, errorMsg]);
     } finally {
       setLoading(false);
     }

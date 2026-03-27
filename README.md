@@ -12,6 +12,7 @@ JobWatch is a modern, high-performance job tracking and scraping platform built 
 - **🌎 Localized Experience**: All job timestamps and sync logs are automatically localized to **Pacific Time (PT)**.
 - **🔔 Real-time Notifications**: Native OS-level push notifications via Firebase Cloud Messaging (FCM).
 - **📊 Sync Analytics**: Interactive charts powered by **Recharts** to visualize job ingestion trends over time.
+- **📜 Persistent AI History**: All conversations are saved to Firestore, allowing you to pick up where you left off across sessions and devices.
 - **🛠️ MCP Server**: Includes a Model Context Protocol server to connect your data to external AI tools like Claude Desktop.
 
 ---

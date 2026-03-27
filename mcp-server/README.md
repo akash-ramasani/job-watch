@@ -2,7 +2,7 @@
 
 This standalone **Model Context Protocol (MCP)** server allows you to connect your JobWatch job data directly to AI assistants like **Claude Desktop**. 
 
-It enables natural language queries against your job listings, sync history, and feed configurations.
+It enables natural language queries against your job listings, sync history, and feed configurations. Conversations in the web app are automatically saved to Firestore for persistence.
 
 ---
 
