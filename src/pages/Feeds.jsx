@@ -36,12 +36,19 @@ const URL_RULES = {
     isValid: (u) => /\/api\/pcsx\/search/i.test(u),
     normalize: (u) => u.trim(),
   },
+  netflix: {
+    label: "Netflix Careers API",
+    placeholder: "https://explore.jobs.netflix.net/api/apply/v2/jobs?domain=netflix.com&...",
+    isValid: (u) => u.includes("explore.jobs.netflix.net/api/apply/v2/jobs"),
+    normalize: (u) => u.trim(),
+  },
 };
 
 function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
   if (u.includes("api.ashbyhq.com/posting-api/job-board/")) return "ashby";
+  if (u.includes("explore.jobs.netflix.net/api/apply/v2/jobs")) return "netflix";
   if (u.includes("/api/pcsx/search")) return "eightfold";
   return "greenhouse";
 }
@@ -49,6 +56,7 @@ function detectSourceFromUrl(raw) {
 function prettySourceLabel(source) {
   if (source === "ashby") return "AshbyHQ";
   if (source === "eightfold") return "Eightfold.ai";
+  if (source === "netflix") return "Netflix";
   return "Greenhouse";
 }
 
@@ -62,11 +70,13 @@ function validateUrlForSource(source, rawUrl) {
   if (!rules.isValid(cleanUrl)) {
     return {
       ok: false,
-      error:
-        source === "ashby"
-          ? "Ashby URL should look like: https://api.ashbyhq.com/posting-api/job-board/<company>"
-          : source === "eightfold"
-            ? "Eightfold/Microsoft URL should look like: https://<domain>/api/pcsx/search?domain=<domain>&..."
+    error:
+      source === "ashby"
+        ? "Ashby URL should look like: https://api.ashbyhq.com/posting-api/job-board/<company>"
+        : source === "eightfold"
+          ? "Eightfold/Microsoft URL should look like: https://<domain>/api/pcsx/search?domain=<domain>&..."
+          : source === "netflix"
+            ? "Netflix URL should look like: https://explore.jobs.netflix.net/api/apply/v2/jobs?domain=netflix.com&..."
             : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
   }

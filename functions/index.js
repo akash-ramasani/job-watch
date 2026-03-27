@@ -475,7 +475,12 @@ async function listUserIdsToProcess() {
  * ----------------------------
  */
 async function fetchJobsFromFeed(url, source, recentCutoffMs) {
-  if (source.includes("eightfold") || source.includes("microsoft") || source.includes("paypal")) {
+  if (
+    source.includes("eightfold") ||
+    source.includes("microsoft") ||
+    source.includes("paypal") ||
+    source.includes("netflix")
+  ) {
     return await fetchEightfoldJobsPaginated(url, recentCutoffMs);
   }
 
@@ -671,7 +676,12 @@ function normalizeJobMinimal(rawJob, ctx) {
     };
   }
 
-  if (source.includes("eightfold") || source.includes("microsoft") || source.includes("paypal")) {
+  if (
+    source.includes("eightfold") ||
+    source.includes("microsoft") ||
+    source.includes("paypal") ||
+    source.includes("netflix")
+  ) {
     const externalId = rawJob.id != null ? String(rawJob.id)
       : (rawJob.displayJobId != null ? String(rawJob.displayJobId) : null);
 
@@ -685,9 +695,9 @@ function normalizeJobMinimal(rawJob, ctx) {
       // fallback
     }
 
-    const jobUrl = rawJob.positionUrl
+    const jobUrl = rawJob.canonicalPositionUrl || (rawJob.positionUrl
       ? `https://${domain}${rawJob.positionUrl}`
-      : null;
+      : null);
     if (!externalId && !jobUrl) return null;
 
     const title = rawJob.name ? String(rawJob.name) : null;
@@ -697,12 +707,13 @@ function normalizeJobMinimal(rawJob, ctx) {
     const standardizedArr = Array.isArray(rawJob.standardizedLocations) ? rawJob.standardizedLocations : [];
     const locationName = locationsArr.join("; ") || null;
 
-    // postedTs is epoch seconds
-    const sourceUpdatedTs = rawJob.postedTs
-      ? admin.firestore.Timestamp.fromDate(new Date(rawJob.postedTs * 1000))
+    // postedTs / t_update is epoch seconds
+    const updatedEpoch = rawJob.t_update || rawJob.postedTs || 0;
+    const sourceUpdatedTs = updatedEpoch
+      ? admin.firestore.Timestamp.fromDate(new Date(updatedEpoch * 1000))
       : now;
-    const sourceUpdatedIso = rawJob.postedTs
-      ? new Date(rawJob.postedTs * 1000).toISOString()
+    const sourceUpdatedIso = updatedEpoch
+      ? new Date(updatedEpoch * 1000).toISOString()
       : null;
 
     // Use standardized locations as tokens (contains city, state abbrev, country)

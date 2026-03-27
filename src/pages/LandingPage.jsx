@@ -160,6 +160,7 @@ const STATS = [
 const FEATURED_COMPANIES = [
   { name: "Morgan Stanley", domain: "morganstanley.com" },
   { name: "BNY Mellon", domain: "bnymellon.com" },
+  { name: "Netflix", domain: "netflix.com" },
   { name: "NVIDIA", domain: "nvidia.com" },
   { name: "Google DeepMind", domain: "deepmind.com" },
   { name: "Anthropic", domain: "anthropic.com" },
@@ -336,7 +337,7 @@ export default function LandingPage() {
             >
               <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6">
                 <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-                Now tracking Greenhouse, AshbyHQ & Eightfold.ai
+                Now tracking Greenhouse, AshbyHQ, Eightfold.ai & Netflix
               </span>
             </motion.div>
 
