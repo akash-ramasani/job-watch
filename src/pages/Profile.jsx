@@ -172,23 +172,28 @@ export default function Profile({ user, userMeta }) {
 
           <div className="sm:col-span-4">
             <label className="block text-xs font-black uppercase tracking-widest text-gray-400">User ID (UID)</label>
-            <div className="mt-2 flex gap-2">
+            <div className="mt-2 relative flex items-center">
               <input
                 type="text"
                 value={user?.uid || ""}
                 readOnly
-                className="input-standard bg-gray-50 font-mono text-xs text-gray-500 cursor-text flex-1"
+                className="input-standard bg-gray-50 font-mono text-xs text-gray-400 cursor-text pr-10"
               />
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(user?.uid || "");
-                  showToast("User ID copied to clipboard!", "success");
-                }}
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-500 border border-indigo-100 bg-white rounded shadow-sm transition-colors whitespace-nowrap"
-              >
-                Copy
-              </button>
+              <div className="absolute inset-y-0 right-0 flex items-center pr-3">
+                <button
+                  type="button"
+                  title="Copy User ID"
+                  onClick={() => {
+                    navigator.clipboard.writeText(user?.uid || "");
+                    showToast("User ID copied to clipboard!", "success");
+                  }}
+                  className="p-1.5 text-gray-400 hover:text-indigo-600 transition-colors rounded-md hover:bg-indigo-50"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="size-4">
+                    <path fillRule="evenodd" d="M13.887 3.182c.396.037.79.08 1.183.128C16.194 3.45 17 4.414 17 5.517V16.75A2.25 2.25 0 0 1 14.75 19h-9.5A2.25 2.25 0 0 1 3 16.75V5.517c0-1.103.806-2.068 1.93-2.207.393-.048.787-.09 1.183-.128A3.001 3.001 0 0 1 9 1h2a3.001 3.001 0 0 1 2.887 2.182ZM7.5 4.75a.75.75 0 0 1 .75-.75h3.5a.75.75 0 0 1 0 1.5h-3.5a.75.75 0 0 1-.75-.75Z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <p className="mt-1 text-[10px] text-gray-400 italic">Copy this ID for your MCP server configuration.</p>
           </div>
