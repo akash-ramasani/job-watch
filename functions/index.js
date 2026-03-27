@@ -522,7 +522,7 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
     urlObj.searchParams.set("start", String(offset));
     const json = await fetchJson(urlObj.toString());
 
-    const positions = json?.data?.positions;
+    const positions = json?.positions || json?.data?.positions;
     if (!Array.isArray(positions) || positions.length === 0) break;
 
     allPositions.push(...positions);
@@ -530,9 +530,10 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
     // Smart stop: if the oldest job on this page is older than our cutoff, stop
     if (recentCutoffMs) {
       const oldestOnPage = positions[positions.length - 1];
-      const oldestTs = (oldestOnPage?.postedTs || 0) * 1000; // epoch seconds → ms
-      if (oldestTs < recentCutoffMs) {
-        logger.info(`Microsoft pagination: stopping at offset=${offset}, oldest job on page is past cutoff`);
+      const oldestEpoch = oldestOnPage?.t_update || oldestOnPage?.postedTs || 0;
+      const oldestTs = oldestEpoch * 1000; // epoch seconds → ms
+      if (oldestTs > 0 && oldestTs < recentCutoffMs) {
+        logger.info(`Eightfold pagination: stopping at offset=${offset}, oldest job on page is past cutoff`);
         break;
       }
     }
@@ -540,7 +541,7 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
     // If we got fewer than PAGE_SIZE, we've reached the end
     if (positions.length < PAGE_SIZE) break;
 
-    const totalCount = json?.data?.count || Infinity;
+    const totalCount = json?.count ?? json?.data?.count ?? Infinity;
     offset += PAGE_SIZE;
     if (offset >= totalCount) break;
   }
