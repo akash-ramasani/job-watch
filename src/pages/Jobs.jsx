@@ -267,20 +267,22 @@ export default function Jobs({ user }) {
     let scoreBadge = null;
     if (hasScore) {
       const config = score >= 80
-        ? { label: "Strong Match", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" }
+        ? { label: "Strong Match", wrapperCls: "bg-emerald-50 text-emerald-800 ring-emerald-600/20 shadow-sm shadow-emerald-500/5", scoreCls: "bg-emerald-500 text-white shadow-sm shadow-emerald-500/40" }
         : score >= 60
-        ? { label: "Good Match", cls: "bg-amber-50 text-amber-700 ring-amber-200" }
+        ? { label: "Good Match", wrapperCls: "bg-amber-50 text-amber-800 ring-amber-600/20 shadow-sm shadow-amber-500/5", scoreCls: "bg-amber-500 text-white shadow-sm shadow-amber-500/40" }
         : score >= 40
-        ? { label: "Partial Match", cls: "bg-indigo-50 text-indigo-700 ring-indigo-200" }
-        : { label: "Poor Match", cls: "bg-gray-100 text-gray-500 ring-gray-200" };
+        ? { label: "Partial Match", wrapperCls: "bg-indigo-50 text-indigo-800 ring-indigo-600/20 shadow-sm shadow-indigo-500/5", scoreCls: "bg-indigo-500 text-white shadow-sm shadow-indigo-500/40" }
+        : { label: "Poor Match", wrapperCls: "bg-gray-50 text-gray-500 ring-gray-300/40 hover:bg-gray-100", scoreCls: "bg-gray-300 text-gray-700 block" };
 
       scoreBadge = (
         <span
           title={job.scoreReason || ""}
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ring-1 cursor-help transition-all ${config.cls}`}
+          className={`inline-flex items-center gap-1.5 rounded-full pl-0.5 pr-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ring-1 ring-inset cursor-help transition-all hover:scale-[1.02] ${config.wrapperCls}`}
         >
-          <span className="font-mono">{score}</span>
-          <span>{config.label}</span>
+          <span className={`flex items-center justify-center h-4.5 min-w-[20px] px-1 rounded-full font-mono font-black text-[9px] ${config.scoreCls}`}>
+            {score}
+          </span>
+          <span className="translate-y-[0.5px]">{config.label}</span>
         </span>
       );
     }

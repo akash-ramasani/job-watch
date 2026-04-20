@@ -1023,7 +1023,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
  * Returns { score: number, reason: string } or null.
  */
 async function scoreJobWithClaude(jobTitle, jobDescription, resumeText) {
-  const prompt = `You are a recruiting expert. Given a candidate's resume profile and a job description, score how relevant this job is for the candidate.
+  const systemPrompt = `You are a recruiting expert. Given a candidate's resume profile and a job description, score how relevant this job is for the candidate.
 
 Return ONLY a JSON object with:
 - "score": integer 0-100 (0=completely irrelevant, 100=perfect match)
@@ -1032,9 +1032,9 @@ Return ONLY a JSON object with:
 Example: {"score": 82, "reason": "Strong React and TypeScript skills match this frontend engineering role."}
 
 ## Candidate Resume Profile
-${resumeText}
+${resumeText}`;
 
-## Job Title
+  const userPrompt = `## Job Title
 ${jobTitle}
 
 ## Job Description
@@ -1043,9 +1043,18 @@ ${jobDescription}
 Respond with ONLY the JSON object, no other text.`;
 
   const msg = await anthropic.messages.create({
-    model: "claude-sonnet-4-6",
+    model: "claude-haiku-4-5",
     max_tokens: 120,
-    messages: [{ role: "user", content: prompt }],
+    system: [
+      {
+        type: "text",
+        text: systemPrompt,
+        cache_control: { type: "ephemeral" }
+      }
+    ],
+    messages: [
+      { role: "user", content: userPrompt }
+    ]
   });
 
   const raw = msg.content?.[0]?.text?.trim() || "";
