@@ -29,6 +29,9 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
+const Busboy = require("busboy");
+const pdfParse = require("pdf-parse");
+const mammoth = require("mammoth");
 
 // p-limit CommonJS import fix
 const pLimitPkg = require("p-limit");
@@ -359,6 +362,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   let jobsKeptRecent = 0;
   let jobsWritten = 0;
 
+  // Scoring metadata — collected during sync, consumed after bw.close()
+  const newJobsForScoring = [];
+
   const tasks = feeds.map((feed) =>
     limiter(async () => {
       const feedId = feed.id;
@@ -409,10 +415,13 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
 
+          // Strip descriptionHint — scoring only, never written to Firestore
+          const { descriptionHint, ...jobForFirestore } = job;
+
           bw.set(
             jobRef,
             {
-              ...job,
+              ...jobForFirestore,
               fetchedAt: now,
               expireAt,
             },
@@ -420,6 +429,15 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           );
 
           jobsWritten += 1;
+
+          // Collect for post-sync scoring
+          newJobsForScoring.push({
+            jobDocId: job.jobDocId,
+            source: job.source,
+            externalId: job.externalId,
+            feedUrl: url || feedConfig.url,
+            descriptionHint: descriptionHint || null,
+          });
         }
 
         await feedRef.set(
@@ -448,6 +466,13 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
   await Promise.all(tasks);
   await bw.close();
+
+  // Fire-and-forget scoring — does NOT block sync return or timing
+  if (newJobsForScoring.length > 0) {
+    scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
+      logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
+    );
+  }
 
   return {
     ok: true,
@@ -654,6 +679,11 @@ function normalizeJobMinimal(rawJob, ctx) {
     if (rawJob.department != null) meta["Department"] = rawJob.department;
     if (rawJob.team != null) meta["Team"] = rawJob.team;
 
+    // Ashby listings include the full JD in the feed response — capture for scoring (not stored in Firestore)
+    const descriptionHint = rawJob.descriptionPlain
+      ? String(rawJob.descriptionPlain).slice(0, 4000)
+      : null;
+
     const jobDocId = makeJobDocId({
       source: "ashbyhq",
       companyKey,
@@ -674,6 +704,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedTs,
       sourceUpdatedIso,
       meta,
+      descriptionHint, // scoring only, stripped before Firestore write
     };
   }
 
@@ -882,6 +913,237 @@ function simpleChecksum(s) {
 }
 
 /**
+ * =====================================================================================
+ * 🤖 AI JOB RELEVANCE SCORING
+ * =====================================================================================
+ *
+ * After each sync, scores newly written jobs against the user's saved resume profile.
+ * Only { relevanceScore, scoreReason, scoredAt } is written back — JD is never persisted.
+ */
+
+/**
+ * Strip HTML tags from a string cleanly.
+ */
+function stripHtml(html) {
+  if (!html) return "";
+  return String(html)
+    .replace(/<\/?(p|li|h[1-6]|br|div|ul|ol)[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ").replace(/&#43;/g, "+").replace(/&[a-z]+;/gi, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim()
+    .slice(0, 4000);
+}
+
+/**
+ * Fetch a job description from the ATS-specific endpoint.
+ * Returns plain text or null on failure.
+ */
+async function fetchJobDescription(source, externalId, feedUrl, descriptionHint) {
+  try {
+    // Ashby: description already captured from feed listing
+    if (source === "ashbyhq" && descriptionHint) {
+      return descriptionHint.slice(0, 4000);
+    }
+
+    if (source === "greenhouse") {
+      // Try API feed URL: https://boards-api.greenhouse.io/v1/boards/{slug}/jobs
+      let slug = null;
+      const apiMatch = feedUrl.match(/boards-api\.greenhouse\.io\/v1\/boards\/([^/?#]+)/i);
+      if (apiMatch) slug = apiMatch[1];
+
+      // Fallback: jobUrl format: https://boards.greenhouse.io/{slug}/jobs/{id}
+      if (!slug) {
+        const jobMatch = feedUrl.match(/boards\.greenhouse\.io\/([^/?#]+)\/jobs/i);
+        if (jobMatch) slug = jobMatch[1];
+      }
+
+      if (!slug || !externalId) return null;
+      
+      // Greenhouse IDs in normalized feed look like "7743800_5ca2b88". API only accepts "7743800"
+      const realId = String(externalId).split("_")[0];
+
+      const url = `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs/${realId}`;
+      const json = await fetchJson(url);
+      const raw = json?.content || json?.description || "";
+      return stripHtml(raw);
+    }
+
+    if (source === "eightfold") {
+      // Netflix: uses its own endpoint (not the Eightfold /api/pcsx endpoint)
+      if (feedUrl.includes("netflix") || (externalId && String(externalId).length < 20)) {
+        // heuristic: Netflix externalIds are short numeric, Eightfold ones are very long
+        // try Netflix endpoint first if URL hints at it
+        if (feedUrl.includes("netflix")) {
+          if (!externalId) return null;
+          const url = `https://explore.jobs.netflix.net/api/apply/v2/jobs/${externalId}?domain=netflix.com`;
+          const json = await fetchJson(url);
+          const raw = json?.job_description || "";
+          if (raw) return stripHtml(raw);
+        }
+      }
+
+      // Other Eightfold companies (NVIDIA, Microsoft, PayPal, etc.)
+      let apiBase = "";
+      let domain = "";
+      try {
+        const u = new URL(feedUrl);
+        apiBase = `${u.protocol}//${u.hostname}`;
+        const subdomain = u.hostname.split(".")[0];
+        domain = `${subdomain}.com`;
+        if (u.hostname.includes("microsoft")) domain = "microsoft.com";
+        if (u.hostname.includes("nvidia")) domain = "nvidia.com";
+        if (u.hostname.includes("paypal")) domain = "paypal.com";
+        // For Netflix canonical job URLs, repoint to Netflix API
+        if (u.hostname.includes("netflix")) {
+          const url = `https://explore.jobs.netflix.net/api/apply/v2/jobs/${externalId}?domain=netflix.com`;
+          const json = await fetchJson(url);
+          const raw = json?.job_description || "";
+          return stripHtml(raw);
+        }
+      } catch (_) { return null; }
+      if (!externalId || !apiBase) return null;
+      const url = `${apiBase}/api/pcsx/position_details?position_id=${externalId}&domain=${domain}&hl=en`;
+      const json = await fetchJson(url);
+      const raw = json?.data?.jobDescription || "";
+      return stripHtml(raw);
+    }
+
+    return null;
+  } catch (err) {
+    logger.warn(`fetchJobDescription failed source=${source} externalId=${externalId}: ${err?.message}`);
+    return null;
+  }
+}
+
+/**
+ * Score a single job against a resume using Claude.
+ * Returns { score: number, reason: string } or null.
+ */
+async function scoreJobWithClaude(jobTitle, jobDescription, resumeText) {
+  const prompt = `You are a recruiting expert. Given a candidate's resume profile and a job description, score how relevant this job is for the candidate.
+
+Return ONLY a JSON object with:
+- "score": integer 0-100 (0=completely irrelevant, 100=perfect match)
+- "reason": one sentence (max 15 words) explaining the score
+
+Example: {"score": 82, "reason": "Strong React and TypeScript skills match this frontend engineering role."}
+
+## Candidate Resume Profile
+${resumeText}
+
+## Job Title
+${jobTitle}
+
+## Job Description
+${jobDescription}
+
+Respond with ONLY the JSON object, no other text.`;
+
+  const msg = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 120,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const raw = msg.content?.[0]?.text?.trim() || "";
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  const parsed = JSON.parse(jsonMatch[0]);
+  const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
+  if (Number.isNaN(score)) return null;
+  return { score, reason: String(parsed.reason || "").slice(0, 120) };
+}
+
+/**
+ * Main scoring orchestrator — runs after every sync, fire-and-forget.
+ * Fetches JDs, scores with Claude, writes score back to job doc.
+ * Never stores the JD itself.
+ */
+async function scoreNewJobsForUser(userId, newJobs) {
+  if (!newJobs || newJobs.length === 0) return;
+
+  // Load user's saved resume profile
+  let resumeProfile = null;
+  try {
+    const resumeSnap = await db.collection("users").doc(userId).collection("resume").doc("profile").get();
+    if (!resumeSnap.exists) {
+      logger.info(`scoreNewJobsForUser: no resume for userId=${userId}, skipping`);
+      return;
+    }
+    resumeProfile = resumeSnap.data();
+  } catch (err) {
+    logger.warn(`scoreNewJobsForUser: failed to load resume for userId=${userId}: ${err?.message}`);
+    return;
+  }
+
+  // Build a compact resume text for the prompt
+  const resumeText = [
+    resumeProfile.summary ? `Summary: ${resumeProfile.summary}` : "",
+    resumeProfile.skills?.length ? `Skills: ${resumeProfile.skills.slice(0, 40).join(", ")}` : "",
+    resumeProfile.roles?.length
+      ? `Experience:\n${resumeProfile.roles.slice(0, 4).map((r) => `  - ${r.title} at ${r.company}: ${(r.description || "").slice(0, 200)}`).join("\n")}`
+      : "",
+    resumeProfile.education?.length
+      ? `Education: ${resumeProfile.education.map((e) => `${e.degree} at ${e.institution}`).join("; ")}`
+      : "",
+    resumeProfile.projects?.length
+      ? `Projects: ${resumeProfile.projects.slice(0, 3).map((p) => `${p.name} (${p.techStack})`).join("; ")}`
+      : "",
+  ].filter(Boolean).join("\n").slice(0, 2500);
+
+  if (!resumeText) {
+    logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
+    return;
+  }
+
+  const scoringLimiter = pLimit(3); // gentle on Claude & ATS APIs
+  const scoredAt = admin.firestore.Timestamp.now();
+
+  const scoringTasks = newJobs.map((job) =>
+    scoringLimiter(async () => {
+      try {
+        // 1. Fetch JD
+        let description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, job.descriptionHint);
+        if (!description || description.length < 50) {
+          logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, skipping`);
+          return;
+        }
+
+        // Truncate to keep Claude tokens low
+        description = description.slice(0, 3500);
+
+        // Read job title from Firestore so we have full context
+        const jobSnap = await db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId).get();
+        const jobTitle = jobSnap.exists ? (jobSnap.data()?.title || "") : "";
+
+        // 2. Score with Claude
+        const result = await scoreJobWithClaude(jobTitle, description, resumeText);
+        if (!result) {
+          logger.warn(`scoreNewJobsForUser: Claude returned no score for ${job.jobDocId}`);
+          return;
+        }
+
+        // 3. Write ONLY score + reason (no JD) back to job doc
+        await db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId).set(
+          { relevanceScore: result.score, scoreReason: result.reason, scoredAt },
+          { merge: true }
+        );
+
+        logger.info(`Scored ${job.jobDocId}: ${result.score}/100 — ${result.reason}`);
+      } catch (err) {
+        logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
+      }
+    })
+  );
+
+  await Promise.all(scoringTasks);
+  logger.info(`scoreNewJobsForUser: finished scoring ${newJobs.length} jobs for userId=${userId}`);
+}
+
+/**
  * ----------------------------
  * PUSH NOTIFICATIONS
  * ----------------------------
@@ -934,60 +1196,7 @@ async function sendPushNotification(userId, summary, durationMs) {
   }
 }
 
-/**
- * =====================================================================================
- * 🔥 MANUAL ADMIN TOOL: Delete all SpaceX jobs for a specific user
- * =====================================================================================
- *
- * Usage:
- *   https://us-central1-<PROJECT_ID>.cloudfunctions.net/deleteSpacexJobs?userId=<UID>
- *   https://us-central1-<PROJECT_ID>.cloudfunctions.net/deleteSpacexJobs?userId=<UID>&dryRun=true
- */
-exports.deleteSpacexJobs = onRequest(
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: true },
-  async (req, res) => {
-    try {
-      const userId = String(req.query.userId || "").trim();
-      if (!userId) {
-        return res.status(400).json({ error: "Missing userId query param." });
-      }
 
-      const dryRun = String(req.query.dryRun || "").toLowerCase() === "true";
-
-      const jobsRef = db
-        .collection("users")
-        .doc(userId)
-        .collection("jobs")
-        .where("companyName", "==", "SpaceX");
-
-      const snap = await jobsRef.get();
-
-      const scanned = snap.size;
-      let deleted = 0;
-
-      if (!dryRun) {
-        const bw = db.bulkWriter();
-        for (const docSnap of snap.docs) {
-          bw.delete(docSnap.ref);
-          deleted += 1;
-        }
-        await bw.close();
-      }
-
-      return res.json({
-        ok: true,
-        userId,
-        dryRun,
-        scanned,
-        deleted,
-      });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      logger.error("deleteSpacexJobs failed:", e);
-      return res.status(500).json({ error: msg });
-    }
-  }
-);
 
 /**
  * =====================================================================================
@@ -1143,6 +1352,193 @@ exports.askAssistant = onRequest(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("askAssistant failed:", e);
+      return res.status(500).json({ error: msg });
+    }
+  }
+);
+
+/**
+ * =====================================================================================
+ * 📄 RESUME PARSER: Upload a PDF/DOCX/TXT file and extract structured JSON via Claude
+ * =====================================================================================
+ *
+ * POST multipart/form-data with fields:
+ *   - resume  (file): The resume file (PDF, DOCX, or TXT, max 10 MB)
+ *   - userId  (string): The authenticated user's UID
+ *
+ * Returns: { ok: true, parsed: { summary, skills, roles, education, projects, certifications, rawText } }
+ */
+exports.parseResume = onRequest(
+  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed. Use POST." });
+    }
+
+    try {
+      // ─── 1. Parse multipart form data with Busboy ───────────────────────
+      const { fileBuffer, mimeType, originalName, userId } = await new Promise((resolve, reject) => {
+        const bb = Busboy({
+          headers: req.headers,
+          limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB hard limit
+        });
+
+        let fileBuffer = null;
+        let mimeType = "";
+        let originalName = "";
+        let userId = "";
+        let fileTooLarge = false;
+
+        bb.on("field", (name, value) => {
+          if (name === "userId") userId = value;
+        });
+
+        bb.on("file", (fieldname, stream, info) => {
+          mimeType = info.mimeType || "";
+          originalName = info.filename || "";
+          const chunks = [];
+
+          stream.on("data", (chunk) => chunks.push(chunk));
+
+          stream.on("limit", () => {
+            fileTooLarge = true;
+            stream.resume(); // drain to avoid hanging
+          });
+
+          stream.on("end", () => {
+            if (!fileTooLarge) {
+              fileBuffer = Buffer.concat(chunks);
+            }
+          });
+        });
+
+        bb.on("finish", () => {
+          if (fileTooLarge) {
+            return reject(new Error("File exceeds the 10 MB limit."));
+          }
+          if (!fileBuffer) {
+            return reject(new Error("No file received. Please attach a resume field."));
+          }
+          resolve({ fileBuffer, mimeType, originalName, userId });
+        });
+
+        bb.on("error", (err) => reject(err));
+
+        // Firebase Functions Gen2 consumes the request stream before the handler runs.
+        // req.rawBody is a Buffer that Firebase preserves for exactly this use case.
+        bb.end(req.rawBody);
+      });
+
+      // ─── 2. Validate user ───────────────────────────────────────────────
+      if (!userId || typeof userId !== "string" || userId.trim() === "") {
+        return res.status(400).json({ error: "Missing or invalid userId." });
+      }
+
+      // ─── 3. Detect file type and extract plain text ─────────────────────
+      const ext = (originalName.split(".").pop() || "").toLowerCase();
+      const isPdf = ext === "pdf" || mimeType === "application/pdf";
+      const isDocx =
+        ext === "docx" ||
+        mimeType === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+      const isTxt = ext === "txt" || mimeType === "text/plain";
+
+      if (!isPdf && !isDocx && !isTxt) {
+        return res
+          .status(400)
+          .json({ error: `Unsupported file type "${ext}". Please upload a PDF, DOCX, or TXT file.` });
+      }
+
+      let rawText = "";
+
+      if (isPdf) {
+        const result = await pdfParse(fileBuffer);
+        rawText = result.text || "";
+      } else if (isDocx) {
+        const result = await mammoth.extractRawText({ buffer: fileBuffer });
+        rawText = result.value || "";
+      } else {
+        rawText = fileBuffer.toString("utf-8");
+      }
+
+      rawText = rawText.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
+
+      if (!rawText || rawText.length < 20) {
+        return res.status(422).json({ error: "Could not extract readable text from the file. Please try a different format." });
+      }
+
+      const truncatedText = rawText.slice(0, 12000); // keep Claude prompt manageable
+
+      // ─── 4. Call Claude to extract structured JSON ──────────────────────
+      const systemPrompt = `You are a professional resume parser. The user will provide the raw text of a resume.
+Your job is to extract all relevant information and return it as a single, valid JSON object — NO markdown, NO explanation, ONLY the JSON object.
+
+The JSON must follow this exact schema:
+{
+  "summary": "A concise 2-3 sentence professional summary synthesized from the resume",
+  "skills": ["skill1", "skill2"],
+  "roles": [
+    {
+      "title": "Job Title",
+      "company": "Company Name",
+      "startDate": "Month Year or Year",
+      "endDate": "Month Year, Year, or Present",
+      "description": "Bullet-point style description of responsibilities and achievements"
+    }
+  ],
+  "education": [
+    {
+      "degree": "Degree Name and Major",
+      "institution": "School Name",
+      "startDate": "Year or Month Year",
+      "endDate": "Year, Month Year, or Present",
+      "description": "GPA, honors, relevant coursework, or other details if mentioned"
+    }
+  ],
+  "projects": [
+    {
+      "name": "Project Name",
+      "description": "What the project does and your role/contribution",
+      "technologies": ["tech1", "tech2"]
+    }
+  ],
+  "certifications": ["Certification Name (Issuer, Year if available)"]
+}
+
+Rules:
+- If a section has no data, use an empty array [] or empty string "".
+- Dates: preserve whatever format is in the resume; do not invent missing dates.
+- Output ONLY the raw JSON object. No markdown fences, no explanation.`;
+
+      const claudeRes = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}` }],
+      });
+
+      const rawOutput = claudeRes.content[0]?.text || "";
+
+      // Strip any accidental markdown fences Claude might add
+      const jsonStr = rawOutput.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseErr) {
+        logger.error("Claude returned non-JSON output:", rawOutput);
+        return res.status(500).json({ error: "AI returned an unexpected response format. Please try again." });
+      }
+
+      // Attach truncated raw text (first 5000 chars) for Firestore storage
+      parsed.rawText = rawText.slice(0, 5000);
+      parsed.fileName = originalName;
+
+      logger.info(`parseResume: userId=${userId}, file=${originalName}, skills=${(parsed.skills || []).length}, roles=${(parsed.roles || []).length}`);
+
+      return res.json({ ok: true, parsed });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error("parseResume failed:", e);
       return res.status(500).json({ error: msg });
     }
   }

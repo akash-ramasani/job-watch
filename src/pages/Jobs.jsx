@@ -101,6 +101,7 @@ export default function Jobs({ user }) {
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+  const [sortMode, setSortMode] = useState("new"); // "new" | "score"
 
   const observer = useRef(null);
 
@@ -236,7 +237,7 @@ export default function Jobs({ user }) {
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
-    return jobs.filter((j) => {
+    const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
       if (stateFilter) {
@@ -251,10 +252,38 @@ export default function Jobs({ user }) {
 
       return true;
     });
-  }, [jobs, titleSearch, stateFilter]);
+
+    if (sortMode === "score") {
+      return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
+    }
+    return filtered;
+  }, [jobs, titleSearch, stateFilter, sortMode]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
+    const score = job.relevanceScore;
+    const hasScore = typeof score === "number";
+
+    let scoreBadge = null;
+    if (hasScore) {
+      const config = score >= 80
+        ? { label: "Strong Match", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" }
+        : score >= 60
+        ? { label: "Good Match", cls: "bg-amber-50 text-amber-700 ring-amber-200" }
+        : score >= 40
+        ? { label: "Partial Match", cls: "bg-indigo-50 text-indigo-700 ring-indigo-200" }
+        : { label: "Poor Match", cls: "bg-gray-100 text-gray-500 ring-gray-200" };
+
+      scoreBadge = (
+        <span
+          title={job.scoreReason || ""}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest ring-1 cursor-help transition-all ${config.cls}`}
+        >
+          <span className="font-mono">{score}</span>
+          <span>{config.label}</span>
+        </span>
+      );
+    }
 
     return (
       <li
@@ -280,14 +309,9 @@ export default function Jobs({ user }) {
               {job.title}
             </h3>
 
-            <div className="mt-1 text-xs text-gray-400 flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
-              <span className="sm:hidden inline-flex items-center gap-1">
-                <span className="text-gray-300">•</span>
-                <span>
-                  Updated <span className="font-semibold text-gray-600">{updatedShort}</span>
-                </span>
-              </span>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="text-xs text-gray-400">Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
+              {scoreBadge}
             </div>
           </a>
 
@@ -324,7 +348,17 @@ export default function Jobs({ user }) {
         </div>
 
         <div className="flex justify-center w-full md:w-auto overflow-hidden">
-          <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth">
+          <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-0.5">
+            {/* Sort: Best Match */}
+            <button
+              onClick={() => setSortMode(sortMode === "score" ? "new" : "score")}
+              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${
+                sortMode === "score" ? "bg-indigo-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              ✦ Best Match
+            </button>
+            <div className="w-px bg-gray-200 mx-1 self-stretch" />
             {["all", "24h", "12h", "6h", "1h"].map((id) => (
               <button
                 key={id}
