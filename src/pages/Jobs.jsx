@@ -1,5 +1,5 @@
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   collection,
   getDocs,
@@ -9,6 +9,8 @@ import {
   startAfter,
   where,
   Timestamp,
+  doc,
+  getDoc
 } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { db } from "../firebase";
@@ -92,18 +94,12 @@ export default function Jobs({ user }) {
 
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isProcessing, setIsProcessing] = useState(true);
-  const [lastDoc, setLastDoc] = useState(null);
-  const [hasMore, setHasMore] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState("");
   const [companySearch, setCompanySearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
-  const [sortMode, setSortMode] = useState("new"); // "new" | "score"
-
-  const observer = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,108 +117,122 @@ export default function Jobs({ user }) {
     return () => { cancelled = true; };
   }, [user.uid]);
 
-  const fetchJobs = useCallback(
-    async (isFirstPage = true) => {
+  const fetchAllJobs = useCallback(
+    async () => {
       setLoading(true);
-      setIsProcessing(true);
-  
+      setJobs([]);
+
       try {
         const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
-        const constraints = [];
+        const allDocs = [];
+        let cursor = null;
 
-        if (selectedKeys.length > 0) {
-          constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
+        // Loop through all pages until exhausted
+        while (true) {
+          const constraints = [];
+
+          if (selectedKeys.length > 0) {
+            constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
+          }
+
+          constraints.push(orderBy("sourceUpdatedTs", "desc"));
+
+          if (timeframe !== "all") {
+            const thresholdTs = timeframeToThresholdTs(timeframe);
+            if (thresholdTs) constraints.push(where("sourceUpdatedTs", ">=", thresholdTs));
+          }
+
+          constraints.push(limit(PAGE_SIZE));
+          if (cursor) constraints.push(startAfter(cursor));
+
+          const snap = await getDocs(query(jobsCol, ...constraints));
+
+          snap.docs.forEach((d) => {
+            const data = d.data();
+
+            const locationName =
+              data.locationName ||
+              (Array.isArray(data.locationTokens) ? data.locationTokens[0] : "") ||
+              "Remote";
+
+            const companyName = data.companyName || "Unknown";
+
+            const stateCodes =
+              Array.isArray(data.stateCodes) && data.stateCodes.length > 0
+                ? data.stateCodes
+                : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
+
+            const updatedShort =
+              data.sourceUpdatedTs?.toDate ? shortAgoFromDate(data.sourceUpdatedTs.toDate()) : "—";
+
+            allDocs.push({
+              id: d.id,
+              ...data,
+              companyName,
+              locationName,
+              stateCodes,
+              absolute_url: data.jobUrl || data.applyUrl || "#",
+              firstSeenAt: data.firstSeenAt || data.fetchedAt || null,
+              _updatedShort: updatedShort,
+              _path: d.ref.path,
+            });
+          });
+
+          if (snap.docs.length < PAGE_SIZE) break; // no more pages
+          cursor = snap.docs[snap.docs.length - 1];
         }
 
-        constraints.push(orderBy("sourceUpdatedTs", "desc"));
-
-        if (timeframe !== "all") {
-          const thresholdTs = timeframeToThresholdTs(timeframe);
-          if (thresholdTs) constraints.push(where("sourceUpdatedTs", ">=", thresholdTs));
-        }
-
-        constraints.push(limit(PAGE_SIZE));
-        if (!isFirstPage && lastDoc) constraints.push(startAfter(lastDoc));
-
-        const qJobs = query(jobsCol, ...constraints);
-        const snap = await getDocs(qJobs);
-
-        const docs = snap.docs.map((d) => {
-          const data = d.data();
-
-          const locationName =
-            data.locationName ||
-            (Array.isArray(data.locationTokens) ? data.locationTokens[0] : "") ||
-            "Remote";
-
-          const companyName = data.companyName || "Unknown";
-
-          const stateCodes =
-            Array.isArray(data.stateCodes) && data.stateCodes.length > 0
-              ? data.stateCodes
-              : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
-
-          const updatedShort =
-            data.sourceUpdatedTs?.toDate ? shortAgoFromDate(data.sourceUpdatedTs.toDate()) : "—";
-
-          return {
-            id: d.id,
-            ...data,
-
-            companyName,
-            locationName,
-            stateCodes,
-
-            absolute_url: data.jobUrl || data.applyUrl || "#",
-
-            firstSeenAt: data.firstSeenAt || data.fetchedAt || null,
-
-            _updatedShort: updatedShort,
-            _path: d.ref.path,
-          };
-        });
-
-        setJobs((prev) => (isFirstPage ? docs : [...prev, ...docs]));
-        setLastDoc(snap.docs[snap.docs.length - 1] || null);
-        setHasMore(snap.docs.length === PAGE_SIZE);
+        setJobs(allDocs);
       } catch (err) {
         console.error("Fetch jobs error:", err);
         showToast("Error loading jobs. Check Firestore indexes.", "error");
-        setHasMore(false);
       } finally {
-        setTimeout(() => {
-          setLoading(false);
-          setIsProcessing(false);
-        }, 150);
+        setLoading(false);
       }
     },
-    [user.uid, selectedKeys, lastDoc, timeframe, showToast]
+    [selectedKeys, timeframe, showToast]
   );
 
   useEffect(() => {
-    setLastDoc(null);
-    setJobs([]);
-    setHasMore(true);
-    fetchJobs(true);
-
+    fetchAllJobs();
   }, [selectedKeys, timeframe]);
 
-  const lastElementRef = useCallback(
-    (node) => {
-      if (loading || !hasMore) return;
-      if (observer.current) observer.current.disconnect();
+  // Live polling: automatically fetch relevance scores for unscored jobs every 15s
+  useEffect(() => {
+    const unscoredJobs = jobs.filter((j) => typeof j.relevanceScore !== "number");
+    if (unscoredJobs.length === 0) return;
 
-      observer.current = new IntersectionObserver(
-        (entries) => {
-          if (entries[0].isIntersecting && hasMore && !loading) fetchJobs(false);
-        },
-        { rootMargin: "400px", threshold: 0 }
-      );
+    const intervalId = setInterval(async () => {
+      try {
+        const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
+        const updates = [];
 
-      if (node) observer.current.observe(node);
-    },
-    [loading, hasMore, fetchJobs]
-  );
+        // Check up to 10 unscored jobs per tick
+        for (const job of unscoredJobs.slice(0, 10)) {
+          const snap = await getDoc(doc(jobsCol, job.id));
+          if (snap.exists()) {
+            const data = snap.data();
+            if (typeof data.relevanceScore === "number") {
+              updates.push({ id: job.id, relevanceScore: data.relevanceScore, scoreReason: data.scoreReason });
+            }
+          }
+        }
+
+        if (updates.length > 0) {
+          setJobs((prev) =>
+            prev.map((j) => {
+              const matched = updates.find((u) => u.id === j.id);
+              return matched ? { ...j, ...matched } : j;
+            })
+          );
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+      }
+    }, 15000);
+
+    return () => clearInterval(intervalId);
+  }, [jobs]);
 
   const toggleCompany = (key) => {
     setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
@@ -253,39 +263,46 @@ export default function Jobs({ user }) {
       return true;
     });
 
-    if (sortMode === "score") {
-      return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-    }
-    return filtered;
-  }, [jobs, titleSearch, stateFilter, sortMode]);
+    return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
+  }, [jobs, titleSearch, stateFilter]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
     const score = job.relevanceScore;
     const hasScore = typeof score === "number";
 
-    let scoreBadge = null;
-    if (hasScore) {
-      const config = score >= 80
-        ? { label: "Strong Match", wrapperCls: "bg-emerald-50 text-emerald-800 ring-emerald-600/20 shadow-sm shadow-emerald-500/5", scoreCls: "bg-emerald-500 text-white shadow-sm shadow-emerald-500/40" }
-        : score >= 60
-        ? { label: "Good Match", wrapperCls: "bg-amber-50 text-amber-800 ring-amber-600/20 shadow-sm shadow-amber-500/5", scoreCls: "bg-amber-500 text-white shadow-sm shadow-amber-500/40" }
-        : score >= 40
-        ? { label: "Partial Match", wrapperCls: "bg-indigo-50 text-indigo-800 ring-indigo-600/20 shadow-sm shadow-indigo-500/5", scoreCls: "bg-indigo-500 text-white shadow-sm shadow-indigo-500/40" }
-        : { label: "Poor Match", wrapperCls: "bg-gray-50 text-gray-500 ring-gray-300/40 hover:bg-gray-100", scoreCls: "bg-gray-300 text-gray-700 block" };
+    // Tier determines the score chip color only — no background floods
+    const tier =
+      score >= 80 ? { dot: "bg-indigo-500", label: "Strong Match", textCls: "text-indigo-600" }
+      : score >= 60 ? { dot: "bg-indigo-400", label: "Good Match",   textCls: "text-indigo-500" }
+      : score >= 40 ? { dot: "bg-gray-400",   label: "Partial Match", textCls: "text-gray-500" }
+      :               { dot: "bg-gray-300",   label: "Weak Match",    textCls: "text-gray-400" };
 
-      scoreBadge = (
-        <span
-          title={job.scoreReason || ""}
-          className={`inline-flex items-center gap-1.5 rounded-full pl-0.5 pr-2.5 py-0.5 text-[10px] font-bold uppercase tracking-widest ring-1 ring-inset cursor-help transition-all hover:scale-[1.02] ${config.wrapperCls}`}
-        >
-          <span className={`flex items-center justify-center h-4.5 min-w-[20px] px-1 rounded-full font-mono font-black text-[9px] ${config.scoreCls}`}>
-            {score}
-          </span>
-          <span className="translate-y-[0.5px]">{config.label}</span>
+    const scoreBadge = hasScore ? (
+      <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
+        {/* Score chip */}
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[10px] font-bold font-mono text-gray-700 transition-colors group-hover/score:bg-indigo-50 group-hover/score:ring-indigo-200 group-hover/score:text-indigo-700">
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${tier.dot}`} />
+          {score}
         </span>
-      );
-    }
+        {/* Label */}
+        <span className={`text-[10px] font-bold uppercase tracking-widest ${tier.textCls}`}>
+          {tier.label}
+        </span>
+
+        {/* AI reason tooltip — shows on hover */}
+        {job.scoreReason && (
+          <span className="pointer-events-none absolute bottom-full left-0 mb-2 z-50 w-56 opacity-0 group-hover/score:opacity-100 transition-opacity duration-150">
+            <span className="block rounded-lg bg-gray-900 px-3 py-2 text-[11px] leading-relaxed text-white shadow-xl ring-1 ring-white/10">
+              <span className="block text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">AI Analysis</span>
+              {job.scoreReason}
+            </span>
+            {/* Arrow */}
+            <span className="block w-2 h-2 bg-gray-900 rotate-45 ml-3 -mt-1" />
+          </span>
+        )}
+      </span>
+    ) : null;
 
     return (
       <li
@@ -311,7 +328,7 @@ export default function Jobs({ user }) {
               {job.title}
             </h3>
 
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-visible">
               <span className="text-xs text-gray-400">Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
               {scoreBadge}
             </div>
@@ -351,16 +368,6 @@ export default function Jobs({ user }) {
 
         <div className="flex justify-center w-full md:w-auto overflow-hidden">
           <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-0.5">
-            {/* Sort: Best Match */}
-            <button
-              onClick={() => setSortMode(sortMode === "score" ? "new" : "score")}
-              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all whitespace-nowrap min-w-fit ${
-                sortMode === "score" ? "bg-indigo-600 text-white shadow-sm" : "text-gray-500 hover:text-gray-700"
-              }`}
-            >
-              ✦ Best Match
-            </button>
-            <div className="w-px bg-gray-200 mx-1 self-stretch" />
             {["all", "24h", "12h", "6h", "1h"].map((id) => (
               <button
                 key={id}
@@ -574,7 +581,7 @@ export default function Jobs({ user }) {
       </AnimatePresence>
 
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
-        {(loading || isProcessing) && jobs.length === 0 ? (
+        {loading ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>{renderSkeleton()}</React.Fragment>
@@ -591,16 +598,10 @@ export default function Jobs({ user }) {
           </div>
         )}
 
-        <div ref={lastElementRef} className="h-20 flex items-center justify-center border-t border-gray-50">
-          {(loading || isProcessing) && jobs.length > 0 ? (
-            <div className="flex gap-1.5">
-              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce [animation-delay:-0.3s]" />
-              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce [animation-delay:-0.15s]" />
-              <div className="w-1.5 h-1.5 bg-indigo-600 rounded-full animate-bounce" />
-            </div>
-          ) : !hasMore && jobs.length > 0 ? (
+        <div className="h-12 flex items-center justify-center border-t border-gray-50">
+          {!loading && jobs.length > 0 && (
             <span className="text-[10px] font-black text-gray-200 uppercase tracking-widest">End of Feed</span>
-          ) : null}
+          )}
         </div>
       </div>
     </div>

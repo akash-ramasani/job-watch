@@ -1108,27 +1108,75 @@ async function scoreNewJobsForUser(userId, newJobs) {
     return;
   }
 
-  const scoringLimiter = pLimit(3); // gentle on Claude & ATS APIs
+  // ─── OPTIMIZATION 1: Batch pre-read all job docs in ONE Firestore round-trip ──
+  // Replaces N individual reads that burned concurrency slots doing nothing useful.
+  // Gets: (a) already-scored check, (b) job titles — all before any tasks start.
+  const jobsCol = db.collection("users").doc(userId).collection("jobs");
+  const docRefs = newJobs.map((job) => jobsCol.doc(job.jobDocId));
+
+  // db.getAll() uses JS spread — chunk to 300 to guard against call stack overflow on large syncs
+  const CHUNK = 300;
+  const snapshots = [];
+  for (let i = 0; i < docRefs.length; i += CHUNK) {
+    const batch = await db.getAll(...docRefs.slice(i, i + CHUNK));
+    snapshots.push(...batch);
+  }
+
+  const titleMap = {};
+  const unscoredJobs = [];
+
+  for (let i = 0; i < snapshots.length; i++) {
+    const snap = snapshots[i];
+    const job = newJobs[i];
+    if (snap.exists && snap.data()?.relevanceScore != null) {
+      logger.info(`scoreNewJobsForUser: ${job.jobDocId} already scored (${snap.data().relevanceScore}), skipping`);
+      continue;
+    }
+    
+    const title = snap.exists ? (snap.data()?.title || "") : "";
+    titleMap[job.jobDocId] = title;
+    
+    // Quick pre-screen: instantly reject obvious non-tech roles to save API costs
+    const nonTechRegex = /\b(recruiter|sourcer|sales|account executive|marketing|finance|accounting|legal|counsel|hr|human resources|teacher|nurse|driver)\b/i;
+    if (title && nonTechRegex.test(title)) {
+      jobsCol.doc(job.jobDocId).set(
+        { relevanceScore: 0, scoreReason: "Auto-rejected: Non-tech role based on title.", scoredAt: admin.firestore.Timestamp.now() },
+        { merge: true }
+      ).catch(e => logger.warn(`Failed to auto-reject ${job.jobDocId}: ${e.message}`));
+      logger.info(`scoreNewJobsForUser: ${job.jobDocId} auto-rejected (title: ${title})`);
+      continue;
+    }
+    
+    unscoredJobs.push(job);
+  }
+
+  if (unscoredJobs.length === 0) {
+    logger.info(`scoreNewJobsForUser: all ${newJobs.length} jobs already scored, nothing to do`);
+    return;
+  }
+
+  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${newJobs.length} total — starting`);
+
+  // ─── OPTIMIZATION 2: Higher concurrency — each slot now ONLY does JD fetch + Claude ──
+  // No Firestore reads in the hot path anymore, so 10 concurrent is safe.
+  const scoringLimiter = pLimit(10);
   const scoredAt = admin.firestore.Timestamp.now();
 
-  const scoringTasks = newJobs.map((job) =>
+  const scoringTasks = unscoredJobs.map((job) =>
     scoringLimiter(async () => {
       try {
-        // 1. Fetch JD
+        // Title pre-loaded from batch read — no Firestore read needed here
+        const jobTitle = titleMap[job.jobDocId];
+
+        // 1. Fetch JD (Ashby: free — already in descriptionHint; others: HTTP call)
         let description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, job.descriptionHint);
         if (!description || description.length < 50) {
           logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, skipping`);
           return;
         }
-
-        // Truncate to keep Claude tokens low
         description = description.slice(0, 3500);
 
-        // Read job title from Firestore so we have full context
-        const jobSnap = await db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId).get();
-        const jobTitle = jobSnap.exists ? (jobSnap.data()?.title || "") : "";
-
-        // 2. Score with Claude
+        // 2. Score with Claude Haiku
         const result = await scoreJobWithClaude(jobTitle, description, resumeText);
         if (!result) {
           logger.warn(`scoreNewJobsForUser: Claude returned no score for ${job.jobDocId}`);
@@ -1136,7 +1184,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
         }
 
         // 3. Write ONLY score + reason (no JD) back to job doc
-        await db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId).set(
+        await jobsCol.doc(job.jobDocId).set(
           { relevanceScore: result.score, scoreReason: result.reason, scoredAt },
           { merge: true }
         );
@@ -1149,7 +1197,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
   );
 
   await Promise.all(scoringTasks);
-  logger.info(`scoreNewJobsForUser: finished scoring ${newJobs.length} jobs for userId=${userId}`);
+  logger.info(`scoreNewJobsForUser: done — scored ${unscoredJobs.length}/${newJobs.length} jobs for userId=${userId}`);
 }
 
 /**
