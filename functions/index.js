@@ -26,7 +26,7 @@
 /* eslint-disable require-jsdoc */
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const { onRequest } = require("firebase-functions/v2/https");
+const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
 const Busboy = require("busboy");
@@ -1718,6 +1718,99 @@ Rules:
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("parseResume failed:", e);
       return res.status(500).json({ error: msg });
+    }
+  }
+);
+
+/**
+ * ----------------------------
+ * 1-Click AI Cover Letter Generator
+ * ----------------------------
+ */
+exports.generateCoverLetter = onCall(
+  {
+    region: REGION,
+    minInstances: 0,
+    maxInstances: 10,
+    timeoutSeconds: 60,
+  },
+  async (request) => {
+    // 1. Auth check
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "You must be logged in to generate a cover letter.");
+    }
+
+    const { jobId } = request.data;
+    if (!jobId) {
+      throw new HttpsError("invalid-argument", "Missing jobId.");
+    }
+
+    try {
+      // 2. Fetch User Resume
+      const resumeSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
+      if (!resumeSnap.exists) {
+        throw new HttpsError("failed-precondition", "No resume profile found. Please upload a resume first.");
+      }
+      
+      const resumeText = [];
+      const dOptions = resumeSnap.data();
+      if (dOptions.rawText) resumeText.push(dOptions.rawText);
+      const builtResumeStr = resumeText.join("\\n\\n").trim();
+      if (!builtResumeStr) {
+        throw new HttpsError("failed-precondition", "Your resume has no parseable text. Please re-upload.");
+      }
+
+      // 3. Fetch Job Details
+      const jobSnap = await db.collection("users").doc(uid).collection("jobs").doc(jobId).get();
+      if (!jobSnap.exists) {
+        throw new HttpsError("not-found", "Job not found in database.");
+      }
+      const jobData = jobSnap.data();
+      const jobDesc = (jobData.fullDescription || jobData.title || "No description available.").slice(0, 5000);
+      const companyName = jobData.companyName || "the company";
+      const jobTitle = jobData.title || "the role";
+
+      // 4. Construct Prompt & Call Claude
+      const systemPrompt = `You are an expert career coach making highly professional, modern, and engaging cover letters.`;
+      
+      const userPrompt = `
+Write a 3-paragraph compelling cover letter bridging this exact resume and this specific job at ${companyName} for the ${jobTitle} role.
+
+Rules:
+1. Write conversationally and exactly like a human software engineer. DO NOT use AI text patterns, overly complex SAT vocabulary, or fluffy corporate buzzwords.
+2. NEVER use em-dashes (—). Strip them from your vocabulary completely. Use commas or short, punchy sentences instead.
+3. Focus on exactly how the candidate's specific past experience maps to the job requirements.
+4. Use a standard business letter format (without the physical address block).
+5. Do not include placeholders like "[Your Name]" unless absolutely necessary; try to extract the name from the resume or leave it generically signed "Sincerely,\n[Applicant]".
+6. Keep it to exactly 3 well-crafted paragraphs. No bullet points.
+7. Return ONLY the final text of the cover letter. Do not include introductory conversational text.
+
+## Job Description
+${jobDesc}
+
+## Candidate Resume
+${builtResumeStr}
+`;
+
+      const msg = await anthropic.messages.create(
+        {
+          model: "claude-haiku-4-5",
+          max_tokens: 600,
+          temperature: 0.7,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userPrompt }],
+        },
+        { timeout: 30000 }
+      );
+
+      const generatedText = msg.content?.[0] ? msg.content[0].text.trim() : "";
+      if (!generatedText) throw new Error("Claude returned an empty string.");
+
+      return { ok: true, text: generatedText };
+    } catch (err) {
+      logger.error("generateCoverLetter error:", err);
+      throw new HttpsError("internal", "Failed to generate cover letter: " + err.message);
     }
   }
 );
