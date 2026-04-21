@@ -151,10 +151,12 @@ export default function Jobs({ user }) {
           snap.docs.forEach((d) => {
             const data = d.data();
 
+            const locationNameToken = Array.isArray(data.locationTokens) 
+              ? data.locationTokens.map(t => typeof t === "string" ? t : (t?.name || t?.city || "")).filter(Boolean).join("; ")
+              : "";
+
             const locationName =
-              data.locationName ||
-              (Array.isArray(data.locationTokens) ? data.locationTokens[0] : "") ||
-              "Remote";
+              data.locationName || locationNameToken || "Remote";
 
             const companyName = data.companyName || "Unknown";
 
@@ -387,9 +389,9 @@ export default function Jobs({ user }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-4 p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
-        <div className="min-w-0 flex-1 flex items-end gap-3 h-fit">
-          <div className="flex-1 min-w-[160px]">
+      <div className="p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm flex flex-col gap-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-end gap-3">
+          <div className="flex-1 w-full">
             <label className="caps-label mb-2 block px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">
               Job Title
             </label>
@@ -401,12 +403,12 @@ export default function Jobs({ user }) {
             />
           </div>
 
-          <div className="flex-1 min-w-[160px]">
+          <div className="flex-1 w-full">
             <label className="caps-label mb-2 block px-1 text-gray-400 uppercase tracking-widest text-[10px] font-black">
               Company
             </label>
             <input
-              placeholder="e.g. NVIDIA or Microsoft — Tab to complete, Enter to select"
+              placeholder="e.g. NVIDIA — Tab to complete"
               className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full"
               value={companySearch}
               onChange={(e) => setCompanySearch(e.target.value)}
@@ -423,32 +425,34 @@ export default function Jobs({ user }) {
             />
           </div>
 
-          <button
-            onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
-            className={`h-11 px-4 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
-              ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
-              : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-              }`}
-          >
-            <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
-            Top Matches
-          </button>
+          <div className="flex items-center gap-2 mt-2 sm:mt-0 w-full sm:w-auto">
+            <button
+              onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
+              className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
+                ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
+                : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                }`}
+            >
+              <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
+              Top Matches
+            </button>
 
-          <button
-            onClick={() => setIsFilterExpanded(!isFilterExpanded)}
-            className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
-              ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
-              : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
-              }`}
-            aria-label={isFilterExpanded ? "Hide filters" : "Show filters"}
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300">
-              <path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" />
-            </svg>
-          </button>
+            <button
+              onClick={() => setIsFilterExpanded(!isFilterExpanded)}
+              className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
+                ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
+                : "bg-white border-gray-200 text-gray-400 hover:bg-gray-50"
+                }`}
+              aria-label={isFilterExpanded ? "Hide filters" : "Show filters"}
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" className="size-5 transition-transform duration-300">
+                <path d="M2.628 1.601C5.028 1.206 7.49 1 10 1s4.973.206 7.372.601a.75.75 0 0 1 .628.74v2.288a2.25 2.25 0 0 1-.659 1.59l-4.682 4.683a2.25 2.25 0 0 0-.659 1.59v3.037c0 .684-.31 1.33-.844 1.757l-1.937 1.55A.75.75 0 0 1 8 18.25v-5.757a2.25 2.25 0 0 0-.659-1.591L2.659 6.22A2.25 2.25 0 0 1 2 4.629V2.34a.75.75 0 0 1 .628-.74Z" />
+              </svg>
+            </button>
+          </div>
         </div>
 
-        <div className="pt-6">
+        <div className="flex justify-start sm:justify-end border-t border-gray-100 sm:border-0 pt-3 sm:pt-0">
           <button
             onClick={() => {
               setTitleSearch("");
@@ -458,9 +462,9 @@ export default function Jobs({ user }) {
               setOnlyHighRelevant(false);
               setSelectedKeys([]);
             }}
-            className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2"
+            className="text-xs font-bold text-gray-400 hover:text-indigo-600 py-1"
           >
-            Reset All
+            Reset All Filters
           </button>
         </div>
       </div>
