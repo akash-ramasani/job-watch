@@ -1747,6 +1747,11 @@ exports.generateCoverLetter = onCall(
     }
 
     try {
+      // Check if AI is enabled
+      const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
+      if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
+        throw new HttpsError("failed-precondition", "AI features are currently disabled in your settings.");
+      }
       // 2. Fetch User Resume
       const resumeSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
       if (!resumeSnap.exists) {

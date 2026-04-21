@@ -88,7 +88,7 @@ function extractStateCodesFromLocationTokens(tokensOrString) {
   return Array.from(found);
 }
 
-export default function Jobs({ user, userMeta }) {
+export default function Jobs({ user, userMeta, preferences }) {
   const { showToast } = useToast();
 
   const [companies, setCompanies] = useState([]);
@@ -352,7 +352,7 @@ export default function Jobs({ user, userMeta }) {
           : score >= 40 ? { dot: "bg-gray-400", label: "Partial Match", textCls: "text-gray-500" }
             : { dot: "bg-gray-300", label: "Weak Match", textCls: "text-gray-400" };
 
-    const scoreBadge = hasScore ? (
+    const scoreBadge = (hasScore && preferences?.aiScoringEnabled) ? (
       <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
         {/* Score chip */}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[10px] font-bold font-mono text-gray-700 transition-colors group-hover/score:bg-indigo-50 group-hover/score:ring-indigo-200 group-hover/score:text-indigo-700">
@@ -409,12 +409,14 @@ export default function Jobs({ user, userMeta }) {
           </a>
 
           <div className="flex items-center gap-4 flex-shrink-0 z-10">
-            <button
-              onClick={(e) => handleGenerateCoverLetter(e, job)}
-              className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
-            >
-              Cover Letter
-            </button>
+            {preferences?.aiScoringEnabled && (
+              <button
+                onClick={(e) => handleGenerateCoverLetter(e, job)}
+                className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
+              >
+                Cover Letter
+              </button>
+            )}
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">
               <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
                 Updated
@@ -499,16 +501,18 @@ export default function Jobs({ user, userMeta }) {
           </div>
 
           <div className="flex items-center gap-2 mt-2 sm:mt-0 w-full sm:w-auto">
-            <button
-              onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
-              className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
-                ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
-                : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-                }`}
-            >
-              <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
-              Top Matches
-            </button>
+              {preferences?.aiScoringEnabled && (
+                <button
+                  onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
+                  className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
+                    ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
+                    : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                    }`}
+                >
+                  <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
+                  Top Matches
+                </button>
+              )}
 
             <button
               onClick={() => setIsFilterExpanded(!isFilterExpanded)}

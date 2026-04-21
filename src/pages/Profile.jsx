@@ -546,11 +546,11 @@ export default function Profile({ user, userMeta }) {
             {/* AI Scoring Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center justify-between gap-4">
               <div>
-                <p className="text-sm font-semibold text-gray-900">AI Job Scoring</p>
+                <p className="text-sm font-semibold text-gray-900">AI Features</p>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {aiScoringEnabled
-                    ? "Claude AI is evaluating each job against your resume after every sync."
-                    : "AI scoring is off. Jobs will be synced but not evaluated."}
+                    ? "AI is enabled for job scoring, cover letter generation, and the assistant."
+                    : "AI features are off. Jobs will be synced but not evaluated or analyzed."}
                 </p>
               </div>
               <button

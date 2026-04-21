@@ -28,6 +28,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [userMeta, setUserMeta] = useState(null);
+  const [preferences, setPreferences] = useState({ aiScoringEnabled: true });
 
   const location = useLocation();
 
@@ -42,10 +43,21 @@ export default function App() {
   useEffect(() => {
     if (!user) {
       setUserMeta(null);
+      setPreferences({ aiScoringEnabled: true });
       return;
     }
     const ref = doc(db, "users", user.uid);
-    return onSnapshot(ref, (snap) => setUserMeta(snap.exists() ? snap.data() : null));
+    const prefRef = doc(db, "users", user.uid, "settings", "preferences");
+    
+    const unsubMeta = onSnapshot(ref, (snap) => setUserMeta(snap.exists() ? snap.data() : null));
+    const unsubPrefs = onSnapshot(prefRef, (snap) => {
+      if (snap.exists()) setPreferences(snap.data());
+    });
+
+    return () => {
+      unsubMeta();
+      unsubPrefs();
+    };
   }, [user]);
 
   const content = useMemo(() => {
@@ -84,7 +96,7 @@ export default function App() {
             )
           }
         />
-        <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} />} />
+        <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} preferences={preferences} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
         <Route path="/history" element={<FetchHistory user={user} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -138,7 +150,7 @@ export default function App() {
               </div>
             </main>
             <Footer />
-            <ChatAssistant user={user} />
+            {preferences.aiScoringEnabled && <ChatAssistant user={user} />}
           </>
         )}
       </div>
