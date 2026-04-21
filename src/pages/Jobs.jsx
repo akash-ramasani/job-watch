@@ -581,6 +581,24 @@ export default function Jobs({ user }) {
       </AnimatePresence>
 
       <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl overflow-hidden flex flex-col min-h-[500px] transition-all">
+        <div className="px-6 py-4 border-b bg-gray-50/50 border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-600">
+              Matched Roles{" "}
+              {loading ? (
+                ""
+              ) : (
+                <span className="ml-1 text-gray-400">
+                  ({filteredJobs.filter((j) => typeof j.relevanceScore === "number").length} scored / {filteredJobs.length} total)
+                </span>
+              )}
+            </h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Feed</span>
+          </div>
+        </div>
         {loading ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (

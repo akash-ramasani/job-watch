@@ -65,6 +65,8 @@ export default function Profile({ user, userMeta }) {
   const [uploadingFileName, setUploadingFileName] = useState("");
   const [savingResume, setSavingResume] = useState(false);
   const [skillInput, setSkillInput] = useState("");
+  const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
+  const [togglingAi, setTogglingAi] = useState(false);
 
   const dropzoneInputRef = useRef(null);
 
@@ -73,7 +75,26 @@ export default function Profile({ user, userMeta }) {
     getDoc(doc(db, "users", user.uid, "resume", "profile")).then((snap) => {
       if (snap.exists()) setSavedResumeFull(snap.data());
     });
+    getDoc(doc(db, "users", user.uid, "settings", "preferences")).then((snap) => {
+      if (snap.exists() && typeof snap.data()?.aiScoringEnabled === "boolean") {
+        setAiScoringEnabled(snap.data().aiScoringEnabled);
+      }
+    });
   }, [user?.uid]);
+
+  async function handleToggleAiScoring() {
+    setTogglingAi(true);
+    const next = !aiScoringEnabled;
+    try {
+      await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { aiScoringEnabled: next }, { merge: true });
+      setAiScoringEnabled(next);
+      showToast(next ? "AI scoring enabled" : "AI scoring disabled", "success");
+    } catch {
+      showToast("Failed to update setting", "error");
+    } finally {
+      setTogglingAi(false);
+    }
+  }
 
   useEffect(() => {
     if (userMeta) {
@@ -519,6 +540,36 @@ export default function Profile({ user, userMeta }) {
                     Enabled
                   </span>
                 ) : "Enable Alerts"}
+              </button>
+            </div>
+
+            {/* AI Scoring Card */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">AI Job Scoring</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {aiScoringEnabled
+                    ? "Claude AI is evaluating each job against your resume after every sync."
+                    : "AI scoring is off. Jobs will be synced but not evaluated."}
+                </p>
+              </div>
+              <button
+                id="ai-scoring-toggle"
+                onClick={handleToggleAiScoring}
+                disabled={togglingAi}
+                className={aiScoringEnabled ? "btn-primary" : "btn-secondary"}
+              >
+                {togglingAi ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-gray-300 animate-pulse" />
+                    Saving…
+                  </span>
+                ) : aiScoringEnabled ? (
+                  <span className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-emerald-400" />
+                    Enabled
+                  </span>
+                ) : "Enable Scoring"}
               </button>
             </div>
 

@@ -319,6 +319,7 @@ exports.runSyncNow = onRequest(
   }
 );
 
+
 /**
  * ----------------------------
  * USER SYNC CORE
@@ -371,11 +372,16 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
       const feedRef = db.collection("users").doc(userId).collection("feeds").doc(feedId);
 
       try {
-        const url = String(feed.url || "").trim();
+        let url = String(feed.url || "").trim();
         if (!url) throw new Error("Feed missing url");
 
         const source = String(feed.source || "").toLowerCase();
         const companyName = String(feed.companyName || feed.company || "Unknown");
+
+        // Force Greenhouse to fetch full descriptions natively
+        if (source.includes("greenhouse") && !url.includes("content=true")) {
+          url += url.includes("?") ? "&content=true" : "?content=true";
+        }
 
         feedsProcessed += 1;
 
@@ -409,19 +415,39 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
         jobsKeptRecent += recentOnly.length;
 
+        // Enrich Eightfold/Netflix jobs with descriptions during sync.
+        // Greenhouse & Ashby already have them from the feed. Eightfold bulk feeds
+        // don't include descriptions, so we fetch them per-job now and save to DB,
+        // completely eliminating the need to re-fetch during AI scoring.
+        const descEnricher = pLimit(5);
+        await Promise.all(
+          recentOnly.map((job) =>
+            descEnricher(async () => {
+              if (job.fullDescription) return; // Already have it (Greenhouse/Ashby)
+              if (job.source !== "eightfold") return; // Only needed for Eightfold/Netflix
+
+              try {
+                const desc = await fetchJobDescription(job.source, job.externalId, url, null);
+                if (desc && desc.length > 50) {
+                  job.fullDescription = desc;
+                }
+              } catch (e) {
+                logger.warn(`Desc enrichment failed for ${job.jobDocId}: ${e.message}`);
+              }
+            })
+          )
+        );
+
         for (const job of recentOnly) {
           const jobRef = db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId);
 
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
 
-          // Strip descriptionHint — scoring only, never written to Firestore
-          const { descriptionHint, ...jobForFirestore } = job;
-
           bw.set(
             jobRef,
             {
-              ...jobForFirestore,
+              ...job,
               fetchedAt: now,
               expireAt,
             },
@@ -435,8 +461,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
             jobDocId: job.jobDocId,
             source: job.source,
             externalId: job.externalId,
-            feedUrl: url || feedConfig.url,
-            descriptionHint: descriptionHint || null,
+            feedUrl: url || feed.url,
+            jobUrl: job.jobUrl || null,
+            fullDescription: job.fullDescription || null,
           });
         }
 
@@ -467,9 +494,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   await Promise.all(tasks);
   await bw.close();
 
-  // Fire-and-forget scoring — does NOT block sync return or timing
+  // AWAIT scoring — Cloud Functions terminate any un-awaited Promises immediately upon return!
   if (newJobsForScoring.length > 0) {
-    scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
+    await scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
       logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
     );
   }
@@ -575,21 +602,29 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
   return allPositions;
 }
 
-async function fetchJson(url) {
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      accept: "application/json,text/plain,*/*",
-      "user-agent": "firebase-functions-job-sync/6.0",
-    },
-  });
+async function fetchJson(url, maxRetries = 2) {
+  let attempts = 0;
+  while (true) {
+    const resp = await fetch(url, {
+      method: "GET",
+      headers: {
+        accept: "application/json,text/plain,*/*",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+    });
 
-  if (!resp.ok) {
-    const body = await safeReadText(resp);
-    throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(body || "").slice(0, 400)}`);
+    if (!resp.ok) {
+      if ((resp.status === 429 || resp.status === 403 || resp.status >= 500) && attempts < maxRetries) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, 1500 * attempts));
+        continue;
+      }
+      const body = await safeReadText(resp);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(body || "").slice(0, 400)}`);
+    }
+
+    return await resp.json();
   }
-
-  return await resp.json();
 }
 
 async function safeReadText(resp) {
@@ -635,6 +670,9 @@ function normalizeJobMinimal(rawJob, ctx) {
       externalId: externalId || jobUrl,
     });
 
+    const rawDesc = rawJob.content || rawJob.description || "";
+    const fullDescription = stripHtml(rawDesc);
+
     return {
       jobDocId,
       source: "greenhouse",
@@ -649,6 +687,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedTs,
       sourceUpdatedIso,
       meta,
+      fullDescription, // Save directly into Firestore
     };
   }
 
@@ -679,10 +718,9 @@ function normalizeJobMinimal(rawJob, ctx) {
     if (rawJob.department != null) meta["Department"] = rawJob.department;
     if (rawJob.team != null) meta["Team"] = rawJob.team;
 
-    // Ashby listings include the full JD in the feed response — capture for scoring (not stored in Firestore)
-    const descriptionHint = rawJob.descriptionPlain
-      ? String(rawJob.descriptionPlain).slice(0, 4000)
-      : null;
+    // Ashby listings include the full JD in the feed response
+    const rawDesc = rawJob.descriptionHtml || rawJob.descriptionPlain || rawJob.description || "";
+    const fullDescription = stripHtml(rawDesc);
 
     const jobDocId = makeJobDocId({
       source: "ashbyhq",
@@ -704,7 +742,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedTs,
       sourceUpdatedIso,
       meta,
-      descriptionHint, // scoring only, stripped before Firestore write
+      fullDescription, // Save directly into Firestore
     };
   }
 
@@ -972,43 +1010,43 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
     }
 
     if (source === "eightfold") {
-      // Netflix: uses its own endpoint (not the Eightfold /api/pcsx endpoint)
-      if (feedUrl.includes("netflix") || (externalId && String(externalId).length < 20)) {
-        // heuristic: Netflix externalIds are short numeric, Eightfold ones are very long
-        // try Netflix endpoint first if URL hints at it
-        if (feedUrl.includes("netflix")) {
-          if (!externalId) return null;
-          const url = `https://explore.jobs.netflix.net/api/apply/v2/jobs/${externalId}?domain=netflix.com`;
-          const json = await fetchJson(url);
-          const raw = json?.job_description || "";
-          if (raw) return stripHtml(raw);
-        }
+      if (!externalId) return null;
+
+      // ── Netflix: has its own backend separate from standard Eightfold ──
+      // Feed URL: https://explore.jobs.netflix.net/api/apply/v2/jobs?...
+      // Detail:   https://explore.jobs.netflix.net/api/apply/v2/jobs/<id>?domain=netflix.com
+      if (feedUrl.includes("netflix")) {
+        const url = `https://explore.jobs.netflix.net/api/apply/v2/jobs/${externalId}?domain=netflix.com`;
+        const json = await fetchJson(url);
+        const raw = json?.job_description || "";
+        return raw ? stripHtml(raw) : null;
       }
 
-      // Other Eightfold companies (NVIDIA, Microsoft, PayPal, etc.)
+      // ── Standard Eightfold companies (BNY Mellon, Microsoft, Morgan Stanley, Nvidia, etc.) ──
+      // Every Eightfold feed URL already contains ?domain=<company>.com — extract it directly.
+      // This means ANY new Eightfold company added to feeds will work without code changes.
       let apiBase = "";
       let domain = "";
       try {
         const u = new URL(feedUrl);
         apiBase = `${u.protocol}//${u.hostname}`;
-        const subdomain = u.hostname.split(".")[0];
-        domain = `${subdomain}.com`;
-        if (u.hostname.includes("microsoft")) domain = "microsoft.com";
-        if (u.hostname.includes("nvidia")) domain = "nvidia.com";
-        if (u.hostname.includes("paypal")) domain = "paypal.com";
-        // For Netflix canonical job URLs, repoint to Netflix API
-        if (u.hostname.includes("netflix")) {
-          const url = `https://explore.jobs.netflix.net/api/apply/v2/jobs/${externalId}?domain=netflix.com`;
-          const json = await fetchJson(url);
-          const raw = json?.job_description || "";
-          return stripHtml(raw);
-        }
-      } catch (_) { return null; }
-      if (!externalId || !apiBase) return null;
+
+        // Best source: the domain= param already embedded in the feed URL
+        // e.g. https://bnymellon.eightfold.ai/api/pcsx/search?domain=bnymellon.com → "bnymellon.com"
+        domain = u.searchParams.get("domain") || 
+          // Fallback: strip .eightfold.ai suffix
+          u.hostname.replace(/\.eightfold\.ai$/, ".com");
+      } catch (_) {
+        return null;
+      }
+
+      if (!apiBase || !domain) return null;
+
+      // pcsx/position_details is the canonical detail endpoint for all Eightfold companies
       const url = `${apiBase}/api/pcsx/position_details?position_id=${externalId}&domain=${domain}&hl=en`;
       const json = await fetchJson(url);
       const raw = json?.data?.jobDescription || "";
-      return stripHtml(raw);
+      return raw ? stripHtml(raw) : null;
     }
 
     return null;
@@ -1023,15 +1061,28 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
  * Returns { score: number, reason: string } or null.
  */
 async function scoreJobWithClaude(jobTitle, jobDescription, resumeText) {
-  const systemPrompt = `You are a recruiting expert. Given a candidate's resume profile and a job description, score how relevant this job is for the candidate.
+  const systemPrompt = `You are a technical recruiting expert. Score this job's relevance for the candidate. Be fast and decisive.
 
-Return ONLY a JSON object with:
-- "score": integer 0-100 (0=completely irrelevant, 100=perfect match)
-- "reason": one sentence (max 15 words) explaining the score
+SCORING RUBRIC (apply in order — first match wins):
 
-Example: {"score": 82, "reason": "Strong React and TypeScript skills match this frontend engineering role."}
+HARD CAPS (override everything else):
+- Title has "Intern", "New Grad", "PhD Intern", "University Graduate", "Co-op" → score 0-20
+- Title has "Product Manager", "Program Manager", "Data Scientist", "Analyst", "Sales", "Marketing", "Finance", "Recruiter", "Designer" → score 0-15
+- Title has "Principal", "Distinguished", "VP", "Director", "Head of", "C-level" → score 0-30
 
-## Candidate Resume Profile
+SCORE BANDS:
+- 85-100: Core tech stack is a strong match AND right seniority level (SWE 0-8 yrs)
+- 65-84: Good overlap, 1-2 missing but learnable tools
+- 40-64: Partial match — right field but tech stack gaps
+- 20-39: Weak match — misaligned role OR requires 10+ years experience not in resume
+- 0-19: Wrong field entirely
+
+KEY RULES:
+- Ignore lack of domain knowledge (AdTech, FinTech, HealthTech) if core SWE skills match — engineers learn domains
+- Judge primarily on: languages, frameworks, cloud tools, system design experience
+- Be decisive. Do not hedge with mid-range scores like 50 unless truly uncertain
+
+## Candidate Resume
 ${resumeText}`;
 
   const userPrompt = `## Job Title
@@ -1040,27 +1091,33 @@ ${jobTitle}
 ## Job Description
 ${jobDescription}
 
-Respond with ONLY the JSON object, no other text.`;
+Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
 
-  const msg = await anthropic.messages.create({
-    model: "claude-haiku-4-5",
-    max_tokens: 120,
-    system: [
-      {
-        type: "text",
-        text: systemPrompt,
-        cache_control: { type: "ephemeral" }
-      }
-    ],
-    messages: [
-      { role: "user", content: userPrompt }
-    ]
-  });
+  const msg = await anthropic.messages.create(
+    {
+      model: "claude-haiku-4-5",
+      max_tokens: 80,
+      system: [
+        {
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: userPrompt }],
+    },
+    { timeout: 30000 } // 30 second timeout — generous enough for slow Claude responses
+  );
 
   const raw = msg.content?.[0]?.text?.trim() || "";
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
-  const parsed = JSON.parse(jsonMatch[0]);
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonMatch[0]);
+  } catch (e) {
+    return null;
+  }
   const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
   if (Number.isNaN(score)) return null;
   return { score, reason: String(parsed.reason || "").slice(0, 120) };
@@ -1073,6 +1130,18 @@ Respond with ONLY the JSON object, no other text.`;
  */
 async function scoreNewJobsForUser(userId, newJobs) {
   if (!newJobs || newJobs.length === 0) return;
+
+  // Check user's AI scoring toggle — stored at users/{uid}/settings/preferences
+  try {
+    const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
+    if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
+      logger.info(`scoreNewJobsForUser: AI scoring disabled for userId=${userId}, skipping`);
+      return;
+    }
+  } catch (err) {
+    logger.warn(`scoreNewJobsForUser: could not read settings for userId=${userId}: ${err?.message}`);
+    // If settings can't be read, proceed with scoring (fail open)
+  }
 
   // Load user's saved resume profile
   let resumeProfile = null;
@@ -1101,7 +1170,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
     resumeProfile.projects?.length
       ? `Projects: ${resumeProfile.projects.slice(0, 3).map((p) => `${p.name} (${p.techStack})`).join("; ")}`
       : "",
-  ].filter(Boolean).join("\n").slice(0, 2500);
+  ].filter(Boolean).join("\n").slice(0, 15000);
 
   if (!resumeText) {
     logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
@@ -1112,7 +1181,14 @@ async function scoreNewJobsForUser(userId, newJobs) {
   // Replaces N individual reads that burned concurrency slots doing nothing useful.
   // Gets: (a) already-scored check, (b) job titles — all before any tasks start.
   const jobsCol = db.collection("users").doc(userId).collection("jobs");
-  const docRefs = newJobs.map((job) => jobsCol.doc(job.jobDocId));
+
+  // Deduplicate before batch read to prevent db.getAll duplicate ref errors
+  const uniqueJobsMap = new Map();
+  for (const job of newJobs) {
+    uniqueJobsMap.set(job.jobDocId, job);
+  }
+  const uniqueNewJobs = Array.from(uniqueJobsMap.values());
+  const docRefs = uniqueNewJobs.map((job) => jobsCol.doc(job.jobDocId));
 
   // db.getAll() uses JS spread — chunk to 300 to guard against call stack overflow on large syncs
   const CHUNK = 300;
@@ -1127,7 +1203,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   for (let i = 0; i < snapshots.length; i++) {
     const snap = snapshots[i];
-    const job = newJobs[i];
+    const job = uniqueNewJobs[i];
     if (snap.exists && snap.data()?.relevanceScore != null) {
       logger.info(`scoreNewJobsForUser: ${job.jobDocId} already scored (${snap.data().relevanceScore}), skipping`);
       continue;
@@ -1135,18 +1211,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
     
     const title = snap.exists ? (snap.data()?.title || "") : "";
     titleMap[job.jobDocId] = title;
-    
-    // Quick pre-screen: instantly reject obvious non-tech roles to save API costs
-    const nonTechRegex = /\b(recruiter|sourcer|sales|account executive|marketing|finance|accounting|legal|counsel|hr|human resources|teacher|nurse|driver)\b/i;
-    if (title && nonTechRegex.test(title)) {
-      jobsCol.doc(job.jobDocId).set(
-        { relevanceScore: 0, scoreReason: "Auto-rejected: Non-tech role based on title.", scoredAt: admin.firestore.Timestamp.now() },
-        { merge: true }
-      ).catch(e => logger.warn(`Failed to auto-reject ${job.jobDocId}: ${e.message}`));
-      logger.info(`scoreNewJobsForUser: ${job.jobDocId} auto-rejected (title: ${title})`);
-      continue;
-    }
-    
+
     unscoredJobs.push(job);
   }
 
@@ -1155,11 +1220,11 @@ async function scoreNewJobsForUser(userId, newJobs) {
     return;
   }
 
-  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${newJobs.length} total — starting`);
+  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting`);
 
-  // ─── OPTIMIZATION 2: Higher concurrency — each slot now ONLY does JD fetch + Claude ──
-  // No Firestore reads in the hot path anymore, so 10 concurrent is safe.
-  const scoringLimiter = pLimit(10);
+  // Concurrency 2: slower but prevents rate-limit cascades that cause incomplete scoring runs.
+  // User preference: always complete scoring, even if it takes longer.
+  const scoringLimiter = pLimit(2);
   const scoredAt = admin.firestore.Timestamp.now();
 
   const scoringTasks = unscoredJobs.map((job) =>
@@ -1168,18 +1233,70 @@ async function scoreNewJobsForUser(userId, newJobs) {
         // Title pre-loaded from batch read — no Firestore read needed here
         const jobTitle = titleMap[job.jobDocId];
 
-        // 1. Fetch JD (Ashby: free — already in descriptionHint; others: HTTP call)
-        let description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, job.descriptionHint);
+        // 1. Fetch JD (Greenhouse & Ashby natively injected via Sync loop; others via HTTPS)
+        let description = job.fullDescription;
+        
+        if (!description) {
+           description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
+           
+           // Universal Web Scraper Fallback (Jina Reader API) for Workday, Lever, etc.
+           if (!description && job.jobUrl) {
+              logger.info(`scoreNewJobsForUser: falling back to Universal Scraper for ${job.jobUrl}`);
+              try {
+                 const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
+                 if (jinaReq.ok) {
+                    const jinaText = await jinaReq.text();
+                    if (jinaText.length > 50) description = stripHtml(jinaText);
+                 }
+              } catch(e) { }
+           }
+        }
         if (!description || description.length < 50) {
-          logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, skipping`);
+          logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, writing fallback score`);
+          await jobsCol.doc(job.jobDocId).set(
+            { relevanceScore: -1, scoreReason: "Could not fetch Job Description directly.", scoredAt },
+            { merge: true }
+          );
           return;
         }
-        description = description.slice(0, 3500);
+        // Trim to 2000 chars — enough context for scoring, fast enough to avoid timeouts
+        description = description.slice(0, 2000);
 
-        // 2. Score with Claude Haiku
-        const result = await scoreJobWithClaude(jobTitle, description, resumeText);
+        // Score with Claude — up to 5 attempts, handles rate limits AND timeouts
+        let result = null;
+        let attempts = 0;
+        
+        while (attempts < 5 && !result) {
+          try {
+            result = await scoreJobWithClaude(jobTitle, description, resumeText);
+            if (!result) break; // null means JSON parse failed — don't retry
+          } catch (apiErr) {
+            attempts++;
+            const isRetryable =
+              apiErr.status === 429 ||
+              apiErr.status === 529 ||
+              apiErr.status === 408 ||
+              apiErr.message?.toLowerCase().includes("rate") ||
+              apiErr.message?.toLowerCase().includes("timeout") ||
+              apiErr.message?.toLowerCase().includes("timed out") ||
+              apiErr.constructor?.name === "APIConnectionTimeoutError" ||
+              apiErr.constructor?.name === "APIConnectionError";
+            if (isRetryable && attempts < 5) {
+              logger.warn(`scoreJobWithClaude: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${3 * attempts}s...`);
+              await new Promise((r) => setTimeout(r, 3000 * attempts)); // 3s, 6s, 9s, 12s
+            } else {
+              logger.warn(`scoreJobWithClaude: non-retryable error: ${apiErr.message?.slice(0, 100)}`);
+              break;
+            }
+          }
+        }
+
         if (!result) {
-          logger.warn(`scoreNewJobsForUser: Claude returned no score for ${job.jobDocId}`);
+          logger.warn(`scoreNewJobsForUser: Claude returned no score/error for ${job.jobDocId}`);
+          await jobsCol.doc(job.jobDocId).set(
+            { relevanceScore: -1, scoreReason: "AI returned invalid response format or rate limited.", scoredAt },
+            { merge: true }
+          );
           return;
         }
 
@@ -1192,12 +1309,16 @@ async function scoreNewJobsForUser(userId, newJobs) {
         logger.info(`Scored ${job.jobDocId}: ${result.score}/100 — ${result.reason}`);
       } catch (err) {
         logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
+        await jobsCol.doc(job.jobDocId).set(
+          { relevanceScore: -1, scoreReason: "AI timeout or processing error.", scoredAt },
+          { merge: true }
+        ).catch(() => {});
       }
     })
   );
 
   await Promise.all(scoringTasks);
-  logger.info(`scoreNewJobsForUser: done — scored ${unscoredJobs.length}/${newJobs.length} jobs for userId=${userId}`);
+  logger.info(`scoreNewJobsForUser: done — scored ${unscoredJobs.length}/${uniqueNewJobs.length} jobs for userId=${userId}`);
 }
 
 /**
