@@ -99,6 +99,7 @@ export default function Jobs({ user }) {
   const [companySearch, setCompanySearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
+  const [onlyHighRelevant, setOnlyHighRelevant] = useState(false);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
   useEffect(() => {
@@ -250,6 +251,10 @@ export default function Jobs({ user }) {
     const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
+      if (onlyHighRelevant && (typeof j.relevanceScore !== "number" || j.relevanceScore < 50)) {
+        return false;
+      }
+
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
           if (!j.stateCodes.includes(stateFilter)) return false;
@@ -264,7 +269,7 @@ export default function Jobs({ user }) {
     });
 
     return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter]);
+  }, [jobs, titleSearch, stateFilter, onlyHighRelevant]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -274,9 +279,9 @@ export default function Jobs({ user }) {
     // Tier determines the score chip color only — no background floods
     const tier =
       score >= 80 ? { dot: "bg-indigo-500", label: "Strong Match", textCls: "text-indigo-600" }
-      : score >= 60 ? { dot: "bg-indigo-400", label: "Good Match",   textCls: "text-indigo-500" }
-      : score >= 40 ? { dot: "bg-gray-400",   label: "Partial Match", textCls: "text-gray-500" }
-      :               { dot: "bg-gray-300",   label: "Weak Match",    textCls: "text-gray-400" };
+        : score >= 60 ? { dot: "bg-indigo-400", label: "Good Match", textCls: "text-indigo-500" }
+          : score >= 40 ? { dot: "bg-gray-400", label: "Partial Match", textCls: "text-gray-500" }
+            : { dot: "bg-gray-300", label: "Weak Match", textCls: "text-gray-400" };
 
     const scoreBadge = hasScore ? (
       <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
@@ -419,6 +424,17 @@ export default function Jobs({ user }) {
           </div>
 
           <button
+            onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
+            className={`h-11 px-4 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
+              ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
+              : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+              }`}
+          >
+            <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
+            Top Matches
+          </button>
+
+          <button
             onClick={() => setIsFilterExpanded(!isFilterExpanded)}
             className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
               ? "bg-indigo-50 border-indigo-200 text-indigo-600 shadow-inner"
@@ -439,6 +455,7 @@ export default function Jobs({ user }) {
               setCompanySearch("");
               setStateFilter("");
               setTimeframe("1h");
+              setOnlyHighRelevant(false);
               setSelectedKeys([]);
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 px-2"
