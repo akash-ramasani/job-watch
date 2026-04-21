@@ -88,7 +88,7 @@ function extractStateCodesFromLocationTokens(tokensOrString) {
   return Array.from(found);
 }
 
-export default function Jobs({ user }) {
+export default function Jobs({ user, userMeta }) {
   const { showToast } = useToast();
 
   const [companies, setCompanies] = useState([]);
@@ -292,8 +292,16 @@ export default function Jobs({ user }) {
       cursorY += 5; // Extra gap between paragraphs
     });
 
-    const safeCompany = clState.job?.companyName?.replace(/\s+/g, "_") || "Job";
-    doc.save(`Cover_Letter_${safeCompany}.pdf`);
+    const company = clState.job?.companyName || "Company";
+    const role = clState.job?.title || "Role";
+    const fullName = userMeta?.fullName || user?.displayName || "User";
+    
+    // Sanitize filename by removing invalid characters
+    const fileName = `${company} - ${role} - ${fullName} - Cover Letter.pdf`
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .trim();
+
+    doc.save(fileName);
   };
 
   const toggleCompany = (key) => {
