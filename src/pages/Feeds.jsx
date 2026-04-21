@@ -307,7 +307,7 @@ export default function Feeds({ user }) {
         </div>
       </div>
 
-      <div className="mx-auto max-w-3xl space-y-10">
+      <div className="space-y-10">
         <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
           <div className="px-6 py-4 border-b bg-indigo-50/60 border-indigo-100 flex items-center justify-between">
             <div>
@@ -325,27 +325,37 @@ export default function Feeds({ user }) {
             {activeFeeds.map((feed) => (
               <li
                 key={feed.id}
-                className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
+                className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-gray-900">
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
+                        {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
+                      </span>
+                    </div>
+                    
+                    <h3 className="text-base font-bold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
                       {feed.company || "Company"}
-                    </p>
-                    <span className="rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest bg-gray-100 text-gray-600">
-                      {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                    </span>
+                    </h3>
+                    
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <p className="truncate text-xs text-gray-500 font-mono">{feed.url}</p>
+                    </div>
                   </div>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
-                </div>
 
-                <button
-                  onClick={() => archiveFeed(feed.id)}
-                  disabled={busyArchiveId === feed.id}
-                  className="text-[10px] font-black uppercase tracking-widest text-amber-600 hover:text-amber-800 disabled:opacity-50"
-                >
-                  Archive
-                </button>
+                  <div className="flex items-center flex-shrink-0">
+                    <button
+                      onClick={() => archiveFeed(feed.id)}
+                      disabled={busyArchiveId === feed.id}
+                      className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 ring-1 ring-inset ring-amber-200/50 transition-colors"
+                    >
+                      Archive
+                    </button>
+                  </div>
+                </div>
               </li>
             ))}
 
@@ -374,27 +384,37 @@ export default function Feeds({ user }) {
             {archivedFeeds.map((feed) => (
               <li
                 key={feed.id}
-                className="flex items-center justify-between px-6 py-4 hover:bg-gray-50 transition-colors"
+                className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-gray-400"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-semibold text-gray-900">
-                      {feed.company || "Company"}
-                    </p>
-                    <span className="rounded-full px-2 py-0.5 text-[10px] font-black uppercase tracking-widest bg-gray-100 text-gray-600">
-                      {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-xs text-gray-500 font-mono">{feed.url}</p>
-                </div>
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
 
-                <button
-                  onClick={() => restoreFeed(feed.id)}
-                  disabled={busyArchiveId === feed.id}
-                  className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
-                >
-                  Restore
-                </button>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0 flex-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
+                        {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
+                      </span>
+                    </div>
+
+                    <h3 className="text-base font-bold text-gray-700 transition-colors truncate">
+                      {feed.company || "Company"}
+                    </h3>
+
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <p className="truncate text-xs text-gray-400 font-mono">{feed.url}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center flex-shrink-0">
+                    <button
+                      onClick={() => restoreFeed(feed.id)}
+                      disabled={busyArchiveId === feed.id}
+                      className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 ring-1 ring-inset ring-indigo-200/50 transition-colors"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                </div>
               </li>
             ))}
 
