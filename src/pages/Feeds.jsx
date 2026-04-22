@@ -83,6 +83,62 @@ function validateUrlForSource(source, rawUrl) {
   return { ok: true, normalizedUrl: rules.normalize(cleanUrl) };
 }
 
+function getDomainFromFeed(feed) {
+  try {
+    const url = feed.url || "";
+    // Eightfold often has domain in params or subdomain
+    if (feed.source === "eightfold" || url.includes("eightfold.ai")) {
+      const match = url.match(/domain=([^&]+)/);
+      if (match) return match[1];
+      const host = new URL(url).hostname;
+      return host.replace(".eightfold.ai", ".com");
+    }
+    // Netflix
+    if (feed.source === "netflix") return "netflix.com";
+    // Greenhouse
+    if (url.includes("greenhouse.io")) {
+      const parts = url.split("/");
+      const boardIdx = parts.indexOf("boards");
+      if (boardIdx !== -1 && parts[boardIdx + 1]) return `${parts[boardIdx + 1]}.com`;
+    }
+    // Ashby
+    if (url.includes("ashbyhq.com")) {
+      const parts = url.split("/");
+      return `${parts[parts.length - 1]}.com`;
+    }
+    // Fallback to company name
+    return `${(feed.company || "company").toLowerCase().replace(/\s+/g, "")}.com`;
+  } catch (e) {
+    return "google.com";
+  }
+}
+
+const LogoImage = ({ src, alt, company }) => {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="relative h-12 w-full flex items-center justify-center">
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        className={`max-h-12 w-full object-contain filter grayscale group-hover:grayscale-0 transition-all duration-1000 ease-out ${
+          loaded ? "opacity-100 scale-100" : "opacity-0 scale-95"
+        }`}
+        onError={(e) => {
+          e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(company)}&background=f3f4f6&color=6366f1&bold=true`;
+          setLoaded(true);
+        }}
+      />
+      {!loaded && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="w-8 h-8 bg-gray-50 rounded-full animate-pulse" />
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function Feeds({ user }) {
   const { showToast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -93,6 +149,8 @@ export default function Feeds({ user }) {
   const [busyArchiveId, setBusyArchiveId] = useState(null);
   const [busyRunNow, setBusyRunNow] = useState(false);
   const [lastRunSummary, setLastRunSummary] = useState(null);
+
+  const LOGO_KEY = import.meta.env.VITE_LOGO_DEV_KEY || "";
 
   useEffect(() => {
     const feedsRef = collection(db, "users", ADMIN_UID, "feeds");
@@ -200,54 +258,46 @@ export default function Feeds({ user }) {
     }
   }
 
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    showToast("URL copied to clipboard", "success");
+  };
+
   return (
     <div className="page-wrapper">
-
       <div className="page-header">
         <h1>Feed Management</h1>
         <p>Connect Greenhouse and AshbyHQ job boards, manage your sources, and trigger syncs.</p>
       </div>
 
       <div className="section-grid">
-        <div>
-          <h2 className="text-[10px] font-black uppercase tracking-widest text-gray-400">
+        <div className="bg-indigo-50/30 p-6 rounded-2xl border border-indigo-100/50">
+          <h2 className="text-[10px] font-black uppercase tracking-widest text-indigo-900/60">
             Job Board Sources
           </h2>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-2 text-sm text-indigo-900/80 leading-relaxed">
             Connect <span className="font-semibold">Greenhouse</span>,{" "}
             <span className="font-semibold">AshbyHQ</span>, and{" "}
             <span className="font-semibold">Eightfold.ai</span> (Microsoft, PayPal, Nvidia, etc.) job boards.
           </p>
 
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="mt-6">
             <button
               onClick={runSyncNow}
               disabled={busyRunNow}
-              className="btn-secondary w-full sm:w-auto uppercase tracking-widest text-[11px] font-black"
+              className="btn-primary w-full shadow-lg shadow-indigo-200/50 uppercase tracking-widest text-[11px] font-black py-3"
             >
-              {busyRunNow ? "Running..." : "Run sync now"}
+              {busyRunNow ? "Syncing..." : "Run sync now"}
             </button>
           </div>
 
-          <p className="mt-3 text-[11px] text-gray-400">
-            This triggers the backend ingestion immediately (no need to wait 1 hour).
-            It also writes a summary into <span className="font-mono">users/{ADMIN_UID}/syncRuns</span>.
+          <p className="mt-4 text-[11px] text-indigo-900/50 leading-relaxed italic">
+            This triggers the backend ingestion immediately. Check results in the sync history.
           </p>
-
-          {lastRunSummary ? (
-            <div className="mt-4 rounded-xl ring-1 ring-gray-200 bg-white p-4">
-              <div className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                Last manual run summary
-              </div>
-              <div className="mt-2 text-xs font-mono text-gray-800 whitespace-pre-wrap break-words">
-                {JSON.stringify(lastRunSummary, null, 2)}
-              </div>
-            </div>
-          ) : null}
         </div>
 
         <div className="md:col-span-2">
-          <form onSubmit={addFeed} className="space-y-4">
+          <form onSubmit={addFeed} className="space-y-4 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
             <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-6">
               <div className="sm:col-span-4">
                 <label className="block text-xs font-black uppercase tracking-widest text-gray-400">
@@ -264,7 +314,7 @@ export default function Feeds({ user }) {
               <div className="col-span-full">
                 <label className="block text-xs font-black uppercase tracking-widest text-gray-400">
                   Job Board API Endpoint{" "}
-                  <span className="ml-2 text-[10px] font-black tracking-widest text-gray-300">
+                  <span className="ml-2 text-[10px] font-black tracking-widest text-indigo-400">
                     (Detected: {prettySourceLabel(detectedSource)})
                   </span>
                 </label>
@@ -278,154 +328,102 @@ export default function Feeds({ user }) {
                       : URL_RULES.greenhouse.placeholder
                   }
                 />
-                <p className="mt-2 text-[11px] text-gray-400">
-                  Greenhouse:{" "}
-                  <span className="font-mono">
-                    https://boards-api.greenhouse.io/v1/boards/&lt;company&gt;/jobs
-                  </span>
-                  <br />
-                  AshbyHQ:{" "}
-                  <span className="font-mono">
-                    https://api.ashbyhq.com/posting-api/job-board/&lt;company&gt;
-                  </span>
-                  <br />
-                  Eightfold / Microsoft:{" "}
-                  <span className="font-mono">
-                    https://&lt;domain&gt;.eightfold.ai/api/pcsx/search?domain=&lt;domain&gt;.com&amp;...
-                  </span>
-                </p>
               </div>
             </div>
 
-            <button
-              type="submit"
-              className="btn-primary uppercase tracking-widest text-[11px] font-black"
-            >
-              Add Feed
-            </button>
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                className="btn-primary uppercase tracking-widest text-[11px] font-black px-8"
+              >
+                Add Feed
+              </button>
+            </div>
           </form>
         </div>
       </div>
 
-      <div className="space-y-10">
-        <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b bg-indigo-50/60 border-indigo-100 flex items-center justify-between">
-            <div>
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-indigo-900">
-                Active Feeds{" "}
-                <span className="ml-1 text-indigo-700">({activeFeeds.length})</span>
-              </h3>
-              <p className="text-[11px] text-indigo-700 mt-1">
-                These feeds are enabled (archivedAt is null).
-              </p>
-            </div>
+      <div className="mt-16">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h3 className="text-xl font-bold text-gray-900">Active Monitoring</h3>
+            <p className="text-sm text-gray-500 mt-1">Currently tracking {activeFeeds.length} job boards</p>
           </div>
-
-          <ul className="divide-y divide-gray-100">
-            {activeFeeds.map((feed) => (
-              <li
-                key={feed.id}
-                className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500"
-              >
-                <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-                
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
-                        {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                      </span>
-                    </div>
-                    
-                    <h3 className="text-base font-bold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
-                      {feed.company || "Company"}
-                    </h3>
-                    
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <p className="truncate text-xs text-gray-500 font-mono">{feed.url}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center flex-shrink-0">
-                    <button
-                      onClick={() => archiveFeed(feed.id)}
-                      disabled={busyArchiveId === feed.id}
-                      className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 hover:bg-amber-100 disabled:opacity-50 ring-1 ring-inset ring-amber-200/50 transition-colors"
-                    >
-                      Archive
-                    </button>
-                  </div>
-                </div>
-              </li>
-            ))}
-
-            {activeFeeds.length === 0 && (
-              <li className="px-6 py-10 text-center text-sm text-gray-400 italic">
-                No active feeds. Add one above to start monitoring.
-              </li>
-            )}
-          </ul>
         </div>
 
-        <div className="bg-white shadow-sm ring-1 ring-gray-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 border-b bg-gray-50/80 border-gray-200 flex items-center justify-between">
-            <div>
-              <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-600">
-                Archived Feeds{" "}
-                <span className="ml-1 text-gray-400">({archivedFeeds.length})</span>
-              </h3>
-              <p className="text-[11px] text-gray-500 mt-1">
-                Archived feeds are not used (archivedAt is set).
-              </p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-0.5 overflow-hidden rounded-2xl ring-1 ring-gray-100 bg-gray-100">
+          {activeFeeds.map((feed) => {
+            const domain = getDomainFromFeed(feed);
+            const logoUrl = `https://img.logo.dev/${domain}?token=${LOGO_KEY}&retina=true`;
+            
+            return (
+              <div key={feed.id} className="group relative bg-white p-8 sm:p-10 flex flex-col items-center justify-center min-h-[220px] hover:z-10 transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10">
+                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => copyToClipboard(feed.url)}
+                    className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                    title="Copy Feed URL"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => archiveFeed(feed.id)}
+                    disabled={busyArchiveId === feed.id}
+                    className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                    title="Archive Feed"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M10 8v11m4-11v11M4 8l1-1h10l1 1M10 5a2 2 0 114 0" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="w-full flex flex-col items-center">
+                  <div className="mb-6 w-full">
+                    <LogoImage
+                      src={logoUrl}
+                      alt={feed.company}
+                      company={feed.company}
+                    />
+                  </div>
+                  <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">{feed.company}</h4>
+                  <span className="mt-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-indigo-600 ring-1 ring-inset ring-indigo-700/10">
+                    {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+          
+          {activeFeeds.length === 0 && (
+            <div className="col-span-full bg-white py-20 text-center">
+              <p className="text-sm text-gray-400 italic">No active feeds. Add one above to start monitoring.</p>
+            </div>
+          )}
+        </div>
+
+        {archivedFeeds.length > 0 && (
+          <div className="mt-16">
+            <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6">Archived History</h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
+              {archivedFeeds.map((feed) => (
+                <div key={feed.id} className="group bg-gray-50/50 p-4 rounded-xl border border-gray-100 flex flex-col items-center opacity-60 hover:opacity-100 transition-opacity">
+                  <span className="text-[10px] font-bold text-gray-900 truncate w-full text-center">{feed.company}</span>
+                  <button
+                    onClick={() => restoreFeed(feed.id)}
+                    className="mt-2 text-[9px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800"
+                  >
+                    Restore
+                  </button>
+                </div>
+              ))}
             </div>
           </div>
-
-          <ul className="divide-y divide-gray-100">
-            {archivedFeeds.map((feed) => (
-              <li
-                key={feed.id}
-                className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-gray-400"
-              >
-                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
-
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0 flex-1 opacity-60 group-hover:opacity-100 transition-opacity">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <span className="text-[10px] font-black uppercase tracking-widest text-gray-500">
-                        {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                      </span>
-                    </div>
-
-                    <h3 className="text-base font-bold text-gray-700 transition-colors truncate">
-                      {feed.company || "Company"}
-                    </h3>
-
-                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <p className="truncate text-xs text-gray-400 font-mono">{feed.url}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center flex-shrink-0">
-                    <button
-                      onClick={() => restoreFeed(feed.id)}
-                      disabled={busyArchiveId === feed.id}
-                      className="px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-50 ring-1 ring-inset ring-indigo-200/50 transition-colors"
-                    >
-                      Restore
-                    </button>
-                  </div>
-                </div>
-              </li>
-            ))}
-
-            {archivedFeeds.length === 0 && (
-              <li className="px-6 py-10 text-center text-sm text-gray-400 italic">
-                No archived feeds.
-              </li>
-            )}
-          </ul>
-        </div>
+        )}
       </div>
     </div>
   );
 }
+
