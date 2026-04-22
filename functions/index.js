@@ -41,6 +41,10 @@ const Anthropic = require("@anthropic-ai/sdk");
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
 
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
 
@@ -1124,6 +1128,61 @@ Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
 }
 
 /**
+ * Score a single job against a resume using Gemini.
+ * Returns { score: number, reason: string } or null.
+ */
+async function scoreJobWithGemini(jobTitle, jobDescription, resumeText) {
+  const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
+  
+  const prompt = `You are a technical recruiting expert. Score this job's relevance for the candidate. Be fast and decisive.
+
+SCORING RUBRIC (apply in order — first match wins):
+
+HARD CAPS (override everything else):
+- Title has "Intern", "New Grad", "PhD Intern", "University Graduate", "Co-op" → score 0-20
+- Title has "Product Manager", "Program Manager", "Data Scientist", "Analyst", "Sales", "Marketing", "Finance", "Recruiter", "Designer" → score 0-15
+- Title has "Principal", "Distinguished", "VP", "Director", "Head of", "C-level" → score 0-30
+
+SCORE BANDS:
+- 85-100: Core tech stack is a strong match AND right seniority level (SWE 0-8 yrs)
+- 65-84: Good overlap, 1-2 missing but learnable tools
+- 40-64: Partial match — right field but tech stack gaps
+- 20-39: Weak match — misaligned role OR requires 10+ years experience not in resume
+- 0-19: Wrong field entirely
+
+KEY RULES:
+- Ignore lack of domain knowledge (AdTech, FinTech, HealthTech) if core SWE skills match — engineers learn domains
+- Judge primarily on: languages, frameworks, cloud tools, system design experience
+- Be decisive. Do not hedge with mid-range scores like 50 unless truly uncertain
+
+## Candidate Resume
+${resumeText}
+
+## Job Title
+${jobTitle}
+
+## Job Description
+${jobDescription}
+
+Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]);
+    const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
+    if (Number.isNaN(score)) return null;
+    return { score, reason: String(parsed.reason || "").slice(0, 120) };
+  } catch (err) {
+    logger.warn(`scoreJobWithGemini failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Main scoring orchestrator — runs after every sync, fire-and-forget.
  * Fetches JDs, scores with Claude, writes score back to job doc.
  * Never stores the JD itself.
@@ -1132,11 +1191,16 @@ async function scoreNewJobsForUser(userId, newJobs) {
   if (!newJobs || newJobs.length === 0) return;
 
   // Check user's AI scoring toggle — stored at users/{uid}/settings/preferences
+  let aiProvider = "gemini";
   try {
     const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
-    if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
-      logger.info(`scoreNewJobsForUser: AI scoring disabled for userId=${userId}, skipping`);
-      return;
+    if (settingsSnap.exists) {
+      const data = settingsSnap.data();
+      if (data.aiScoringEnabled === false) {
+        logger.info(`scoreNewJobsForUser: AI scoring disabled for userId=${userId}, skipping`);
+        return;
+      }
+      aiProvider = data.aiProvider || "gemini";
     }
   } catch (err) {
     logger.warn(`scoreNewJobsForUser: could not read settings for userId=${userId}: ${err?.message}`);
@@ -1260,18 +1324,23 @@ async function scoreNewJobsForUser(userId, newJobs) {
           return;
         }
         // Trim to 2000 chars — enough context for scoring, fast enough to avoid timeouts
-        description = description.slice(0, 2000);
+        const jd = description.slice(0, 2000);
 
-        // Score with Claude — up to 5 attempts, handles rate limits AND timeouts
+        // Score — up to 5 attempts, handles rate limits AND timeouts
         let result = null;
         let attempts = 0;
         
-        while (attempts < 5 && !result) {
+        while (attempts < 5) {
+          attempts++;
           try {
-            result = await scoreJobWithClaude(jobTitle, description, resumeText);
-            if (!result) break; // null means JSON parse failed — don't retry
+            if (aiProvider === "claude") {
+              result = await scoreJobWithClaude(jobTitle, jd, resumeText);
+            } else {
+              result = await scoreJobWithGemini(jobTitle, jd, resumeText);
+            }
+            if (result) break; // Successfully scored
+            break; // If null returned, don't retry
           } catch (apiErr) {
-            attempts++;
             const isRetryable =
               apiErr.status === 429 ||
               apiErr.status === 529 ||
@@ -1282,17 +1351,17 @@ async function scoreNewJobsForUser(userId, newJobs) {
               apiErr.constructor?.name === "APIConnectionTimeoutError" ||
               apiErr.constructor?.name === "APIConnectionError";
             if (isRetryable && attempts < 5) {
-              logger.warn(`scoreJobWithClaude: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${3 * attempts}s...`);
-              await new Promise((r) => setTimeout(r, 3000 * attempts)); // 3s, 6s, 9s, 12s
+              logger.warn(`scoreJobWithAI: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${3 * attempts}s...`);
+              await new Promise((r) => setTimeout(r, 3000 * attempts));
             } else {
-              logger.warn(`scoreJobWithClaude: non-retryable error: ${apiErr.message?.slice(0, 100)}`);
+              logger.warn(`scoreJobWithAI: non-retryable error: ${apiErr.message?.slice(0, 100)}`);
               break;
             }
           }
         }
 
         if (!result) {
-          logger.warn(`scoreNewJobsForUser: Claude returned no score/error for ${job.jobDocId}`);
+          logger.warn(`scoreNewJobsForUser: AI returned no score/error for ${job.jobDocId}`);
           await jobsCol.doc(job.jobDocId).set(
             { relevanceScore: -1, scoreReason: "AI returned invalid response format or rate limited.", scoredAt },
             { merge: true }
@@ -1443,7 +1512,7 @@ exports.askAssistant = onRequest(
       let currentMessages = [...messages];
       let finalResponse = null;
 
-      // Tool handling loop
+      // Tool handling loop (using Claude for logic, Gemini support is limited to direct text completion if requested)
       while (true) {
         const response = await anthropic.messages.create({
           model: "claude-sonnet-4-6",
@@ -1749,9 +1818,12 @@ exports.generateCoverLetter = onCall(
     try {
       // Check if AI is enabled
       const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
+      const aiProvider = settingsSnap.exists ? (settingsSnap.data()?.aiProvider || "gemini") : "gemini";
+      
       if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
         throw new HttpsError("failed-precondition", "AI features are currently disabled in your settings.");
       }
+      
       // 2. Fetch User Resume
       const resumeSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
       if (!resumeSnap.exists) {
@@ -1776,7 +1848,7 @@ exports.generateCoverLetter = onCall(
       const companyName = jobData.companyName || "the company";
       const jobTitle = jobData.title || "the role";
 
-      // 4. Construct Prompt & Call Claude
+      // 4. Construct Prompt & Call AI
       const systemPrompt = `You are an expert career coach making highly professional, modern, and engaging cover letters.`;
       
       const userPrompt = `
@@ -1798,19 +1870,27 @@ ${jobDesc}
 ${builtResumeStr}
 `;
 
-      const msg = await anthropic.messages.create(
-        {
-          model: "claude-haiku-4-5",
-          max_tokens: 600,
-          temperature: 0.7,
-          system: systemPrompt,
-          messages: [{ role: "user", content: userPrompt }],
-        },
-        { timeout: 30000 }
-      );
+      let generatedText = "";
+      if (aiProvider === "claude") {
+        const msg = await anthropic.messages.create(
+          {
+            model: "claude-haiku-4-5",
+            max_tokens: 600,
+            temperature: 0.7,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+          },
+          { timeout: 30000 }
+        );
+        generatedText = msg.content?.[0] ? msg.content[0].text.trim() : "";
+      } else {
+        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview", systemInstruction: systemPrompt });
+        const result = await model.generateContent(userPrompt);
+        const response = await result.response;
+        generatedText = response.text().trim();
+      }
 
-      const generatedText = msg.content?.[0] ? msg.content[0].text.trim() : "";
-      if (!generatedText) throw new Error("Claude returned an empty string.");
+      if (!generatedText) throw new Error("AI returned an empty string.");
 
       return { ok: true, text: generatedText };
     } catch (err) {

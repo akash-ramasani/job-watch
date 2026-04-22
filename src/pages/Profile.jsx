@@ -66,7 +66,9 @@ export default function Profile({ user, userMeta }) {
   const [savingResume, setSavingResume] = useState(false);
   const [skillInput, setSkillInput] = useState("");
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
+  const [aiProvider, setAiProvider] = useState("gemini");
   const [togglingAi, setTogglingAi] = useState(false);
+  const [togglingProvider, setTogglingProvider] = useState(false);
 
   const dropzoneInputRef = useRef(null);
 
@@ -76,8 +78,14 @@ export default function Profile({ user, userMeta }) {
       if (snap.exists()) setSavedResumeFull(snap.data());
     });
     getDoc(doc(db, "users", user.uid, "settings", "preferences")).then((snap) => {
-      if (snap.exists() && typeof snap.data()?.aiScoringEnabled === "boolean") {
-        setAiScoringEnabled(snap.data().aiScoringEnabled);
+      if (snap.exists()) {
+        const data = snap.data();
+        if (typeof data.aiScoringEnabled === "boolean") {
+          setAiScoringEnabled(data.aiScoringEnabled);
+        }
+        if (data.aiProvider) {
+          setAiProvider(data.aiProvider);
+        }
       }
     });
   }, [user?.uid]);
@@ -88,11 +96,25 @@ export default function Profile({ user, userMeta }) {
     try {
       await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { aiScoringEnabled: next }, { merge: true });
       setAiScoringEnabled(next);
-      showToast(next ? "AI scoring enabled" : "AI scoring disabled", "success");
+      showToast(next ? "AI features enabled" : "AI features disabled", "success");
     } catch {
       showToast("Failed to update setting", "error");
     } finally {
       setTogglingAi(false);
+    }
+  }
+
+  async function handleSetAiProvider(provider) {
+    if (provider === aiProvider) return;
+    setTogglingProvider(true);
+    try {
+      await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { aiProvider: provider }, { merge: true });
+      setAiProvider(provider);
+      showToast(`AI Provider switched to ${provider === 'gemini' ? 'Gemini' : 'Claude'}`, "success");
+    } catch {
+      showToast("Failed to update provider", "error");
+    } finally {
+      setTogglingProvider(false);
     }
   }
 
@@ -571,6 +593,49 @@ export default function Profile({ user, userMeta }) {
                   </span>
                 ) : "Enable Scoring"}
               </button>
+            </div>
+
+            {/* AI Provider Card */}
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">AI Intelligence Provider</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Choose which AI model handles your job scoring and cover letters.
+                  </p>
+                </div>
+              </div>
+              
+              <div className="flex p-1 bg-gray-50 rounded-xl gap-1">
+                <button
+                  onClick={() => handleSetAiProvider("gemini")}
+                  disabled={togglingProvider}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all ${
+                    aiProvider === "gemini" 
+                      ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" 
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="currentColor" />
+                  </svg>
+                  Google Gemini
+                </button>
+                <button
+                  onClick={() => handleSetAiProvider("claude")}
+                  disabled={togglingProvider}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-lg transition-all ${
+                    aiProvider === "claude" 
+                      ? "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200" 
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 3L4 9V21H20V9L12 3Z" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  Anthropic Claude
+                </button>
+              </div>
             </div>
 
             {/* User ID Card */}
