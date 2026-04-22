@@ -1286,8 +1286,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting`);
 
-  // Dynamic concurrency based on provider limits (Gemini: 1000 RPM / Claude: 50 RPM)
-  const concurrency = aiProvider === "gemini" ? 15 : 2;
+  // Dynamic concurrency based on provider limits 
+  // Gemini: 1000 RPM / 2M TPM (Ultra fast lane: 25) | Claude: Tier 1 is only 50K TPM (Slow lane: 1)
+  const concurrency = aiProvider === "gemini" ? 25 : 1;
   const scoringLimiter = pLimit(concurrency);
   const scoredAt = admin.firestore.Timestamp.now();
 
@@ -1351,8 +1352,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
               apiErr.constructor?.name === "APIConnectionTimeoutError" ||
               apiErr.constructor?.name === "APIConnectionError";
             if (isRetryable && attempts < 5) {
-              logger.warn(`scoreJobWithAI: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${3 * attempts}s...`);
-              await new Promise((r) => setTimeout(r, 3000 * attempts));
+              const waitSec = aiProvider === "claude" ? (10 * attempts) : (2 * attempts);
+              logger.warn(`scoreJobWithAI: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${waitSec}s...`);
+              await new Promise((r) => setTimeout(r, 1000 * waitSec));
             } else {
               logger.warn(`scoreJobWithAI: non-retryable error: ${apiErr.message?.slice(0, 100)}`);
               break;
