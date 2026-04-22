@@ -1268,8 +1268,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
   for (let i = 0; i < snapshots.length; i++) {
     const snap = snapshots[i];
     const job = uniqueNewJobs[i];
-    if (snap.exists && snap.data()?.relevanceScore != null) {
-      logger.info(`scoreNewJobsForUser: ${job.jobDocId} already scored (${snap.data().relevanceScore}), skipping`);
+    const existingScore = snap.exists ? snap.data()?.relevanceScore : null;
+    if (existingScore !== null && existingScore >= 0) {
+      logger.info(`scoreNewJobsForUser: ${job.jobDocId} already has valid score (${existingScore}), skipping`);
       continue;
     }
 
@@ -1340,7 +1341,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
               result = await scoreJobWithGemini(jobTitle, jd, resumeText);
             }
             if (result) break; // Successfully scored
-            break; // If null returned, don't retry
+            // If result is null (invalid format), continue to next attempt
+            logger.warn(`scoreJobWithAI: attempt ${attempts}/5 returned invalid format for ${job.jobDocId}, retrying...`);
+            await new Promise((r) => setTimeout(r, 1000)); 
           } catch (apiErr) {
             const isRetryable =
               apiErr.status === 429 ||
