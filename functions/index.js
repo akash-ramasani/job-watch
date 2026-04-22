@@ -67,38 +67,38 @@ const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
  * ----------------------------
  */
 const US_STATES = [
-  "Alabama","Arizona","Arkansas","California","Colorado","Connecticut","District of Columbia","Florida","Georgia",
-  "Idaho","Illinois","Indiana","Iowa","Kansas","Kentucky","Louisiana","Maryland","Massachusetts","Michigan","Minnesota",
-  "Missouri","Nebraska","Nevada","New Hampshire","New Jersey","New Mexico","New York","North Carolina","Oklahoma",
-  "Pennsylvania","Rhode Island","Tennessee","Texas","Utah","Virginia","Washington","Wisconsin",
+  "Alabama", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "District of Columbia", "Florida", "Georgia",
+  "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maryland", "Massachusetts", "Michigan", "Minnesota",
+  "Missouri", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", "New York", "North Carolina", "Oklahoma",
+  "Pennsylvania", "Rhode Island", "Tennessee", "Texas", "Utah", "Virginia", "Washington", "Wisconsin",
 ];
 
 const US_STATE_ABBREVIATIONS = [
-  "AL","AZ","AR","CA","CO","CT","DC","FL","GA","ID","IL","IN","IA","KS","KY","LA",
-  "MD","MA","MI","MN","MO","NE","NV","NH","NJ","NM","NY","NC","OK","PA","RI","TN",
-  "TX","UT","VA","WA","WI",
+  "AL", "AZ", "AR", "CA", "CO", "CT", "DC", "FL", "GA", "ID", "IL", "IN", "IA", "KS", "KY", "LA",
+  "MD", "MA", "MI", "MN", "MO", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "OK", "PA", "RI", "TN",
+  "TX", "UT", "VA", "WA", "WI",
 ];
 
 const US_CITIES = [
-  "Albuquerque","Anaheim","Ann Arbor","Arlington","Atlanta","Austin","Bakersfield","Baltimore","Baton Rouge","Bellevue",
-  "Birmingham","Boise","Boston","Boulder","Brooklyn","Buffalo","Burbank","Cambridge","Charlotte","Chicago","Cincinnati",
-  "Cleveland","Colorado Springs","Columbus","Dallas","Dayton","Denver","Des Moines","Detroit","Durham","El Paso",
-  "Fort Collins","Fort Lauderdale","Fort Myers","Fort Worth","Fresno","Grand Rapids","Greensboro","Greenville",
-  "Hartford","Henderson","Hoboken","Houston","Huntsville","Indianapolis","Irvine","Jacksonville","Jersey City",
-  "Kansas City","Las Vegas","Lincoln","Little Rock","Long Beach","Los Angeles","Louisville","Madison","Memphis","Mesa",
-  "Miami","Milwaukee","Minneapolis","Mountain View","Nashville","Naples","New Haven","New Orleans","New York","Newark",
-  "Norfolk","Oakland","Oklahoma City","Omaha","Orlando","Palo Alto","Panama City","Pensacola","Philadelphia","Phoenix",
-  "Pittsburgh","Plano","Portland","Providence","Provo","Raleigh","Redmond","Reston","Richmond","Riverside","Rochester",
-  "Round Rock","Sacramento","Salt Lake City","San Antonio","San Diego","San Francisco","San Jose","San Mateo","Santa Ana",
-  "Santa Clara","Santa Fe","Sarasota","Scottsdale","Seattle","Silver Spring","Spokane","St. Louis","St. Paul",
-  "St. Petersburg","Sugar Land","Sunnyvale","Syracuse","Tallahassee","Tampa","Tempe","The Woodlands","Tucson","Tulsa",
-  "Tysons","Virginia Beach","Washington","West Palm Beach","Wichita",
+  "Albuquerque", "Anaheim", "Ann Arbor", "Arlington", "Atlanta", "Austin", "Bakersfield", "Baltimore", "Baton Rouge", "Bellevue",
+  "Birmingham", "Boise", "Boston", "Boulder", "Brooklyn", "Buffalo", "Burbank", "Cambridge", "Charlotte", "Chicago", "Cincinnati",
+  "Cleveland", "Colorado Springs", "Columbus", "Dallas", "Dayton", "Denver", "Des Moines", "Detroit", "Durham", "El Paso",
+  "Fort Collins", "Fort Lauderdale", "Fort Myers", "Fort Worth", "Fresno", "Grand Rapids", "Greensboro", "Greenville",
+  "Hartford", "Henderson", "Hoboken", "Houston", "Huntsville", "Indianapolis", "Irvine", "Jacksonville", "Jersey City",
+  "Kansas City", "Las Vegas", "Lincoln", "Little Rock", "Long Beach", "Los Angeles", "Louisville", "Madison", "Memphis", "Mesa",
+  "Miami", "Milwaukee", "Minneapolis", "Mountain View", "Nashville", "Naples", "New Haven", "New Orleans", "New York", "Newark",
+  "Norfolk", "Oakland", "Oklahoma City", "Omaha", "Orlando", "Palo Alto", "Panama City", "Pensacola", "Philadelphia", "Phoenix",
+  "Pittsburgh", "Plano", "Portland", "Providence", "Provo", "Raleigh", "Redmond", "Reston", "Richmond", "Riverside", "Rochester",
+  "Round Rock", "Sacramento", "Salt Lake City", "San Antonio", "San Diego", "San Francisco", "San Jose", "San Mateo", "Santa Ana",
+  "Santa Clara", "Santa Fe", "Sarasota", "Scottsdale", "Seattle", "Silver Spring", "Spokane", "St. Louis", "St. Paul",
+  "St. Petersburg", "Sugar Land", "Sunnyvale", "Syracuse", "Tallahassee", "Tampa", "Tempe", "The Woodlands", "Tucson", "Tulsa",
+  "Tysons", "Virginia Beach", "Washington", "West Palm Beach", "Wichita",
 ];
 
 const REMOTE_US_ONLY = [
-  "US-Remote","US Remote","US (Remote)","United States - Remote","Remote US","Remote USA","Remote-USA",
-  "Remote in United States","Remote in the US","Remote - USA","Remote - US: All locations","Remote - US: Select locations",
-  "Anywhere in the United States","United States","US",
+  "US-Remote", "US Remote", "US (Remote)", "United States - Remote", "Remote US", "Remote USA", "Remote-USA",
+  "Remote in United States", "Remote in the US", "Remote - USA", "Remote - US: All locations", "Remote - US: Select locations",
+  "Anywhere in the United States", "United States", "US",
 ];
 
 const NORM = {
@@ -146,7 +146,7 @@ exports.syncRecentJobsHourly = onSchedule(
           startedAt,
           ranAt: startedAt,
           recentCutoffIso: recentCutoff.toDate().toISOString(),
-          
+
         },
         { merge: true }
       );
@@ -242,7 +242,7 @@ exports.runSyncNow = onRequest(
         startedAt,
         ranAt: startedAt,
         recentCutoffIso: recentCutoff.toDate().toISOString(),
-        
+
       },
       { merge: true }
     );
@@ -259,7 +259,7 @@ exports.runSyncNow = onRequest(
         dryRun: false,
         scanned: summary.jobsFetched,
         updated: summary.jobsWritten,
-        
+
 
         // ✅ NEW
         feedsCount: summary.feedsCount,
@@ -1003,7 +1003,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
       }
 
       if (!slug || !externalId) return null;
-      
+
       // Greenhouse IDs in normalized feed look like "7743800_5ca2b88". API only accepts "7743800"
       const realId = String(externalId).split("_")[0];
 
@@ -1037,7 +1037,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
 
         // Best source: the domain= param already embedded in the feed URL
         // e.g. https://bnymellon.eightfold.ai/api/pcsx/search?domain=bnymellon.com → "bnymellon.com"
-        domain = u.searchParams.get("domain") || 
+        domain = u.searchParams.get("domain") ||
           // Fallback: strip .eightfold.ai suffix
           u.hostname.replace(/\.eightfold\.ai$/, ".com");
       } catch (_) {
@@ -1132,8 +1132,8 @@ Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
  * Returns { score: number, reason: string } or null.
  */
 async function scoreJobWithGemini(jobTitle, jobDescription, resumeText) {
-  const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
-  
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
   const prompt = `You are a technical recruiting expert. Score this job's relevance for the candidate. Be fast and decisive.
 
 SCORING RUBRIC (apply in order — first match wins):
@@ -1272,7 +1272,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
       logger.info(`scoreNewJobsForUser: ${job.jobDocId} already scored (${snap.data().relevanceScore}), skipping`);
       continue;
     }
-    
+
     const title = snap.exists ? (snap.data()?.title || "") : "";
     titleMap[job.jobDocId] = title;
 
@@ -1286,9 +1286,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting`);
 
-  // Concurrency 2: slower but prevents rate-limit cascades that cause incomplete scoring runs.
-  // User preference: always complete scoring, even if it takes longer.
-  const scoringLimiter = pLimit(2);
+  // Dynamic concurrency based on provider limits (Gemini: 1000 RPM / Claude: 50 RPM)
+  const concurrency = aiProvider === "gemini" ? 15 : 2;
+  const scoringLimiter = pLimit(concurrency);
   const scoredAt = admin.firestore.Timestamp.now();
 
   const scoringTasks = unscoredJobs.map((job) =>
@@ -1299,21 +1299,21 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
         // 1. Fetch JD (Greenhouse & Ashby natively injected via Sync loop; others via HTTPS)
         let description = job.fullDescription;
-        
+
         if (!description) {
-           description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
-           
-           // Universal Web Scraper Fallback (Jina Reader API) for Workday, Lever, etc.
-           if (!description && job.jobUrl) {
-              logger.info(`scoreNewJobsForUser: falling back to Universal Scraper for ${job.jobUrl}`);
-              try {
-                 const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
-                 if (jinaReq.ok) {
-                    const jinaText = await jinaReq.text();
-                    if (jinaText.length > 50) description = stripHtml(jinaText);
-                 }
-              } catch(e) { }
-           }
+          description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
+
+          // Universal Web Scraper Fallback (Jina Reader API) for Workday, Lever, etc.
+          if (!description && job.jobUrl) {
+            logger.info(`scoreNewJobsForUser: falling back to Universal Scraper for ${job.jobUrl}`);
+            try {
+              const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
+              if (jinaReq.ok) {
+                const jinaText = await jinaReq.text();
+                if (jinaText.length > 50) description = stripHtml(jinaText);
+              }
+            } catch (e) { }
+          }
         }
         if (!description || description.length < 50) {
           logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, writing fallback score`);
@@ -1329,7 +1329,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
         // Score — up to 5 attempts, handles rate limits AND timeouts
         let result = null;
         let attempts = 0;
-        
+
         while (attempts < 5) {
           attempts++;
           try {
@@ -1381,7 +1381,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
         await jobsCol.doc(job.jobDocId).set(
           { relevanceScore: -1, scoreReason: "AI timeout or processing error.", scoredAt },
           { merge: true }
-        ).catch(() => {});
+        ).catch(() => { });
       }
     })
   );
@@ -1419,13 +1419,13 @@ async function sendPushNotification(userId, summary, durationMs) {
     };
 
     const response = await admin.messaging().sendEachForMulticast(payload);
-    
+
     // Cleanup invalid tokens
     const failedTokens = [];
     response.responses.forEach((resp, idx) => {
       if (!resp.success) {
         if (resp.error?.code === 'messaging/invalid-registration-token' ||
-            resp.error?.code === 'messaging/registration-token-not-registered') {
+          resp.error?.code === 'messaging/registration-token-not-registered') {
           failedTokens.push(tokens[idx]);
         }
       }
@@ -1459,9 +1459,17 @@ exports.askAssistant = onRequest(
     try {
       const { messages, userId } = req.body;
       const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
-      
+
       const activeUserId = userId || ADMIN_UID; // Default to admin for now if missing
-      
+
+      // Fetch AI preference
+      const settingsSnap = await db.collection("users").doc(activeUserId).collection("settings").doc("preferences").get();
+      const aiProvider = settingsSnap.exists ? (settingsSnap.data()?.aiProvider || "gemini") : "gemini";
+
+      if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
+        return res.status(403).json({ error: "AI features are disabled in your settings." });
+      }
+
       if (!Array.isArray(messages)) {
         return res.status(400).json({ error: "Messages array is required." });
       }
@@ -1512,29 +1520,56 @@ exports.askAssistant = onRequest(
       let currentMessages = [...messages];
       let finalResponse = null;
 
-      // Tool handling loop (using Claude for logic, Gemini support is limited to direct text completion if requested)
-      while (true) {
-        const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1024,
-          tools: tools,
-          messages: currentMessages,
-          system: `You are the JobWatch AI Assistant. You help users manage their job tracking, sync data, and analyze market trends.
+      const systemPrompt = `You are the JobWatch AI Assistant. You help users manage their job tracking, sync data, and analyze market trends.
           You have access to the user's specific job listings, feeds, and sync history via tools.
           Always be concise, professional, and helpful. 
           IMPORTANT: All timestamps and dates in your responses must be in Pacific Time (PT). 
-          Current User ID: ${activeUserId}`,
-        });
+          Current User ID: ${activeUserId}`;
 
-        if (response.stop_reason !== "tool_use") {
-          finalResponse = response;
+      // Tool handling loop
+      while (true) {
+        let generatedText = "";
+        let toolCalls = [];
+
+        if (aiProvider === "claude") {
+          const response = await anthropic.messages.create({
+            model: "claude-sonnet-4-6",
+            max_tokens: 4096,
+            system: systemPrompt,
+            messages: currentMessages,
+            tools: tools,
+          });
+
+          if (response.stop_reason === "tool_use") {
+            toolCalls = response.content.filter(c => c.type === "tool_use");
+            currentMessages.push({ role: "assistant", content: response.content });
+          } else {
+            finalResponse = response.content[0].text;
+            break;
+          }
+        } else {
+          // Gemini tool calling logic
+          const model = genAI.getGenerativeModel({
+            model: "gemini-2.5-flash",
+            systemInstruction: systemPrompt
+          });
+
+          // Convert Claude-style messages to Gemini-style if necessary
+          const chat = model.startChat({
+            history: currentMessages.filter(m => m.role !== "system").map(m => ({
+              role: m.role === "assistant" ? "model" : "user",
+              parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }]
+            }))
+          });
+
+          const result = await chat.sendMessage(messages[messages.length - 1].content);
+          finalResponse = result.response.text();
           break;
         }
 
-        // Handle tool calls
-        const toolResults = [];
-        for (const block of response.content) {
-          if (block.type === "tool_use") {
+        if (toolCalls.length > 0) {
+          const toolResults = [];
+          for (const block of toolCalls) {
             const toolName = block.name;
             const args = block.input;
             const toolId = block.id;
@@ -1582,18 +1617,16 @@ exports.askAssistant = onRequest(
               content: JSON.stringify(resultData),
             });
           }
-        }
 
-        // Add assistant's response and tool results to history
-        currentMessages.push({ role: "assistant", content: response.content });
-        currentMessages.push({ role: "user", content: toolResults });
+          currentMessages.push({ role: "user", content: toolResults });
+        }
       }
 
       return res.json({
         ok: true,
         response: {
           role: "assistant",
-          content: finalResponse.content[0].text,
+          content: finalResponse,
         },
       });
     } catch (e) {
@@ -1671,8 +1704,6 @@ exports.parseResume = onRequest(
 
         bb.on("error", (err) => reject(err));
 
-        // Firebase Functions Gen2 consumes the request stream before the handler runs.
-        // req.rawBody is a Buffer that Firebase preserves for exactly this use case.
         bb.end(req.rawBody);
       });
 
@@ -1715,7 +1746,7 @@ exports.parseResume = onRequest(
 
       const truncatedText = rawText.slice(0, 12000); // keep Claude prompt manageable
 
-      // ─── 4. Call Claude to extract structured JSON ──────────────────────
+      // ─── 4. Call AI to extract structured JSON ──────────────────────
       const systemPrompt = `You are a professional resume parser. The user will provide the raw text of a resume.
 Your job is to extract all relevant information and return it as a single, valid JSON object — NO markdown, NO explanation, ONLY the JSON object.
 
@@ -1755,15 +1786,25 @@ Rules:
 - If a section has no data, use an empty array [] or empty string "".
 - Dates: preserve whatever format is in the resume; do not invent missing dates.
 - Output ONLY the raw JSON object. No markdown fences, no explanation.`;
+      // Fetch AI preference
+      const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
+      const aiProvider = settingsSnap.exists ? (settingsSnap.data()?.aiProvider || "gemini") : "gemini";
 
-      const claudeRes = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
-        max_tokens: 2048,
-        system: systemPrompt,
-        messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}` }],
-      });
-
-      const rawOutput = claudeRes.content[0]?.text || "";
+      let rawOutput = "";
+      if (aiProvider === "claude") {
+        const claudeRes = await anthropic.messages.create({
+          model: "claude-sonnet-4-6",
+          max_tokens: 2048,
+          system: systemPrompt,
+          messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}` }],
+        });
+        rawOutput = claudeRes.content[0]?.text || "";
+      } else {
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", systemInstruction: systemPrompt });
+        const result = await model.generateContent(`Resume text:\n\n${truncatedText}`);
+        const response = await result.response;
+        rawOutput = response.text().trim();
+      }
 
       // Strip any accidental markdown fences Claude might add
       const jsonStr = rawOutput.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
@@ -1819,17 +1860,17 @@ exports.generateCoverLetter = onCall(
       // Check if AI is enabled
       const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
       const aiProvider = settingsSnap.exists ? (settingsSnap.data()?.aiProvider || "gemini") : "gemini";
-      
+
       if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
         throw new HttpsError("failed-precondition", "AI features are currently disabled in your settings.");
       }
-      
+
       // 2. Fetch User Resume
       const resumeSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
       if (!resumeSnap.exists) {
         throw new HttpsError("failed-precondition", "No resume profile found. Please upload a resume first.");
       }
-      
+
       const resumeText = [];
       const dOptions = resumeSnap.data();
       if (dOptions.rawText) resumeText.push(dOptions.rawText);
@@ -1850,7 +1891,7 @@ exports.generateCoverLetter = onCall(
 
       // 4. Construct Prompt & Call AI
       const systemPrompt = `You are an expert career coach making highly professional, modern, and engaging cover letters.`;
-      
+
       const userPrompt = `
 Write a 3-paragraph compelling cover letter bridging this exact resume and this specific job at ${companyName} for the ${jobTitle} role.
 
@@ -1884,7 +1925,7 @@ ${builtResumeStr}
         );
         generatedText = msg.content?.[0] ? msg.content[0].text.trim() : "";
       } else {
-        const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview", systemInstruction: systemPrompt });
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", systemInstruction: systemPrompt });
         const result = await model.generateContent(userPrompt);
         const response = await result.response;
         generatedText = response.text().trim();
