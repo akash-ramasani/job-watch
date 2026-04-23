@@ -1,5 +1,5 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   addDoc,
@@ -14,6 +14,38 @@ import {
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
+
+const ScrollReveal = ({ children, delay = 0 }) => {
+  const [isVisible, setIsVisible] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setTimeout(() => {
+            setIsVisible(true);
+          }, delay);
+          observer.unobserve(entry.target);
+        }
+      },
+      { threshold: 0.1, rootMargin: "0px 0px -50px 0px" }
+    );
+    if (ref.current) observer.observe(ref.current);
+    return () => observer.disconnect();
+  }, [delay]);
+
+  return (
+    <div
+      ref={ref}
+      className={`h-full transition-all duration-1000 ease-out ${
+        isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
+      }`}
+    >
+      {children}
+    </div>
+  );
+};
 
 const URL_RULES = {
   greenhouse: {
@@ -113,21 +145,30 @@ function getDomainFromFeed(feed) {
   }
 }
 
+// Global cache to track which logos have already finished loading in this session
+const LOADED_LOGOS_CACHE = new Set();
+
 const LogoImage = ({ src, alt, company }) => {
-  const [loaded, setLoaded] = useState(false);
+  const [loaded, setLoaded] = useState(LOADED_LOGOS_CACHE.has(src));
+
+  const handleLoad = () => {
+    LOADED_LOGOS_CACHE.add(src);
+    setLoaded(true);
+  };
+
   return (
     <div className="relative h-12 w-full flex items-center justify-center">
       <img
         src={src}
         alt={alt}
         loading="lazy"
-        onLoad={() => setLoaded(true)}
+        onLoad={handleLoad}
         className={`max-h-12 w-full object-contain filter grayscale group-hover:grayscale-0 transition-all duration-1000 ease-out ${
           loaded ? "opacity-100 scale-100" : "opacity-0 scale-95"
         }`}
         onError={(e) => {
           e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(company)}&background=f3f4f6&color=6366f1&bold=true`;
-          setLoaded(true);
+          handleLoad();
         }}
       />
       {!loaded && (
@@ -352,48 +393,50 @@ export default function Feeds({ user }) {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-0.5 overflow-hidden rounded-2xl ring-1 ring-gray-100 bg-gray-100">
-          {activeFeeds.map((feed) => {
+          {activeFeeds.map((feed, idx) => {
             const domain = getDomainFromFeed(feed);
             const logoUrl = `https://img.logo.dev/${domain}?token=${LOGO_KEY}&retina=true`;
             
             return (
-              <div key={feed.id} className="group relative bg-white p-8 sm:p-10 flex flex-col items-center justify-center min-h-[220px] hover:z-10 transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10">
-                <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button
-                    onClick={() => copyToClipboard(feed.url)}
-                    className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                    title="Copy Feed URL"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => archiveFeed(feed.id)}
-                    disabled={busyArchiveId === feed.id}
-                    className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                    title="Archive Feed"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M10 8v11m4-11v11M4 8l1-1h10l1 1M10 5a2 2 0 114 0" />
-                    </svg>
-                  </button>
-                </div>
-
-                <div className="w-full flex flex-col items-center">
-                  <div className="mb-6 w-full">
-                    <LogoImage
-                      src={logoUrl}
-                      alt={feed.company}
-                      company={feed.company}
-                    />
+              <ScrollReveal key={feed.id} delay={(idx % 4) * 100}>
+                <div className="group relative bg-white p-8 sm:p-10 flex flex-col items-center justify-center h-full min-h-[220px] hover:z-10 transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10">
+                  <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => copyToClipboard(feed.url)}
+                      className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                      title="Copy Feed URL"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => archiveFeed(feed.id)}
+                      disabled={busyArchiveId === feed.id}
+                      className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
+                      title="Archive Feed"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M10 8v11m4-11v11M4 8l1-1h10l1 1M10 5a2 2 0 114 0" />
+                      </svg>
+                    </button>
                   </div>
-                  <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">{feed.company}</h4>
-                  <span className="mt-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-indigo-600 ring-1 ring-inset ring-indigo-700/10">
-                    {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                  </span>
+
+                  <div className="w-full flex flex-col items-center">
+                    <div className="mb-6 w-full">
+                      <LogoImage
+                        src={logoUrl}
+                        alt={feed.company}
+                        company={feed.company}
+                      />
+                    </div>
+                    <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">{feed.company}</h4>
+                    <span className="mt-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-indigo-600 ring-1 ring-inset ring-indigo-700/10">
+                      {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
+                    </span>
+                  </div>
                 </div>
-              </div>
+              </ScrollReveal>
             );
           })}
           
