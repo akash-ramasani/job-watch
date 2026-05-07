@@ -1343,7 +1343,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
             if (result) break; // Successfully scored
             // If result is null (invalid format), continue to next attempt
             logger.warn(`scoreJobWithAI: attempt ${attempts}/5 returned invalid format for ${job.jobDocId}, retrying...`);
-            await new Promise((r) => setTimeout(r, 1000)); 
+            await new Promise((r) => setTimeout(r, 1000));
           } catch (apiErr) {
             const isRetryable =
               apiErr.status === 429 ||
