@@ -83,6 +83,17 @@
       padding: 8px 0; border-top: 1px solid #f3f4f6; margin-top: 4px;
     }
 
+    /* ── Auto Apply ── */
+    .auto-apply { margin-top: 12px; }
+    .btn-auto { background: linear-gradient(135deg, #4f46e5, #6366f1); color: white; gap: 6px; }
+    .btn-auto:hover:not(:disabled) { background: linear-gradient(135deg, #4338ca, #4f46e5); }
+    .btn-auto:disabled { opacity: 0.5; cursor: not-allowed; }
+    .progress-wrap { margin-top: 12px; display: none; }
+    .progress-label { font-size: 11px; color: #6b7280; margin-bottom: 6px; display: flex; justify-content: space-between; }
+    .progress-track { height: 6px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
+    .progress-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #6366f1); border-radius: 999px; transition: width 0.4s ease; width: 0%; }
+    .progress-jobs { font-size: 10px; color: #9ca3af; text-align: center; margin-top: 5px; }
+
     #screen-login, #screen-profile { display: none; }
   </style>
 </head>
@@ -129,7 +140,21 @@
 
     <div class="status" id="status-text">Open a job application page to auto-fill.</div>
 
-    <button class="btn btn-secondary" id="btn-signout">Sign Out</button>
+    <!-- Auto Apply -->
+    <div class="auto-apply">
+      <button class="btn btn-auto" id="btn-auto-apply">⚡ Auto Apply All (score &gt; 60)</button>
+      <div class="progress-wrap" id="progress-wrap">
+        <div class="progress-label">
+          <span>Applying…</span>
+          <span id="progress-count">0 / 0</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+        <div class="progress-jobs" id="progress-jobs"></div>
+        <button class="btn btn-secondary" id="btn-stop" style="margin-top:10px">⏹ Stop</button>
+      </div>
+    </div>
+
+    <button class="btn btn-secondary" id="btn-signout" style="margin-top:12px">Sign Out</button>
   </div>
 
   <script src="popup.js"></script>

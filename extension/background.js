@@ -119,6 +119,39 @@ async function fsGet(path, idToken) {
   return parseFs(doc.fields || {});
 }
 
+// PATCH a subset of fields on an existing document
+async function fsPatch(path, data, idToken) {
+  const fields = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, fsValue(v)]));
+  const mask = Object.keys(data).map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join("&");
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}?${mask}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  return res.ok;
+}
+
+// Run a Firestore structured query under a parent document path
+async function fsQuery(parentPath, collectionId, filters, idToken) {
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${parentPath}:runQuery`;
+  const where = filters.length === 1 ? filters[0] : {
+    compositeFilter: { op: "AND", filters },
+  };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId }], where } }),
+  });
+  const results = await res.json();
+  return (Array.isArray(results) ? results : [])
+    .filter(r => r.document)
+    .map(r => {
+      const id = r.document.name.split("/").pop();
+      return { id, ...parseFs(r.document.fields || {}) };
+    });
+}
+
 async function fsSet(path, data, idToken) {
   const fields = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, fsValue(v)]));
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}?currentDocument.exists=false`;
@@ -216,6 +249,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "APPLICATION_DONE") {
         const { idToken, uid } = await getFreshToken();
         const { jobId, jobTitle, companyName, status } = message;
+
+        // Log to applications sub-collection
         const docPath = `users/${uid}/applications/${jobId || Date.now()}`;
         await fsSet(docPath, {
           status: status || "submitted",
@@ -223,12 +258,121 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           companyName: companyName || "",
           appliedAt: new Date().toISOString(),
         }, idToken);
+
+        // Mark the job document itself as auto-applied so it won't be queued again
+        if (jobId) {
+          await fsPatch(`users/${uid}/jobs/${jobId}`, { autoApplied: true }, idToken).catch(() => {});
+        }
+
+        await chrome.storage.session.remove("pendingJob");
+
+        // ── Advance auto-apply queue ──────────────────────────────────────
+        const q = await new Promise(r =>
+          chrome.storage.session.get(
+            ["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"],
+            r
+          )
+        );
+
+        if (q.autoApplyActive) {
+          const newDone = (q.autoApplyDone || 0) + 1;
+          const newIndex = (q.autoApplyIndex || 0) + 1;
+          await chrome.storage.session.set({ autoApplyDone: newDone, autoApplyIndex: newIndex });
+
+          // Close the current application tab after a short display delay
+          const tabId = sender.tab?.id;
+          setTimeout(async () => {
+            if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+
+            if (newIndex < (q.autoApplyQueue || []).length) {
+              const next = q.autoApplyQueue[newIndex];
+              const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application";
+              await chrome.storage.session.set({
+                pendingJob: {
+                  id: next.id,
+                  title: next.title || next.jobTitle || "",
+                  companyName: next.companyName || "",
+                  absolute_url: next.jobUrl || next.applyUrl || "",
+                },
+              });
+              await chrome.tabs.create({ url: applyUrl });
+            } else {
+              // Queue exhausted
+              await chrome.storage.session.set({ autoApplyActive: false });
+            }
+          }, 3000);
+        }
+
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── 4. Popup: start auto-apply queue ────────────────────────────────
+      if (message.type === "START_AUTO_APPLY") {
+        const { idToken, uid } = await getFreshToken();
+
+        // Query jobs with relevanceScore > 60
+        const jobs = await fsQuery(`users/${uid}`, "jobs", [{
+          fieldFilter: {
+            field: { fieldPath: "relevanceScore" },
+            op: "GREATER_THAN",
+            value: { integerValue: "60" },
+          },
+        }], idToken);
+
+        // Filter: only Ashby URLs, not already auto-applied
+        const eligible = jobs.filter(j => {
+          const url = j.jobUrl || j.applyUrl || "";
+          return url.includes("ashbyhq.com") && !j.autoApplied;
+        });
+
+        if (!eligible.length) {
+          sendResponse({ ok: true, total: 0 });
+          return;
+        }
+
+        await chrome.storage.session.set({
+          autoApplyQueue: eligible,
+          autoApplyIndex: 0,
+          autoApplyTotal: eligible.length,
+          autoApplyDone: 0,
+          autoApplyActive: true,
+        });
+
+        // Open first job
+        const first = eligible[0];
+        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application";
+        await chrome.storage.session.set({
+          pendingJob: {
+            id: first.id,
+            title: first.title || first.jobTitle || "",
+            companyName: first.companyName || "",
+            absolute_url: first.jobUrl || first.applyUrl || "",
+          },
+        });
+        await chrome.tabs.create({ url: applyUrl });
+        sendResponse({ ok: true, total: eligible.length });
+        return;
+      }
+
+      // ── 5. Popup: get auto-apply progress ───────────────────────────────
+      if (message.type === "GET_AUTO_APPLY_STATUS") {
+        const s = await new Promise(r =>
+          chrome.storage.session.get(["autoApplyActive", "autoApplyDone", "autoApplyTotal"], r)
+        );
+        sendResponse({ ok: true, active: !!s.autoApplyActive, done: s.autoApplyDone || 0, total: s.autoApplyTotal || 0 });
+        return;
+      }
+
+      // ── 6. Popup: stop auto-apply ────────────────────────────────────────
+      if (message.type === "STOP_AUTO_APPLY") {
+        await chrome.storage.session.remove(["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"]);
         await chrome.storage.session.remove("pendingJob");
         sendResponse({ ok: true });
         return;
       }
 
-      // ── 4. Popup: sign in ────────────────────────────────────────────────
+      // ── 7. Popup: sign in ────────────────────────────────────────────────
       if (message.type === "SIGN_IN") {
         const { email, password } = message;
         const res = await fetch(
@@ -251,7 +395,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 5. Popup: get current user ───────────────────────────────────────
+      // ── 8. Popup: get current user ───────────────────────────────────────
       if (message.type === "GET_USER") {
         const { jwUid } = await getStoredAuth();
         if (!jwUid) { sendResponse({ ok: false }); return; }
@@ -265,7 +409,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 6. Popup: sign out ───────────────────────────────────────────────
+      // ── 9. Popup: sign out ───────────────────────────────────────────────
       if (message.type === "SIGN_OUT") {
         await clearAuth();
         await chrome.storage.session.clear();

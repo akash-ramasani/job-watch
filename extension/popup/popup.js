@@ -67,6 +67,8 @@ $("btn-signout").addEventListener("click", () => {
 });
 
 // ── Render profile ────────────────────────────────────────────────────────────
+let statusPoller = null;
+
 function renderProfile(userDoc) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
@@ -89,4 +91,71 @@ function renderProfile(userDoc) {
       $("status-text").textContent = "Open a job application page from JobWatch to auto-fill.";
     }
   });
+
+  // Resume polling if a run was already active
+  pollAutoApplyStatus();
 }
+
+// ── Auto Apply ────────────────────────────────────────────────────────────────
+function setProgressUI(active, done, total) {
+  const wrap = $("progress-wrap");
+  const btn  = $("btn-auto-apply");
+  if (active && total > 0) {
+    wrap.style.display = "block";
+    btn.disabled = true;
+    btn.textContent = "⚡ Running…";
+    const pct = Math.round((done / total) * 100);
+    $("progress-fill").style.width = pct + "%";
+    $("progress-count").textContent = `${done} / ${total}`;
+    $("progress-jobs").textContent = done < total ? `Applying to job ${done + 1} of ${total}…` : "✅ All done!";
+  } else {
+    wrap.style.display = total > 0 ? "block" : "none";
+    btn.disabled = false;
+    btn.textContent = "⚡ Auto Apply All (score > 60)";
+    if (total > 0) {
+      $("progress-fill").style.width = "100%";
+      $("progress-count").textContent = `${done} / ${total}`;
+      $("progress-jobs").textContent = `✅ Applied to ${done} job${done !== 1 ? "s" : ""}`;
+    }
+  }
+}
+
+function pollAutoApplyStatus() {
+  if (statusPoller) clearInterval(statusPoller);
+  statusPoller = setInterval(() => {
+    chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
+      if (!res?.ok) return;
+      setProgressUI(res.active, res.done, res.total);
+      if (!res.active && res.total > 0) {
+        clearInterval(statusPoller);
+        statusPoller = null;
+      }
+    });
+  }, 1500);
+}
+
+$("btn-auto-apply").addEventListener("click", () => {
+  $("btn-auto-apply").disabled = true;
+  $("btn-auto-apply").textContent = "⚡ Starting…";
+  chrome.runtime.sendMessage({ type: "START_AUTO_APPLY" }, (res) => {
+    if (!res?.ok || res.total === 0) {
+      $("btn-auto-apply").disabled = false;
+      $("btn-auto-apply").textContent = "⚡ Auto Apply All (score > 60)";
+      $("status-text").textContent = res?.total === 0
+        ? "No eligible Ashby jobs found (score > 60, not yet applied)."
+        : "Failed to start. Please try again.";
+      return;
+    }
+    setProgressUI(true, 0, res.total);
+    pollAutoApplyStatus();
+  });
+});
+
+$("btn-stop").addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "STOP_AUTO_APPLY" }, () => {
+    if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
+    chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
+      if (res?.ok) setProgressUI(false, res.done, res.total);
+    });
+  });
+});
