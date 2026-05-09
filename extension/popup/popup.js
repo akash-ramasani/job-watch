@@ -198,6 +198,8 @@ $("btn-audit").addEventListener("click", () => {
     }, 1500);
   });
 });
+
+$("btn-stop").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "STOP_AUTO_APPLY" }, () => {
     if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
     chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
