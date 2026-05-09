@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { sendEmailVerification } from "firebase/auth";
-import { db, messaging } from "../firebase";
+import { sendEmailVerification, getIdToken } from "firebase/auth";
+import { db, messaging, storage } from "../firebase";
+import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
@@ -12,6 +13,18 @@ const PARSE_RESUME_URL =
 
 const ACCEPTED_TYPES = [".pdf", ".docx", ".txt"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+// ─── Phone Formatter ───────────────────────────────────────────────────────────
+function formatPhone(raw) {
+  const digits = raw.replace(/\D/g, "");
+  // strip leading country code 1 if present
+  const local = digits.startsWith("1") ? digits.slice(1) : digits;
+  const d = local.slice(0, 10);
+  if (d.length === 0) return "";
+  if (d.length <= 3) return `+1 (${d}`;
+  if (d.length <= 6) return `+1 (${d.slice(0, 3)}) ${d.slice(3)}`;
+  return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+}
 
 function emptyResume() {
   return { summary: "", skills: [], roles: [], education: [], projects: [], certifications: [], rawText: "", fileName: "" };
@@ -54,7 +67,12 @@ function SectionHeader({ label, title, description }) {
 export default function Profile({ user, userMeta }) {
   const { showToast } = useToast();
 
-  const [formData, setFormData] = useState({ firstName: "", lastName: "", university: "", country: "United States", city: "", region: "", postalCode: "" });
+  const [formData, setFormData] = useState({
+    firstName: "", lastName: "", university: "",
+    country: "United States", addressLine1: "", addressLine2: "",
+    city: "", region: "", postalCode: "",
+    phone: "", linkedin: "",
+  });
   const [busy, setBusy] = useState(false);
 
   const [pushStatus, setPushStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
@@ -125,9 +143,13 @@ export default function Profile({ user, userMeta }) {
         lastName: userMeta.lastName || "",
         university: userMeta.university || "",
         country: userMeta.country || "United States",
+        addressLine1: userMeta.addressLine1 || "",
+        addressLine2: userMeta.addressLine2 || "",
         city: userMeta.city || "",
         region: userMeta.region || "",
         postalCode: userMeta.postalCode || "",
+        phone: formatPhone(userMeta.phone || ""),
+        linkedin: userMeta.linkedin || "",
       });
     }
   }, [userMeta]);
@@ -177,11 +199,27 @@ export default function Profile({ user, userMeta }) {
     try {
       const fd = new FormData();
       fd.append("resume", file);
-      fd.append("userId", user.uid);
-      const resp = await fetch(PARSE_RESUME_URL, { method: "POST", body: fd });
+
+      const [idToken, fileStorageRef] = [
+        await getIdToken(user),
+        storageRef(storage, `resumes/${user.uid}/resume.${ext}`),
+      ];
+
+      // Parse and upload to Storage in parallel
+      const [resp] = await Promise.all([
+        fetch(PARSE_RESUME_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${idToken}` },
+          body: fd,
+        }),
+        uploadBytes(fileStorageRef, file),
+      ]);
+
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "Parsing failed");
-      setResumeData({ ...emptyResume(), ...data.parsed });
+
+      const resumeUrl = await getDownloadURL(fileStorageRef);
+      setResumeData({ ...emptyResume(), ...data.parsed, resumeUrl, fileName: file.name });
       setResumePhase("review");
     } catch (err) {
       showToast(err.message, "error");
@@ -194,6 +232,13 @@ export default function Profile({ user, userMeta }) {
     try {
       const payload = { ...resumeData, savedAt: serverTimestamp(), updatedAt: serverTimestamp() };
       await setDoc(doc(db, "users", user.uid, "resume", "profile"), payload, { merge: true });
+      // Mirror resumeUrl on the top-level user doc for quick extension access
+      if (resumeData.resumeUrl) {
+        await setDoc(doc(db, "users", user.uid), {
+          resumeUrl: resumeData.resumeUrl,
+          resumeFileName: resumeData.fileName,
+        }, { merge: true });
+      }
       setSavedResumeFull({ ...resumeData, savedAt: new Date() });
       showToast("Resume saved!", "success");
       setResumePhase("idle");
@@ -283,8 +328,35 @@ export default function Profile({ user, userMeta }) {
                 </div>
               </div>
               <div>
+                <label htmlFor="phone" className="caps-label block mb-2">Phone Number</label>
+                <input id="phone" name="phone" type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: formatPhone(e.target.value) })} autoComplete="tel" className="input-standard" placeholder="+1 (555) 000-0000" />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="linkedin" className="caps-label block mb-2">LinkedIn Profile URL</label>
+              <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="https://linkedin.com/in/your-profile" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
                 <label htmlFor="university" className="caps-label block mb-2">University</label>
                 <input id="university" name="university" type="text" value={formData.university} onChange={handleChange} placeholder="e.g. Stanford University" className="input-standard" />
+              </div>
+              <div>
+                <label htmlFor="country" className="caps-label block mb-2">Country</label>
+                <input id="country" name="country" type="text" value={formData.country} onChange={handleChange} autoComplete="country-name" className="input-standard" placeholder="United States" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="addressLine1" className="caps-label block mb-2">Address Line 1</label>
+                <input id="addressLine1" name="addressLine1" type="text" value={formData.addressLine1} onChange={handleChange} autoComplete="address-line1" className="input-standard" placeholder="123 Main St" />
+              </div>
+              <div>
+                <label htmlFor="addressLine2" className="caps-label block mb-2">Address Line 2</label>
+                <input id="addressLine2" name="addressLine2" type="text" value={formData.addressLine2} onChange={handleChange} autoComplete="address-line2" className="input-standard" placeholder="Apt, Suite, Unit…" />
               </div>
             </div>
 
@@ -361,8 +433,21 @@ export default function Profile({ user, userMeta }) {
                 {/* Saved Snapshot */}
                 {savedResumeFull && (
                   <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-50 flex items-center gap-2">
+                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
                       <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Saved Snapshot</p>
+                      {savedResumeFull.resumeUrl && (
+                        <a
+                          href={savedResumeFull.resumeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors"
+                        >
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M12 3v13.5m-4.5-4.5L12 16.5l4.5-4.5" />
+                          </svg>
+                          {savedResumeFull.fileName || "View File"}
+                        </a>
+                      )}
                     </div>
                     <div className="p-5 space-y-5">
                       {savedResumeFull.summary && (

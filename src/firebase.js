@@ -3,6 +3,9 @@ import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getAnalytics, isSupported as analyticsSupported } from "firebase/analytics";
 import { getMessaging, isSupported as messagingSupported } from "firebase/messaging";
+import { initializeAppCheck, ReCaptchaEnterpriseProvider } from "firebase/app-check";
+import { getFunctions } from "firebase/functions";
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -14,12 +17,21 @@ const firebaseConfig = {
   measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 
-import { getFunctions } from "firebase/functions";
-
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const functions = getFunctions(app, "us-central1");
+export const storage = getStorage(app);
+
+// ── App Check (blocks headless browsers, terminal, server-side requests) ──
+// Requires VITE_RECAPTCHA_SITE_KEY in .env and App Check enabled in Firebase Console.
+// In dev, set self.FIREBASE_APPCHECK_DEBUG_TOKEN = true in DevTools console to bypass.
+if (import.meta.env.VITE_RECAPTCHA_SITE_KEY) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaEnterpriseProvider(import.meta.env.VITE_RECAPTCHA_SITE_KEY),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 
 export let analytics = null;
 export let messaging = null;

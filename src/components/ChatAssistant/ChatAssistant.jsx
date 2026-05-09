@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { db } from '../../firebase';
-import { collection, query, orderBy, limit, onSnapshot, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { db, auth } from '../../firebase';
+import { getIdToken } from 'firebase/auth';
+import { collection, query, orderBy, limit, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
 
 export default function ChatAssistant({ user }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -86,13 +87,14 @@ export default function ChatAssistant({ user }) {
     saveMessage('user', userContent);
 
     try {
+      const idToken = await getIdToken(auth.currentUser);
       const response = await fetch('https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newMessages,
-          userId: user?.uid
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ messages: newMessages }),
       });
 
       const data = await response.json();

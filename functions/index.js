@@ -59,6 +59,41 @@ const FEED_CONCURRENCY = 15;
 const RECENT_WINDOW_MINUTES = 65;
 const TTL_DAYS = 3;
 
+/**
+ * Allowed origins for CORS. Set ALLOWED_ORIGINS env var as comma-separated list
+ * to override (e.g. your Vercel domain). Localhost is always included for dev.
+ */
+const CORS_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : [
+    "https://greenhouse-jobs-scrapper.web.app",
+    "https://greenhouse-jobs-scrapper.firebaseapp.com",
+    "http://localhost:5173",
+    "http://localhost:4173",
+  ];
+
+/**
+ * Verify a Firebase ID token from the Authorization header.
+ * Throws with a 401-friendly error if missing or invalid.
+ * Returns the decoded token (uid, email, etc.)
+ */
+async function verifyToken(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    const err = new Error("Missing or invalid Authorization header.");
+    err.statusCode = 401;
+    throw err;
+  }
+  const idToken = authHeader.slice(7);
+  try {
+    return await admin.auth().verifyIdToken(idToken);
+  } catch {
+    const err = new Error("Invalid or expired token. Please log in again.");
+    err.statusCode = 401;
+    throw err;
+  }
+}
+
 const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
 
 /**
@@ -216,12 +251,20 @@ exports.syncRecentJobsHourly = onSchedule(
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
  */
 exports.runSyncNow = onRequest(
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: true },
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: CORS_ORIGINS },
   async (req, res) => {
-    const userId = String(req.query.userId || "").trim();
+    let decodedToken;
+    try {
+      decodedToken = await verifyToken(req);
+    } catch (err) {
+      return res.status(err.statusCode || 401).json({ error: err.message });
+    }
+
     const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
-    if (!userId) return res.status(400).json({ error: "Missing userId query param." });
-    if (userId !== ADMIN_UID) return res.status(403).json({ error: "Forbidden: Only the admin can trigger sync." });
+    if (decodedToken.uid !== ADMIN_UID) {
+      return res.status(403).json({ error: "Forbidden: Admin only." });
+    }
+    const userId = decodedToken.uid;
 
     const startedAt = admin.firestore.Timestamp.now();
     const runId = String(startedAt.toMillis());
@@ -1459,13 +1502,18 @@ async function sendPushNotification(userId, summary, durationMs) {
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
 exports.askAssistant = onRequest(
-  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: true },
+  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: CORS_ORIGINS },
   async (req, res) => {
     try {
-      const { messages, userId } = req.body;
-      const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+      let decodedToken;
+      try {
+        decodedToken = await verifyToken(req);
+      } catch (err) {
+        return res.status(err.statusCode || 401).json({ error: err.message });
+      }
 
-      const activeUserId = userId || ADMIN_UID; // Default to admin for now if missing
+      const { messages } = req.body;
+      const activeUserId = decodedToken.uid;
 
       // Fetch AI preference
       const settingsSnap = await db.collection("users").doc(activeUserId).collection("settings").doc("preferences").get();
@@ -1654,15 +1702,23 @@ exports.askAssistant = onRequest(
  * Returns: { ok: true, parsed: { summary, skills, roles, education, projects, certifications, rawText } }
  */
 exports.parseResume = onRequest(
-  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: true },
+  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: CORS_ORIGINS },
   async (req, res) => {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed. Use POST." });
     }
 
+    // Verify Firebase ID token before processing any file data
+    let decodedToken;
+    try {
+      decodedToken = await verifyToken(req);
+    } catch (err) {
+      return res.status(err.statusCode || 401).json({ error: err.message });
+    }
+
     try {
       // ─── 1. Parse multipart form data with Busboy ───────────────────────
-      const { fileBuffer, mimeType, originalName, userId } = await new Promise((resolve, reject) => {
+      const { fileBuffer, mimeType, originalName } = await new Promise((resolve, reject) => {
         const bb = Busboy({
           headers: req.headers,
           limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB hard limit
@@ -1671,12 +1727,7 @@ exports.parseResume = onRequest(
         let fileBuffer = null;
         let mimeType = "";
         let originalName = "";
-        let userId = "";
         let fileTooLarge = false;
-
-        bb.on("field", (name, value) => {
-          if (name === "userId") userId = value;
-        });
 
         bb.on("file", (fieldname, stream, info) => {
           mimeType = info.mimeType || "";
@@ -1704,7 +1755,7 @@ exports.parseResume = onRequest(
           if (!fileBuffer) {
             return reject(new Error("No file received. Please attach a resume field."));
           }
-          resolve({ fileBuffer, mimeType, originalName, userId });
+          resolve({ fileBuffer, mimeType, originalName });
         });
 
         bb.on("error", (err) => reject(err));
@@ -1712,10 +1763,8 @@ exports.parseResume = onRequest(
         bb.end(req.rawBody);
       });
 
-      // ─── 2. Validate user ───────────────────────────────────────────────
-      if (!userId || typeof userId !== "string" || userId.trim() === "") {
-        return res.status(400).json({ error: "Missing or invalid userId." });
-      }
+      // ─── 2. Use uid from verified token ────────────────────────────────
+      const userId = decodedToken.uid;
 
       // ─── 3. Detect file type and extract plain text ─────────────────────
       const ext = (originalName.split(".").pop() || "").toLowerCase();
