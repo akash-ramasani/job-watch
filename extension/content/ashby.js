@@ -26,8 +26,9 @@
     const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
     if (nativeSetter) nativeSetter.call(el, value);
     else el.value = value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("input",  { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur",   { bubbles: true }));
   }
 
   // ── Inject resume file from base64 (fetched by background to avoid CORS) ───
@@ -189,10 +190,12 @@
 
       if (field.id === "_systemfield_name") {
         setInputValue(input, userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim());
+        await new Promise(r => setTimeout(r, 200));
         continue;
       }
       if (field.id === "_systemfield_email") {
         setInputValue(input, userDoc.email || "");
+        await new Promise(r => setTimeout(r, 200));
         continue;
       }
 
