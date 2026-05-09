@@ -330,7 +330,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         await chrome.storage.session.set({
-          auditMode: true,
           auditQueue: eligible,
           auditIndex: 0,
           auditTotal: eligible.length,
@@ -339,8 +338,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
 
         const first = eligible[0];
-        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application";
-        await chrome.storage.session.set({ auditPendingJob: { id: first.id, title: first.title || first.jobTitle || "", companyName: first.companyName || "" } });
+        // Append ?jwaudit=1 so the content script detects audit mode via URL (session storage is unreliable in content scripts)
+        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application?jwaudit=1";
+        await chrome.storage.local.set({ auditPendingJob: { id: first.id, title: first.title || first.jobTitle || "", companyName: first.companyName || "" } });
         await chrome.tabs.create({ url: applyUrl });
         sendResponse({ ok: true, total: eligible.length });
         return;
@@ -367,11 +367,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const queue = s.auditQueue || [];
           if (newIndex < queue.length) {
             const next = queue[newIndex];
-            const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application";
-            await chrome.storage.session.set({ auditPendingJob: { id: next.id, title: next.title || next.jobTitle || "", companyName: next.companyName || "" } });
+            // Also append ?jwaudit=1 for subsequent tabs
+            const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application?jwaudit=1";
+            await chrome.storage.local.set({ auditPendingJob: { id: next.id, title: next.title || next.jobTitle || "", companyName: next.companyName || "" } });
             await chrome.tabs.create({ url: applyUrl });
           } else {
-            await chrome.storage.session.set({ auditMode: false });
+            // Queue done — results stay in session storage for pickup
           }
         }, 2500);
 
@@ -382,14 +383,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── 6. Popup: get audit progress/results ─────────────────────────────
       if (message.type === "GET_AUDIT_STATUS") {
         const s = await new Promise(r =>
-          chrome.storage.session.get(["auditMode", "auditDone", "auditTotal", "auditResults"], r)
+          chrome.storage.session.get(["auditDone", "auditTotal", "auditResults"], r)
         );
+        const done  = s.auditDone  || 0;
+        const total = s.auditTotal || 0;
+        const active = total > 0 && done < total;
         sendResponse({
           ok: true,
-          active: !!s.auditMode,
-          done: s.auditDone || 0,
-          total: s.auditTotal || 0,
-          results: (!s.auditMode && s.auditResults?.length) ? s.auditResults : null,
+          active,
+          done,
+          total,
+          results: (!active && (s.auditResults?.length > 0)) ? s.auditResults : null,
         });
         return;
       }

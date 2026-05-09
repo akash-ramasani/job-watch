@@ -5,9 +5,8 @@
 // Also supports audit mode: scrapes all fields without filling or submitting.
 
 (async function () {
-  // ── Check if audit mode is active ─────────────────────────────────────────
-  const sessionData = await new Promise(r => chrome.storage.session.get("auditMode", r)).catch(() => ({})) || {};
-  const { auditMode } = sessionData;
+  // ── Check if audit mode is active (via URL param — session storage unreliable in content scripts)
+  const auditMode = new URLSearchParams(location.search).get("jwaudit") === "1";
   if (auditMode) { await runAudit(); return; }
 
   // ── Wait for form ──────────────────────────────────────────────────────────
@@ -264,7 +263,7 @@
       const form = await waitForForm(12000);
       showOverlay("🔍 JobWatch: Auditing fields…", "#6366f1");
 
-      const auditJobData = await new Promise(r => chrome.storage.session.get("auditPendingJob", r)).catch(() => ({})) || {};
+      const auditJobData = await new Promise(r => chrome.storage.local.get("auditPendingJob", r)).catch(() => ({})) || {};
       const { auditPendingJob } = auditJobData;
 
       const fields = [];
