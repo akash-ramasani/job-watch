@@ -1,7 +1,6 @@
 import React, { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import logoSvg from "../assets/logo.svg";
 import {
   AreaChart,
   Area,
@@ -291,7 +290,9 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
-              <img src={logoSvg} alt="JobWatch" className="h-8 w-8 rounded-lg" />
+              <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+                <span className="text-white font-bold text-lg">J</span>
+              </div>
               <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
             </Link>
 

@@ -32,6 +32,7 @@ const admin = require("firebase-admin");
 const Busboy = require("busboy");
 const pdfParse = require("pdf-parse");
 const mammoth = require("mammoth");
+const { jsonrepair } = require("jsonrepair");
 
 // p-limit CommonJS import fix
 const pLimitPkg = require("p-limit");
@@ -47,7 +48,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
-const storageBucket = admin.storage().bucket();
+const storageBucket = admin.storage().bucket("greenhouse-jobs-scrapper.firebasestorage.app");
 
 /**
  * ----------------------------
@@ -1847,31 +1848,33 @@ Rules:
       const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
       const aiProvider = settingsSnap.exists ? (settingsSnap.data()?.aiProvider || "gemini") : "gemini";
 
-      let rawOutput = "";
-      if (aiProvider === "claude") {
-        const claudeRes = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
-          max_tokens: 2048,
-          system: systemPrompt,
-          messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}` }],
-        });
-        rawOutput = claudeRes.content[0]?.text || "";
-      } else {
-        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", systemInstruction: systemPrompt });
-        const result = await model.generateContent(`Resume text:\n\n${truncatedText}`);
-        const response = await result.response;
-        rawOutput = response.text().trim();
-      }
+      // Use Claude for resume parsing with jsonrepair as safety net
+      const claudeRes = await anthropic.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 2048,
+        system: systemPrompt,
+        messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}\n\nIMPORTANT: Output ONLY a raw JSON object. No markdown fences, no explanation, no text before or after.` }],
+      });
+      const rawOutput = claudeRes.content[0]?.text?.trim() || "";
 
-      // Strip any accidental markdown fences Claude might add
-      const jsonStr = rawOutput.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
+      // Strip markdown fences and extract the JSON object robustly
+      let jsonStr = rawOutput.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
+      // If there's preamble text, find the first { ... } block
+      const jsonBlockMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (jsonBlockMatch) jsonStr = jsonBlockMatch[0];
 
       let parsed;
       try {
         parsed = JSON.parse(jsonStr);
       } catch (parseErr) {
-        logger.error("Claude returned non-JSON output:", rawOutput);
-        return res.status(500).json({ error: "AI returned an unexpected response format. Please try again." });
+        // Try to auto-repair common JSON issues (unescaped quotes, trailing commas, etc.)
+        try {
+          parsed = JSON.parse(jsonrepair(jsonStr));
+          logger.warn("parseResume: used jsonrepair to fix Claude output");
+        } catch (repairErr) {
+          logger.error("JSON parse failed even after repair. Raw output:", rawOutput.slice(0, 2000));
+          return res.status(500).json({ error: "AI returned an unexpected response format. Please try again." });
+        }
       }
 
       // Attach truncated raw text (first 5000 chars) for Firestore storage
@@ -1903,7 +1906,7 @@ Rules:
       return res.json({ ok: true, parsed });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      logger.error("parseResume failed:", e);
+      logger.error("parseResume failed:", msg, e?.stack);
       return res.status(500).json({ error: msg });
     }
   }

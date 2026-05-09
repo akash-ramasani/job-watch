@@ -32,5 +32,9 @@ dist-ssr
 !vercel.json
 !mcp-server/package.json
 !mcp-server/claude_desktop_config.json
+!extension/manifest.json
 service-account.json
 **/service-account.json
+
+# MCP server (local dev tool only)
+mcp-server/node_modules/

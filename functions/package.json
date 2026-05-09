@@ -19,6 +19,7 @@
     "busboy": "^1.6.0",
     "firebase-admin": "^12.0.0",
     "firebase-functions": "^4.5.0",
+    "jsonrepair": "^3.14.0",
     "mammoth": "^1.12.0",
     "p-limit": "^4.0.0",
     "pdf-parse": "^1.1.1"
