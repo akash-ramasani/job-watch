@@ -179,6 +179,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           fsGet(`users/${uid}/resume/profile`, idToken),
         ]);
 
+        // Fetch resume PDF in background (no CORS restrictions here)
+        let resumeBase64 = null;
+        const resumeUrl = userDoc?.resumeUrl;
+        if (resumeUrl) {
+          try {
+            const r = await fetch(resumeUrl);
+            const buf = await r.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            let bin = "";
+            for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+            resumeBase64 = btoa(bin);
+          } catch (e) {
+            console.warn("[JobWatch] Could not fetch resume PDF:", e.message);
+          }
+        }
+
         const formFields = message.fields || [];
         const jobTitle = pendingJob?.title || "";
         const companyName = pendingJob?.companyName || "";
@@ -191,6 +207,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           resumeDoc,
           mappings,
           pendingJob,
+          resumeBase64,
         });
         return;
       }

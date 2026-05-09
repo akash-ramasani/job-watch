@@ -30,23 +30,29 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  // ── Inject resume file ─────────────────────────────────────────────────────
-  async function setFileInput(input, resumeUrl, fileName) {
+  // ── Inject resume file from base64 (fetched by background to avoid CORS) ───
+  async function setFileInput(input, resumeBase64, fileName) {
     try {
-      const response = await fetch(resumeUrl);
-      const blob = await response.blob();
-      const ext = (fileName || "resume.pdf").split(".").pop().toLowerCase();
+      const name = fileName || "resume.pdf";
+      const ext = name.split(".").pop().toLowerCase();
       const mime = ext === "pdf" ? "application/pdf"
         : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         : "application/octet-stream";
-      const file = new File([blob], fileName || "resume.pdf", { type: mime });
+
+      // Decode base64 → Uint8Array → Blob → File
+      const binary = atob(resumeBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const file = new File([bytes], name, { type: mime });
+
       const dt = new DataTransfer();
       dt.items.add(file);
       input.files = dt.files;
+      input.dispatchEvent(new Event("input",  { bubbles: true }));
       input.dispatchEvent(new Event("change", { bubbles: true }));
       return true;
     } catch (e) {
-      console.warn("[JobWatch] Resume upload failed:", e.message);
+      console.warn("[JobWatch] Resume inject failed:", e.message);
       return false;
     }
   }
@@ -142,7 +148,7 @@
       });
     });
 
-    const { userDoc, mappings, pendingJob } = fillData;
+    const { userDoc, mappings, pendingJob, resumeBase64 } = fillData;
 
     showOverlay("✍️ JobWatch: Filling form…");
     await new Promise(r => setTimeout(r, 800));
@@ -154,8 +160,8 @@
       // ── File upload ────────────────────────────────────────────────────
       if (field.type === "file") {
         const fileInput = entry.querySelector("input[type=file]");
-        if (fileInput && userDoc.resumeUrl) {
-          await setFileInput(fileInput, userDoc.resumeUrl, userDoc.resumeFileName || "resume.pdf");
+        if (fileInput && resumeBase64) {
+          await setFileInput(fileInput, resumeBase64, userDoc.resumeFileName || "resume.pdf");
         }
         continue;
       }
