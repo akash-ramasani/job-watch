@@ -366,13 +366,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (tabId) chrome.tabs.remove(tabId).catch(() => {});
           const queue = s.auditQueue || [];
           if (newIndex < queue.length) {
+            // Open next audit tab
             const next = queue[newIndex];
-            // Also append ?jwaudit=1 for subsequent tabs
             const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application?jwaudit=1";
             await chrome.storage.local.set({ auditPendingJob: { id: next.id, title: next.title || next.jobTitle || "", companyName: next.companyName || "" } });
             await chrome.tabs.create({ url: applyUrl });
           } else {
-            // Queue done — results stay in session storage for pickup
+            // All done — trigger download from background (works even if popup is closed)
+            const json = JSON.stringify(results, null, 2);
+            const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(json);
+            chrome.downloads.download({ url: dataUrl, filename: "jobwatch-audit.json", saveAs: false });
           }
         }, 2500);
 
