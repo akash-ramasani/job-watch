@@ -2,8 +2,13 @@
 
 // content/ashby.js -- Injected into Ashby application pages.
 // Handles: text, email, tel, textarea, file, yes/no buttons, location combobox, radio (EEO)
+// Also supports audit mode: scrapes all fields without filling or submitting.
 
 (async function () {
+  // ── Check if audit mode is active ─────────────────────────────────────────
+  const { auditMode } = await new Promise(r => chrome.storage.session.get("auditMode", r));
+  if (auditMode) { await runAudit(); return; }
+
   // ── Wait for form ──────────────────────────────────────────────────────────
   function waitForForm(timeout = 10000) {
     return new Promise((resolve, reject) => {
@@ -251,4 +256,126 @@
     showOverlay(`❌ ${err.message}`, "#ef4444");
     setTimeout(removeOverlay, 5000);
   }
+
+  // ── AUDIT MODE: deep-scrape all fields, no fill, no submit ────────────────
+  async function runAudit() {
+    try {
+      const form = await waitForForm(12000);
+      showOverlay("🔍 JobWatch: Auditing fields…", "#6366f1");
+
+      const { auditPendingJob } = await new Promise(r => chrome.storage.session.get("auditPendingJob", r));
+
+      const fields = [];
+
+      // ── Walk every form field entry ────────────────────────────────────
+      const entries = form.querySelectorAll(".ashby-application-form-field-entry");
+      for (const entry of entries) {
+        const fieldPath = entry.dataset.fieldPath || "";
+        const labelEl = entry.querySelector("label, [class*='_label_']");
+        const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
+        const required = !!(
+          entry.querySelector("label._required_101oc_92") ||
+          entry.querySelector("[required]") ||
+          entry.querySelector("[aria-required='true']") ||
+          /\*/.test(labelEl?.textContent || "")
+        );
+
+        const fileInput   = entry.querySelector("input[type=file]");
+        const yesNoEl     = entry.querySelector("[class*='_yesno_']");
+        const combobox    = entry.querySelector("input[role='combobox']");
+        const selectEl    = entry.querySelector("select");
+        const dateInput   = entry.querySelector("input[type=date]");
+        const checkboxes  = [...entry.querySelectorAll("input[type=checkbox]")];
+        const radios      = [...entry.querySelectorAll("input[type=radio]")];
+        const textarea    = entry.querySelector("textarea");
+        const textInput   = entry.querySelector("input:not([type=file]):not([type=checkbox]):not([type=radio]):not([role=combobox]):not([type=date])");
+
+        let type, options = [], placeholder = "";
+
+        if (fileInput) {
+          type = "file";
+          placeholder = fileInput.accept || "any";
+        } else if (yesNoEl) {
+          type = "yesno";
+          options = [...yesNoEl.querySelectorAll("button")].map(b => b.textContent.trim());
+        } else if (checkboxes.length > 1 || (checkboxes.length === 1 && radios.length === 0)) {
+          type = "checkbox";
+          options = checkboxes.map(cb => {
+            const lbl = cb.closest("label") || entry.querySelector(`label[for="${cb.id}"]`);
+            return lbl ? lbl.textContent.trim() : cb.value || cb.id;
+          });
+        } else if (radios.length > 0) {
+          type = "radio";
+          options = radios.map(r => {
+            const lbl = r.closest("label") || entry.querySelector(`label[for="${r.id}"]`);
+            return lbl ? lbl.textContent.trim() : r.value || r.id;
+          });
+        } else if (selectEl) {
+          type = "select";
+          options = [...selectEl.options].filter(o => o.value).map(o => o.text.trim());
+        } else if (combobox || fieldPath === "_systemfield_location") {
+          type = "location";
+          placeholder = combobox?.placeholder || "";
+        } else if (dateInput) {
+          type = "date";
+        } else if (textarea) {
+          type = "textarea";
+          placeholder = textarea.placeholder || "";
+        } else if (textInput) {
+          type = textInput.type || "text";
+          placeholder = textInput.placeholder || "";
+        } else {
+          // Last resort: look for any text-like content or button groups
+          const anyBtns = [...entry.querySelectorAll("button")];
+          if (anyBtns.length) {
+            type = "button-group";
+            options = anyBtns.map(b => b.textContent.trim());
+          } else {
+            type = "unknown";
+          }
+        }
+
+        // Capture any description / helper text under the field
+        const descEl = entry.querySelector("[class*='_description_'], [class*='_helper_'], p");
+        const description = descEl ? descEl.textContent.trim() : "";
+
+        fields.push({ id: fieldPath, label, type, required, options, placeholder, description });
+      }
+
+      // ── Also capture EEO survey fields ────────────────────────────────
+      const surveyForm = document.querySelector(".ashby-survey-form-container");
+      if (surveyForm) {
+        const fieldsets = surveyForm.querySelectorAll("fieldset");
+        for (const fs of fieldsets) {
+          const legendEl = fs.querySelector("legend");
+          const label = legendEl ? legendEl.textContent.trim() : "EEO field";
+          const radios = [...fs.querySelectorAll("input[type=radio]")];
+          const options = radios.map(r => {
+            const lbl = r.closest("label") || surveyForm.querySelector(`label[for="${r.id}"]`);
+            return lbl ? lbl.textContent.trim() : r.value;
+          });
+          fields.push({ id: "_eeo_" + label.replace(/\s+/g, "_").toLowerCase(), label, type: "radio", required: false, options, placeholder: "", description: "EEO voluntary survey" });
+        }
+      }
+
+      showOverlay(`✅ Found ${fields.length} fields`, "#10b981");
+
+      chrome.runtime.sendMessage({
+        type: "AUDIT_RESULT",
+        job: {
+          id: auditPendingJob?.id,
+          title: auditPendingJob?.title || document.title,
+          companyName: auditPendingJob?.companyName || "",
+          url: location.href,
+        },
+        fields,
+      });
+
+      setTimeout(removeOverlay, 3000);
+    } catch (err) {
+      chrome.runtime.sendMessage({ type: "AUDIT_RESULT", error: err.message, fields: [] });
+    }
+  }
+
 })();
+

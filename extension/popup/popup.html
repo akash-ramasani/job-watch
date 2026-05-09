@@ -83,6 +83,11 @@
       padding: 8px 0; border-top: 1px solid #f3f4f6; margin-top: 4px;
     }
 
+    .btn-audit { background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; margin-top: 8px; }
+    .btn-audit:hover:not(:disabled) { background: #dcfce7; }
+    .btn-audit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .audit-progress { font-size: 11px; color: #6b7280; text-align: center; margin-top: 6px; display: none; }
+
     /* ── Auto Apply ── */
     .auto-apply { margin-top: 12px; }
     .btn-auto { background: linear-gradient(135deg, #4f46e5, #6366f1); color: white; gap: 6px; }
@@ -152,6 +157,8 @@
         <div class="progress-jobs" id="progress-jobs"></div>
         <button class="btn btn-secondary" id="btn-stop" style="margin-top:10px">⏹ Stop</button>
       </div>
+      <button class="btn btn-audit" id="btn-audit">🔍 Audit Fields (score &gt; 60)</button>
+      <div class="audit-progress" id="audit-progress"></div>
     </div>
 
     <button class="btn btn-secondary" id="btn-signout" style="margin-top:12px">Sign Out</button>

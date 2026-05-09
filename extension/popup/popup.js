@@ -151,7 +151,53 @@ $("btn-auto-apply").addEventListener("click", () => {
   });
 });
 
-$("btn-stop").addEventListener("click", () => {
+// ── Audit Fields ──────────────────────────────────────────────────────────────
+let auditPoller = null;
+
+function downloadAuditResults(results) {
+  const blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "jobwatch-audit.json"; a.click();
+  URL.revokeObjectURL(url);
+}
+
+$("btn-audit").addEventListener("click", () => {
+  $("btn-audit").disabled = true;
+  $("btn-audit").textContent = "🔍 Starting audit…";
+  $("audit-progress").style.display = "block";
+  $("audit-progress").textContent = "Querying jobs…";
+
+  chrome.runtime.sendMessage({ type: "START_AUDIT" }, (res) => {
+    if (!res?.ok || res.total === 0) {
+      $("btn-audit").disabled = false;
+      $("btn-audit").textContent = "🔍 Audit Fields (score > 60)";
+      $("audit-progress").textContent = res?.total === 0 ? "No Ashby jobs found with score > 60." : "Failed to start audit.";
+      return;
+    }
+    $("audit-progress").textContent = `Auditing 0 / ${res.total}…`;
+
+    if (auditPoller) clearInterval(auditPoller);
+    auditPoller = setInterval(() => {
+      chrome.runtime.sendMessage({ type: "GET_AUDIT_STATUS" }, (s) => {
+        if (!s?.ok) return;
+        if (s.active) {
+          $("audit-progress").textContent = `Auditing ${s.done} / ${s.total}…`;
+        } else {
+          clearInterval(auditPoller); auditPoller = null;
+          $("btn-audit").disabled = false;
+          $("btn-audit").textContent = "🔍 Audit Fields (score > 60)";
+          if (s.results?.length) {
+            $("audit-progress").textContent = `✅ Done! ${s.results.length} job(s) audited. Downloading…`;
+            downloadAuditResults(s.results);
+          } else {
+            $("audit-progress").textContent = "✅ Audit complete (no results).";
+          }
+        }
+      });
+    }, 1500);
+  });
+});
   chrome.runtime.sendMessage({ type: "STOP_AUTO_APPLY" }, () => {
     if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
     chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {

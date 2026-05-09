@@ -307,7 +307,94 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 4. Popup: start auto-apply queue ────────────────────────────────
+      // ── 4. Popup: start audit (scrape fields, no submit) ─────────────────
+      if (message.type === "START_AUDIT") {
+        const { idToken, uid } = await getFreshToken();
+
+        const jobs = await fsQuery(`users/${uid}`, "jobs", [{
+          fieldFilter: {
+            field: { fieldPath: "relevanceScore" },
+            op: "GREATER_THAN",
+            value: { integerValue: "60" },
+          },
+        }], idToken);
+
+        const eligible = jobs.filter(j => {
+          const url = j.jobUrl || j.applyUrl || "";
+          return url.includes("ashbyhq.com");
+        });
+
+        if (!eligible.length) {
+          sendResponse({ ok: true, total: 0 });
+          return;
+        }
+
+        await chrome.storage.session.set({
+          auditMode: true,
+          auditQueue: eligible,
+          auditIndex: 0,
+          auditTotal: eligible.length,
+          auditResults: [],
+          auditDone: 0,
+        });
+
+        const first = eligible[0];
+        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application";
+        await chrome.storage.session.set({ auditPendingJob: { id: first.id, title: first.title || first.jobTitle || "", companyName: first.companyName || "" } });
+        await chrome.tabs.create({ url: applyUrl });
+        sendResponse({ ok: true, total: eligible.length });
+        return;
+      }
+
+      // ── 5. Content script reports audit result ───────────────────────────
+      if (message.type === "AUDIT_RESULT") {
+        const s = await new Promise(r =>
+          chrome.storage.session.get(["auditQueue", "auditIndex", "auditResults", "auditDone", "auditTotal"], r)
+        );
+
+        const results = s.auditResults || [];
+        if (!message.error) {
+          results.push({ job: message.job, fields: message.fields });
+        }
+
+        const newIndex = (s.auditIndex || 0) + 1;
+        const newDone  = (s.auditDone  || 0) + 1;
+        await chrome.storage.session.set({ auditResults: results, auditIndex: newIndex, auditDone: newDone });
+
+        const tabId = sender.tab?.id;
+        setTimeout(async () => {
+          if (tabId) chrome.tabs.remove(tabId).catch(() => {});
+          const queue = s.auditQueue || [];
+          if (newIndex < queue.length) {
+            const next = queue[newIndex];
+            const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application";
+            await chrome.storage.session.set({ auditPendingJob: { id: next.id, title: next.title || next.jobTitle || "", companyName: next.companyName || "" } });
+            await chrome.tabs.create({ url: applyUrl });
+          } else {
+            await chrome.storage.session.set({ auditMode: false });
+          }
+        }, 2500);
+
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── 6. Popup: get audit progress/results ─────────────────────────────
+      if (message.type === "GET_AUDIT_STATUS") {
+        const s = await new Promise(r =>
+          chrome.storage.session.get(["auditMode", "auditDone", "auditTotal", "auditResults"], r)
+        );
+        sendResponse({
+          ok: true,
+          active: !!s.auditMode,
+          done: s.auditDone || 0,
+          total: s.auditTotal || 0,
+          results: (!s.auditMode && s.auditResults?.length) ? s.auditResults : null,
+        });
+        return;
+      }
+
+      // ── 7. Popup: start auto-apply queue ────────────────────────────────
       if (message.type === "START_AUTO_APPLY") {
         const { idToken, uid } = await getFreshToken();
 
@@ -355,7 +442,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 5. Popup: get auto-apply progress ───────────────────────────────
+      // ── 8. Popup: get auto-apply progress ───────────────────────────────
       if (message.type === "GET_AUTO_APPLY_STATUS") {
         const s = await new Promise(r =>
           chrome.storage.session.get(["autoApplyActive", "autoApplyDone", "autoApplyTotal"], r)
@@ -364,7 +451,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 6. Popup: stop auto-apply ────────────────────────────────────────
+      // ── 9. Popup: stop auto-apply ────────────────────────────────────────
       if (message.type === "STOP_AUTO_APPLY") {
         await chrome.storage.session.remove(["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"]);
         await chrome.storage.session.remove("pendingJob");
@@ -372,7 +459,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 7. Popup: sign in ────────────────────────────────────────────────
+      // ── 10. Popup: sign in ────────────────────────────────────────────────
       if (message.type === "SIGN_IN") {
         const { email, password } = message;
         const res = await fetch(
@@ -395,7 +482,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 8. Popup: get current user ───────────────────────────────────────
+      // ── 11. Popup: get current user ───────────────────────────────────────
       if (message.type === "GET_USER") {
         const { jwUid } = await getStoredAuth();
         if (!jwUid) { sendResponse({ ok: false }); return; }
@@ -409,7 +496,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 9. Popup: sign out ───────────────────────────────────────────────
+      // ── 12. Popup: sign out ───────────────────────────────────────────────
       if (message.type === "SIGN_OUT") {
         await clearAuth();
         await chrome.storage.session.clear();
