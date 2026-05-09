@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JobWatch Auto Apply</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 320px;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #fff;
+      color: #111827;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: linear-gradient(135deg, #4f46e5, #6366f1);
+      padding: 16px 20px;
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .header-dot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; }
+    .header-title { font-size: 13px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; }
+    .header-sub { font-size: 10px; opacity: 0.7; margin-top: 1px; }
+
+    /* ── Body ── */
+    .body { padding: 20px; }
+
+    /* ── Auth form ── */
+    .field { margin-bottom: 14px; }
+    .field label { display: block; font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #6b7280; margin-bottom: 6px; }
+    .field input {
+      width: 100%; padding: 9px 12px; border: 1px solid #e5e7eb;
+      border-radius: 8px; font-size: 13px; outline: none; transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+
+    /* ── Buttons ── */
+    .btn {
+      width: 100%; padding: 10px 16px; border-radius: 10px;
+      font-size: 12px; font-weight: 800; letter-spacing: 0.05em;
+      text-transform: uppercase; cursor: pointer; border: none;
+      transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap-6px;
+    }
+    .btn-primary { background: #4f46e5; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #4338ca; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-secondary {
+      background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb;
+      margin-top: 8px;
+    }
+    .btn-secondary:hover { background: #f3f4f6; color: #374151; }
+
+    /* ── Error ── */
+    .error {
+      background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
+      padding: 10px 12px; font-size: 12px; color: #dc2626;
+      margin-bottom: 14px; display: none;
+    }
+
+    /* ── Profile card ── */
+    .profile-card {
+      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 16px;
+    }
+    .profile-name { font-size: 14px; font-weight: 700; color: #111827; }
+    .profile-email { font-size: 11px; color: #6b7280; margin-top: 2px; }
+    .profile-meta { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .badge {
+      font-size: 10px; font-weight: 700; padding: 2px 8px;
+      border-radius: 999px; background: #ede9fe; color: #5b21b6;
+    }
+    .badge.green { background: #d1fae5; color: #065f46; }
+    .badge.gray { background: #f3f4f6; color: #6b7280; }
+
+    /* ── Status ── */
+    .status {
+      font-size: 11px; color: #6b7280; text-align: center;
+      padding: 8px 0; border-top: 1px solid #f3f4f6; margin-top: 4px;
+    }
+
+    #screen-login, #screen-profile { display: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-dot" id="status-dot"></div>
+    <div>
+      <div class="header-title">JobWatch Auto Apply</div>
+      <div class="header-sub" id="header-sub">Loading…</div>
+    </div>
+  </div>
+
+  <!-- Login screen -->
+  <div class="body" id="screen-login">
+    <div class="error" id="login-error"></div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+    <button class="btn btn-primary" id="btn-login">Sign In</button>
+  </div>
+
+  <!-- Profile screen -->
+  <div class="body" id="screen-profile">
+    <div class="profile-card">
+      <div class="profile-name" id="profile-name">—</div>
+      <div class="profile-email" id="profile-email">—</div>
+      <div class="profile-meta">
+        <span class="badge green" id="badge-resume" style="display:none">✓ Resume</span>
+        <span class="badge" id="badge-linkedin" style="display:none">LinkedIn</span>
+        <span class="badge gray" id="badge-phone" style="display:none">Phone</span>
+      </div>
+    </div>
+
+    <div class="status" id="status-text">Open a job application page to auto-fill.</div>
+
+    <button class="btn btn-secondary" id="btn-signout">Sign Out</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

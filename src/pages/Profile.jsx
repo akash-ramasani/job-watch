@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 import { sendEmailVerification, getIdToken } from "firebase/auth";
-import { db, messaging, storage } from "../firebase";
-import { ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
@@ -199,26 +198,20 @@ export default function Profile({ user, userMeta }) {
     try {
       const fd = new FormData();
       fd.append("resume", file);
+      const idToken = await getIdToken(user);
 
-      const [idToken, fileStorageRef] = [
-        await getIdToken(user),
-        storageRef(storage, `resumes/${user.uid}/resume.${ext}`),
-      ];
-
-      // Parse and upload to Storage in parallel
-      const [resp] = await Promise.all([
-        fetch(PARSE_RESUME_URL, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${idToken}` },
-          body: fd,
-        }),
-        uploadBytes(fileStorageRef, file),
-      ]);
+      // Server parses AND uploads to Storage — no client-side CORS needed
+      const resp = await fetch(PARSE_RESUME_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` },
+        body: fd,
+      });
 
       const data = await resp.json();
       if (!resp.ok || !data.ok) throw new Error(data.error || "Parsing failed");
 
-      const resumeUrl = await getDownloadURL(fileStorageRef);
+      // resumeUrl is returned by the server after it uploads to Storage
+      const resumeUrl = data.parsed?.resumeUrl || null;
       setResumeData({ ...emptyResume(), ...data.parsed, resumeUrl, fileName: file.name });
       setResumePhase("review");
     } catch (err) {

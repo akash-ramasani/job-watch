@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Link, useLocation } from "react-router-dom";
 import { useToast } from "./Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
+import logoSvg from "../assets/logo.svg";
 
 export default function TopBar({ user, userMeta, onLogout }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -24,9 +25,7 @@ export default function TopBar({ user, userMeta, onLogout }) {
               to="/"
               className="flex items-center gap-2 transition-opacity hover:opacity-80"
             >
-              <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
-                <span className="text-white font-bold text-lg">J</span>
-              </div>
+              <img src={logoSvg} alt="JobWatch" className="h-8 w-8 rounded-lg" />
               <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
             </Link>
 

@@ -47,6 +47,7 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
+const storageBucket = admin.storage().bucket();
 
 /**
  * ----------------------------
@@ -1875,6 +1876,26 @@ Rules:
       parsed.rawText = rawText.slice(0, 5000);
       parsed.fileName = originalName;
 
+      // ─── 5. Upload PDF to Firebase Storage (server-side, no CORS) ──────
+      let resumeUrl = null;
+      try {
+        const storagePath = `resumes/${userId}/resume.${ext}`;
+        const fileRef = storageBucket.file(storagePath);
+        // Generate a stable download token so the URL never expires
+        const downloadToken = require("crypto").randomUUID();
+        await fileRef.save(fileBuffer, {
+          metadata: {
+            contentType: mimeType || "application/octet-stream",
+            metadata: { firebaseStorageDownloadTokens: downloadToken },
+          },
+        });
+        const encodedPath = encodeURIComponent(storagePath);
+        resumeUrl = `https://firebasestorage.googleapis.com/v0/b/${storageBucket.name}/o/${encodedPath}?alt=media&token=${downloadToken}`;
+        parsed.resumeUrl = resumeUrl;
+      } catch (storageErr) {
+        logger.warn("parseResume: Storage upload failed (non-fatal):", storageErr.message);
+      }
+
       logger.info(`parseResume: userId=${userId}, file=${originalName}, skills=${(parsed.skills || []).length}, roles=${(parsed.roles || []).length}`);
 
       return res.json({ ok: true, parsed });
@@ -1992,5 +2013,165 @@ ${builtResumeStr}
       logger.error("generateCoverLetter error:", err);
       throw new HttpsError("internal", "Failed to generate cover letter: " + err.message);
     }
+  }
+);
+
+/**
+ * =====================================================================================
+ * 🤖 EXTENSION: Map job application form fields to user profile using AI
+ * =====================================================================================
+ *
+ * Called by the Chrome/Edge extension background service worker.
+ * Takes scraped form fields + job context, returns a field_id → answer mapping.
+ *
+ * System fields (_systemfield_name, _systemfield_email, _systemfield_resume) are
+ * mapped deterministically. Unknown UUID fields are handled by Claude Haiku.
+ */
+exports.mapFormFields = onCall(
+  {
+    region: REGION,
+    timeoutSeconds: 30,
+    memory: "256MiB",
+  },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+
+    const { fields = [], jobTitle = "", companyName = "" } = request.data;
+    if (!Array.isArray(fields) || fields.length === 0) {
+      throw new HttpsError("invalid-argument", "fields array is required.");
+    }
+
+    // Fetch user profile and resume in parallel
+    const [userSnap, resumeSnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("users").doc(uid).collection("resume").doc("profile").get(),
+    ]);
+
+    const user = userSnap.exists ? userSnap.data() : {};
+    const resume = resumeSnap.exists ? resumeSnap.data() : {};
+
+    const fullName = user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim();
+    const userContext = {
+      name: fullName,
+      firstName: user.firstName || "",
+      email: user.email || "",
+      phone: user.phone || "",
+      linkedin: user.linkedin || "",
+      address: [user.addressLine1, user.city, user.region, user.postalCode, user.country]
+        .filter(Boolean).join(", "),
+      summary: resume.summary || "",
+    };
+
+    const result = {};
+    const unknownFields = [];
+
+    // ── Deterministic mapping for known patterns ────────────────────────────
+    for (const field of fields) {
+      const { id, label = "", type } = field;
+
+      // System fields
+      if (id === "_systemfield_name") { result[id] = userContext.name; continue; }
+      if (id === "_systemfield_email") { result[id] = userContext.email; continue; }
+      if (id === "_systemfield_resume") { result[id] = "__FILE__"; continue; }
+      if (id === "_systemfield_location") {
+        result[id] = [user.city, user.country].filter(Boolean).join(", ") || "";
+        continue;
+      }
+      // EEO fields — always decline (handled by radio click in content script, skip AI)
+      if (id === "_systemfield_eeoc_gender" || id === "_systemfield_eeoc_race" || id === "_systemfield_eeoc_veteran_status") {
+        result[id] = "decline"; continue;
+      }
+
+      const lbl = label.toLowerCase();
+
+      // Name subfields
+      if (lbl === "first name" || lbl.startsWith("first name")) {
+        result[id] = user.firstName || ""; continue;
+      }
+      if (lbl.includes("last name") || lbl.includes("surname")) {
+        result[id] = user.lastName || ""; continue;
+      }
+      if (lbl.includes("middle name")) { result[id] = ""; continue; }
+      if (lbl.includes("preferred name") || lbl === "nickname") {
+        result[id] = user.firstName || ""; continue;
+      }
+
+      // Contact
+      if (lbl.includes("linkedin")) { result[id] = userContext.linkedin; continue; }
+      if (lbl.includes("phone")) { result[id] = userContext.phone; continue; }
+      if (lbl.includes("website") || lbl.includes("portfolio")) { result[id] = userContext.linkedin; continue; }
+
+      // Address subfields
+      if (lbl.includes("address") && lbl.includes("line 1")) { result[id] = user.addressLine1 || ""; continue; }
+      if (lbl.includes("address") && lbl.includes("line 2")) { result[id] = user.addressLine2 || ""; continue; }
+      if (lbl.includes("city")) { result[id] = user.city || ""; continue; }
+      if (lbl.includes("state") || lbl.includes("province") || lbl.includes("region")) { result[id] = user.region || ""; continue; }
+      if (lbl.includes("zip") || lbl.includes("postal")) { result[id] = user.postalCode || ""; continue; }
+      if (lbl.includes("country")) { result[id] = user.country || "United States"; continue; }
+
+      // Common yes/no questions with safe deterministic answers
+      if (type === "yesno") {
+        if (lbl.includes("legally authorized") || lbl.includes("authorized to work")) {
+          result[id] = "yes"; continue;
+        }
+        if (lbl.includes("relative") || lbl.includes("family member") || lbl.includes("currently working for")) {
+          result[id] = "no"; continue;
+        }
+        if (lbl.includes("agree") || lbl.includes("understand") || lbl.includes("policy") || lbl.includes("confirm")) {
+          result[id] = "yes"; continue;
+        }
+        if (lbl.includes("hybrid") || lbl.includes("in-office") || lbl.includes("in office") || lbl.includes("can you meet")) {
+          result[id] = "yes"; continue;
+        }
+      }
+
+      unknownFields.push(field);
+    }
+
+    // ── Claude Haiku for open-ended / custom fields ─────────────────────────
+    if (unknownFields.length > 0) {
+      const fieldList = unknownFields
+        .map((f) => `- ID: "${f.id}" | Label: "${f.label}" | Type: ${f.type} | Required: ${f.required}`)
+        .join("\n");
+
+      const prompt = `You are filling out a job application for "${jobTitle}" at "${companyName}".
+
+Candidate profile:
+- Name: ${userContext.name}
+- Summary: ${userContext.summary}
+
+Rules:
+- For type "yesno" fields: return ONLY "yes" or "no" (lowercase). Use context to decide:
+  - Sponsorship/visa required → "yes"
+  - Relocate/travel willingness → "yes"
+  - Background check agreement → "yes"
+- For "how did you hear about us?" or "where did you find this posting?" → "Online job board"
+- For salary questions → "Open to discussion"
+- For cover letter / additional notes → 2 sentences from candidate summary
+- For unknown text fields → a brief, natural answer
+- Skip fields where you have no basis to answer (omit from JSON)
+
+Return ONLY a valid JSON object: {"field_id": "answer"} — no explanation, no markdown.
+
+Fields:
+${fieldList}`;
+
+      try {
+        const msg = await anthropic.messages.create({
+          model: "claude-haiku-4-5",
+          max_tokens: 500,
+          messages: [{ role: "user", content: prompt }],
+        });
+        const raw = msg.content?.[0]?.text?.trim() || "{}";
+        const jsonMatch = raw.match(/\{[\s\S]*\}/);
+        if (jsonMatch) Object.assign(result, JSON.parse(jsonMatch[0]));
+      } catch (e) {
+        logger.warn("mapFormFields: Claude call failed:", e.message);
+      }
+    }
+
+    logger.info(`mapFormFields: uid=${uid}, fields=${fields.length}, unknown=${unknownFields.length}`);
+    return { ok: true, mappings: result };
   }
 );

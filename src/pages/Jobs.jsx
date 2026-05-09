@@ -262,6 +262,43 @@ export default function Jobs({ user, userMeta, preferences }) {
     }
   };
 
+  const handleAutoApply = (job) => {
+    if (!job.absolute_url || job.absolute_url === "#") {
+      alert("No application URL available for this job.");
+      return;
+    }
+    // Send message to the JobWatch Auto Apply extension via postMessage.
+    // The extension's content script (jobwatch-bridge.js) relays this to the background.
+    window.postMessage(
+      {
+        type: "JOBWATCH_AUTO_APPLY",
+        job: {
+          id: job.id,
+          title: job.title,
+          companyName: job.companyName,
+          absolute_url: job.absolute_url,
+          source: job.source,
+        },
+      },
+      window.location.origin
+    );
+
+    // Listen for acknowledgement from the extension
+    const handler = (event) => {
+      if (event.data?.type !== "JOBWATCH_AUTO_APPLY_ACK") return;
+      window.removeEventListener("message", handler);
+      if (!event.data.ok) {
+        alert("JobWatch extension not detected. Install it from the Chrome Web Store.");
+      }
+    };
+    window.addEventListener("message", handler);
+
+    // If no ack in 1.5s, extension is probably not installed
+    setTimeout(() => {
+      window.removeEventListener("message", handler);
+    }, 1500);
+  };
+
   const handleDownloadPdf = () => {
     if (!clState.text) return;
     const doc = new jsPDF();
@@ -415,6 +452,14 @@ export default function Jobs({ user, userMeta, preferences }) {
                 className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
               >
                 Cover Letter
+              </button>
+            )}
+            {job.absolute_url?.includes("ashbyhq.com") && (
+              <button
+                onClick={(e) => { e.preventDefault(); handleAutoApply(job); }}
+                className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-inset ring-emerald-200/50 transition-colors"
+              >
+                Auto Apply
               </button>
             )}
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">
