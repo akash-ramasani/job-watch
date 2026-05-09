@@ -385,15 +385,15 @@ export default function Profile({ user, userMeta }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               <div>
                 <label htmlFor="linkedin" className="caps-label block mb-2">LinkedIn URL</label>
-                <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="https://linkedin.com/in/you" />
+                <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="linkedin.com/in/akash-ramasani" />
               </div>
               <div>
                 <label htmlFor="github" className="caps-label block mb-2">GitHub URL</label>
-                <input id="github" name="github" type="url" value={formData.github} onChange={handleChange} className="input-standard" placeholder="https://github.com/username" />
+                <input id="github" name="github" type="url" value={formData.github} onChange={handleChange} className="input-standard" placeholder="github.com/akash-ramasani" />
               </div>
               <div>
                 <label htmlFor="portfolio" className="caps-label block mb-2">Portfolio / Website</label>
-                <input id="portfolio" name="portfolio" type="url" value={formData.portfolio} onChange={handleChange} className="input-standard" placeholder="https://yoursite.com" />
+                <input id="portfolio" name="portfolio" type="url" value={formData.portfolio} onChange={handleChange} className="input-standard" placeholder="akashramasani.com" />
               </div>
             </div>
 
