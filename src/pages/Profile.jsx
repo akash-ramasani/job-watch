@@ -71,6 +71,9 @@ export default function Profile({ user, userMeta }) {
     country: "United States", addressLine1: "", addressLine2: "",
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
+    preferredName: "", github: "", portfolio: "",
+    currentCompany: "", availability: "", heardAboutUs: "", salaryExpectations: "",
+    workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No",
   });
   const [busy, setBusy] = useState(false);
 
@@ -130,6 +133,16 @@ export default function Profile({ user, userMeta }) {
         postalCode: userMeta.postalCode || "",
         phone: formatPhone(userMeta.phone || ""),
         linkedin: userMeta.linkedin || "",
+        preferredName: userMeta.preferredName || "",
+        github: userMeta.github || "",
+        portfolio: userMeta.portfolio || "",
+        currentCompany: userMeta.currentCompany || "",
+        availability: userMeta.availability || "",
+        heardAboutUs: userMeta.heardAboutUs || "",
+        salaryExpectations: userMeta.salaryExpectations || "",
+        workAuthorized: userMeta.workAuthorized || "Yes",
+        requiresSponsorship: userMeta.requiresSponsorship || "No",
+        smsConsent: userMeta.smsConsent || "No",
       });
     }
   }, [userMeta]);
@@ -352,6 +365,93 @@ export default function Profile({ user, userMeta }) {
             <div className="pt-2 flex justify-end">
               <button disabled={busy} type="submit" className="btn-primary">
                 {busy ? "Saving…" : "Save Personal Info"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </motion.div>
+
+      {/* ═══ APPLICATION DEFAULTS ═══ */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.05 }}>
+        <div className="section-grid">
+          <div>
+            <SectionHeader
+              label="Auto Apply"
+              title="Application Defaults"
+              description="Pre-filled answers used by the extension when submitting Ashby applications automatically."
+            />
+          </div>
+          <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="preferredName" className="caps-label block mb-2">Preferred Name</label>
+                <input id="preferredName" name="preferredName" type="text" value={formData.preferredName} onChange={handleChange} className="input-standard" placeholder="Goes by…" />
+              </div>
+              <div>
+                <label htmlFor="currentCompany" className="caps-label block mb-2">Current Company</label>
+                <input id="currentCompany" name="currentCompany" type="text" value={formData.currentCompany} onChange={handleChange} className="input-standard" placeholder="Acme Inc." />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="github" className="caps-label block mb-2">GitHub URL</label>
+                <input id="github" name="github" type="url" value={formData.github} onChange={handleChange} className="input-standard" placeholder="https://github.com/username" />
+              </div>
+              <div>
+                <label htmlFor="portfolio" className="caps-label block mb-2">Portfolio / Website</label>
+                <input id="portfolio" name="portfolio" type="url" value={formData.portfolio} onChange={handleChange} className="input-standard" placeholder="https://yoursite.com" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="availability" className="caps-label block mb-2">Availability / Start Date</label>
+                <input id="availability" name="availability" type="text" value={formData.availability} onChange={handleChange} className="input-standard" placeholder="Immediately / 2 weeks / 1 month…" />
+              </div>
+              <div>
+                <label htmlFor="salaryExpectations" className="caps-label block mb-2">Salary Expectations</label>
+                <input id="salaryExpectations" name="salaryExpectations" type="text" value={formData.salaryExpectations} onChange={handleChange} className="input-standard" placeholder="e.g. $130k–$150k" />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="heardAboutUs" className="caps-label block mb-2">How Did You Hear About Us?</label>
+              <input id="heardAboutUs" name="heardAboutUs" type="text" value={formData.heardAboutUs} onChange={handleChange} className="input-standard" placeholder="LinkedIn / Referral / Job board…" />
+            </div>
+
+            <div className="space-y-4 pt-1">
+              {[
+                { key: "workAuthorized", label: "Are you legally authorized to work in the US?" },
+                { key: "requiresSponsorship", label: "Will you now or in the future require visa sponsorship?" },
+                { key: "smsConsent", label: "Do you consent to receive SMS/text messages about your application?" },
+              ].map(({ key, label }) => (
+                <div key={key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm text-gray-700 flex-1">{label}</span>
+                  <div className="flex rounded-lg overflow-hidden border border-gray-200 flex-shrink-0">
+                    {["Yes", "No"].map((opt) => (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => setFormData((f) => ({ ...f, [key]: opt }))}
+                        className={`px-4 py-1.5 text-xs font-bold transition-colors ${
+                          formData[key] === opt
+                            ? "bg-indigo-600 text-white"
+                            : "bg-white text-gray-500 hover:bg-gray-50"
+                        }`}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-2 flex justify-end">
+              <button disabled={busy} type="submit" className="btn-primary">
+                {busy ? "Saving…" : "Save Defaults"}
               </button>
             </div>
           </form>
