@@ -71,7 +71,7 @@ export default function Profile({ user, userMeta }) {
     country: "United States", addressLine1: "", addressLine2: "",
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
-    preferredName: "", github: "", portfolio: "",
+    github: "", portfolio: "",
     currentCompany: "", availability: "", heardAboutUs: "", salaryExpectations: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No",
   });
@@ -133,7 +133,6 @@ export default function Profile({ user, userMeta }) {
         postalCode: userMeta.postalCode || "",
         phone: formatPhone(userMeta.phone || ""),
         linkedin: userMeta.linkedin || "",
-        preferredName: userMeta.preferredName || "",
         github: userMeta.github || "",
         portfolio: userMeta.portfolio || "",
         currentCompany: userMeta.currentCompany || "",
@@ -383,15 +382,9 @@ export default function Profile({ user, userMeta }) {
           </div>
           <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              <div>
-                <label htmlFor="preferredName" className="caps-label block mb-2">Preferred Name</label>
-                <input id="preferredName" name="preferredName" type="text" value={formData.preferredName} onChange={handleChange} className="input-standard" placeholder="Goes by…" />
-              </div>
-              <div>
-                <label htmlFor="currentCompany" className="caps-label block mb-2">Current Company</label>
-                <input id="currentCompany" name="currentCompany" type="text" value={formData.currentCompany} onChange={handleChange} className="input-standard" placeholder="Acme Inc." />
-              </div>
+            <div>
+              <label htmlFor="currentCompany" className="caps-label block mb-2">Current Company</label>
+              <input id="currentCompany" name="currentCompany" type="text" value={formData.currentCompany} onChange={handleChange} className="input-standard" placeholder="Acme Inc." />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
