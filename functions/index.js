@@ -69,6 +69,8 @@ const CORS_ORIGINS = process.env.ALLOWED_ORIGINS
   : [
     "https://greenhouse-jobs-scrapper.web.app",
     "https://greenhouse-jobs-scrapper.firebaseapp.com",
+    "https://jobwatch.akashramasani.com",
+    "https://greenhouse-jobs-scrapper.vercel.app",
     "http://localhost:5173",
     "http://localhost:4173",
   ];
