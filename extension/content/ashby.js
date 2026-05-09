@@ -6,7 +6,8 @@
 
 (async function () {
   // ── Check if audit mode is active ─────────────────────────────────────────
-  const { auditMode } = await new Promise(r => chrome.storage.session.get("auditMode", r));
+  const sessionData = await new Promise(r => chrome.storage.session.get("auditMode", r)).catch(() => ({})) || {};
+  const { auditMode } = sessionData;
   if (auditMode) { await runAudit(); return; }
 
   // ── Wait for form ──────────────────────────────────────────────────────────
@@ -263,7 +264,8 @@
       const form = await waitForForm(12000);
       showOverlay("🔍 JobWatch: Auditing fields…", "#6366f1");
 
-      const { auditPendingJob } = await new Promise(r => chrome.storage.session.get("auditPendingJob", r));
+      const auditJobData = await new Promise(r => chrome.storage.session.get("auditPendingJob", r)).catch(() => ({})) || {};
+      const { auditPendingJob } = auditJobData;
 
       const fields = [];
 
