@@ -13,6 +13,26 @@ const PARSE_RESUME_URL =
 const ACCEPTED_TYPES = [".pdf", ".docx", ".txt"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
+// ─── URL Slug Helpers ──────────────────────────────────────────────────────────
+function toLinkedInSlug(url = "") {
+  const m = url.match(/linkedin\.com(\/in\/[^/?#\s]+)/i);
+  return m ? m[1] : url;
+}
+function fromLinkedInSlug(slug = "") {
+  if (!slug) return "";
+  if (slug.startsWith("http")) return slug;
+  return "https://linkedin.com" + (slug.startsWith("/") ? slug : "/in/" + slug);
+}
+function toGithubSlug(url = "") {
+  const m = url.match(/github\.com(\/[^/?#\s]+)/i);
+  return m ? m[1] : url;
+}
+function fromGithubSlug(slug = "") {
+  if (!slug) return "";
+  if (slug.startsWith("http")) return slug;
+  return "https://github.com" + (slug.startsWith("/") ? slug : "/" + slug);
+}
+
 // ─── Phone Formatter ───────────────────────────────────────────────────────────
 function formatPhone(raw) {
   const digits = raw.replace(/\D/g, "");
@@ -132,8 +152,8 @@ export default function Profile({ user, userMeta }) {
         region: userMeta.region || "",
         postalCode: userMeta.postalCode || "",
         phone: formatPhone(userMeta.phone || ""),
-        linkedin: userMeta.linkedin || "",
-        github: userMeta.github || "",
+        linkedin: toLinkedInSlug(userMeta.linkedin || ""),
+        github: toGithubSlug(userMeta.github || ""),
         portfolio: userMeta.portfolio || "",
         currentCompany: userMeta.currentCompany || "",
         availability: userMeta.availability || "",
@@ -152,7 +172,14 @@ export default function Profile({ user, userMeta }) {
     if (e) e.preventDefault();
     setBusy(true);
     try {
-      await setDoc(doc(db, "users", user.uid), { ...formData, fullName: `${formData.firstName} ${formData.lastName}`.trim(), updatedAt: serverTimestamp() }, { merge: true });
+      const saveData = {
+        ...formData,
+        linkedin: fromLinkedInSlug(formData.linkedin),
+        github: fromGithubSlug(formData.github),
+        fullName: `${formData.firstName} ${formData.lastName}`.trim(),
+        updatedAt: serverTimestamp(),
+      };
+      await setDoc(doc(db, "users", user.uid), saveData, { merge: true });
       showToast("Profile updated successfully", "success");
     } catch {
       showToast("Failed to update profile", "error");
@@ -385,15 +412,19 @@ export default function Profile({ user, userMeta }) {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               <div>
                 <label htmlFor="linkedin" className="caps-label block mb-2">LinkedIn URL</label>
-                <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="linkedin.com/in/akash-ramasani" />
+                <input id="linkedin" name="linkedin" type="text" value={formData.linkedin}
+                  onChange={e => setFormData(f => ({ ...f, linkedin: toLinkedInSlug(e.target.value) }))}
+                  className="input-standard" placeholder="/in/akash-ramasani" />
               </div>
               <div>
                 <label htmlFor="github" className="caps-label block mb-2">GitHub URL</label>
-                <input id="github" name="github" type="url" value={formData.github} onChange={handleChange} className="input-standard" placeholder="github.com/akash-ramasani" />
+                <input id="github" name="github" type="text" value={formData.github}
+                  onChange={e => setFormData(f => ({ ...f, github: toGithubSlug(e.target.value) }))}
+                  className="input-standard" placeholder="/akash-ramasani" />
               </div>
               <div>
                 <label htmlFor="portfolio" className="caps-label block mb-2">Portfolio / Website</label>
-                <input id="portfolio" name="portfolio" type="url" value={formData.portfolio} onChange={handleChange} className="input-standard" placeholder="akashramasani.com" />
+                <input id="portfolio" name="portfolio" type="text" value={formData.portfolio} onChange={handleChange} className="input-standard" placeholder="akashramasani.com" />
               </div>
             </div>
 
