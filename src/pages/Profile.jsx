@@ -319,11 +319,6 @@ export default function Profile({ user, userMeta }) {
               </div>
             </div>
 
-            <div>
-              <label htmlFor="linkedin" className="caps-label block mb-2">LinkedIn Profile URL</label>
-              <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="https://linkedin.com/in/your-profile" />
-            </div>
-
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
                 <label htmlFor="university" className="caps-label block mb-2">University</label>
@@ -387,7 +382,11 @@ export default function Profile({ user, userMeta }) {
               <input id="currentCompany" name="currentCompany" type="text" value={formData.currentCompany} onChange={handleChange} className="input-standard" placeholder="Acme Inc." />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+              <div>
+                <label htmlFor="linkedin" className="caps-label block mb-2">LinkedIn URL</label>
+                <input id="linkedin" name="linkedin" type="url" value={formData.linkedin} onChange={handleChange} className="input-standard" placeholder="https://linkedin.com/in/you" />
+              </div>
               <div>
                 <label htmlFor="github" className="caps-label block mb-2">GitHub URL</label>
                 <input id="github" name="github" type="url" value={formData.github} onChange={handleChange} className="input-standard" placeholder="https://github.com/username" />
