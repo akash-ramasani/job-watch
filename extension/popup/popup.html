@@ -23,7 +23,7 @@
       align-items: center;
       gap: 10px;
     }
-    .header-logo { width: 32px; height: 32px; border-radius: 8px; background: #4f46e5; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 18px; font-weight: 700; color: white; border: 2px solid rgba(255,255,255,0.25); }
+    .header-logo { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; border: 2px solid rgba(255,255,255,0.25); overflow: hidden; }
     .header-title { font-size: 13px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; }
     .header-sub { font-size: 10px; opacity: 0.7; margin-top: 1px; }
 
@@ -88,7 +88,12 @@
 </head>
 <body>
   <div class="header">
-    <div class="header-logo">J</div>
+    <div class="header-logo">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+        <rect width="32" height="32" rx="7" fill="#4f46e5"/>
+        <text x="16" y="23" font-family="Ubuntu,Arial,sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">J</text>
+      </svg>
+    </div>
     <div>
       <div class="header-title">JobWatch Auto Apply</div>
       <div class="header-sub" id="header-sub">Loading…</div>
