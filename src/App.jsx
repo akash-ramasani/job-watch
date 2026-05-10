@@ -29,13 +29,32 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [userMeta, setUserMeta] = useState(null);
   const [preferences, setPreferences] = useState({ aiScoringEnabled: true });
+  const [extInstalled, setExtInstalled] = useState(false);
 
   const location = useLocation();
 
+  // Detect extension + sync auth state
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
+
+      const installed = !!window.__JW_EXTENSION_INSTALLED__;
+      setExtInstalled(installed);
+      if (!installed) return;
+
+      if (u) {
+        // Sync login to extension
+        try {
+          const idToken = await u.getIdToken();
+          window.postMessage({ type: "JW_AUTH", idToken, refreshToken: u.refreshToken, uid: u.uid, expiresIn: 3600 }, "*");
+        } catch (e) {
+          console.warn("[JobWatch] Could not sync auth to extension:", e.message);
+        }
+      } else {
+        // Sync logout to extension
+        window.postMessage({ type: "JW_LOGOUT" }, "*");
+      }
     });
     return () => unsub();
   }, []);
@@ -113,6 +132,7 @@ export default function App() {
               user={user}
               userMeta={userMeta}
               onLogout={() => signOut(auth)}
+              extInstalled={extInstalled}
             />
           </>
         )}

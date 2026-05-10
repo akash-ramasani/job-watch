@@ -19,8 +19,13 @@ chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
     renderProfile(response.userDoc);
   } else {
     showScreen("login");
-    setHeaderSub("Sign in to enable auto-apply");
+    setHeaderSub("Open Job Watch to auto-sync");
     setDot("#9ca3af");
+    // Show a hint that login should happen in the web app
+    const errEl = $("login-error");
+    errEl.textContent = "Tip: Logging into jobwatch.akashramasani.com will automatically sync here.";
+    errEl.style.display = "block";
+    errEl.style.color = "#6366f1";
   }
 });
 
@@ -61,8 +66,12 @@ $("password").addEventListener("keydown", (e) => {
 $("btn-signout").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "SIGN_OUT" }, () => {
     showScreen("login");
-    setHeaderSub("Sign in to enable auto-apply");
+    setHeaderSub("Open Job Watch to auto-sync");
     setDot("#9ca3af");
+    const errEl = $("login-error");
+    errEl.textContent = "Tip: Logging into jobwatch.akashramasani.com will automatically sync here.";
+    errEl.style.display = "block";
+    errEl.style.color = "#6366f1";
   });
 });
 

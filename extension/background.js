@@ -434,6 +434,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── 13. Web app → extension: sync auth on web app login ──────────────
+      if (message.type === "JW_AUTH") {
+        await saveAuth({
+          idToken: message.idToken,
+          refreshToken: message.refreshToken,
+          uid: message.uid,
+          expiresIn: message.expiresIn || 3600,
+        });
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── 14. Web app → extension: clear auth on web app logout ────────────
+      if (message.type === "JW_LOGOUT") {
+        await clearAuth();
+        await chrome.storage.session.clear();
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── 15. Web app pings extension to check login status ─────────────────
+      if (message.type === "JW_PING") {
+        const { jwUid, jwRefreshToken } = await getStoredAuth();
+        sendResponse({ ok: true, loggedIn: !!(jwUid && jwRefreshToken) });
+        return;
+      }
+
     } catch (err) {
       sendResponse({ ok: false, error: err.message });
     }

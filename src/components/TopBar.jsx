@@ -5,7 +5,7 @@ import { Link, useLocation } from "react-router-dom";
 import { useToast } from "./Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 
-export default function TopBar({ user, userMeta, onLogout }) {
+export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const location = useLocation();
   const { showToast } = useToast();
@@ -46,6 +46,26 @@ export default function TopBar({ user, userMeta, onLogout }) {
           <div className="flex items-center gap-4">
             {user ? (
               <div className="flex items-center gap-6">
+                {/* Extension status indicator */}
+                <div className="hidden md:flex items-center">
+                  {extInstalled ? (
+                    <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                      Extension
+                    </span>
+                  ) : (
+                    <a
+                      href="https://github.com/akash-ramasani/job-watch"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-500 hover:text-amber-600 transition-colors"
+                      title="Install the JobWatch extension to use Auto Apply"
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                      No Extension
+                    </a>
+                  )}
+                </div>
                 <div className="hidden md:flex flex-col items-end">
                   <span className="text-sm font-semibold text-gray-900">
                     {userMeta?.fullName || "User"}

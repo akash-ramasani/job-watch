@@ -23,6 +23,7 @@
     {
       "matches": [
         "https://greenhouse-jobs-scrapper.web.app/*",
+        "https://jobwatch.akashramasani.com/*",
         "http://localhost:*/*",
         "http://127.0.0.1:*/*"
       ],
