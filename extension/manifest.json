@@ -33,16 +33,6 @@
       "matches": ["https://jobs.ashbyhq.com/*/application*"],
       "js": ["content/ashby.js"],
       "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://boards.greenhouse.io/*/jobs/*",
-        "https://boards.greenhouse.io/embed/*",
-        "https://job-boards.greenhouse.io/*/jobs/*",
-        "https://job-boards.greenhouse.io/embed/*"
-      ],
-      "js": ["content/greenhouse.js"],
-      "run_at": "document_idle"
     }
   ],
 
