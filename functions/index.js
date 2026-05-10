@@ -2043,7 +2043,7 @@ exports.mapFormFields = onCall(
 
       // Text/textarea "how did you hear" → always LinkedIn
       if ((type === "text" || type === "textarea") &&
-          (lbl.includes("how did you hear") || lbl.includes("where did you hear") || lbl.includes("how did you find") || lbl.includes("how did you learn") || lbl.includes("where did you find"))) {
+          (lbl.includes("how did you hear") || lbl.includes("where did you hear") || lbl.includes("how did you find") || lbl.includes("how did you learn") || lbl.includes("where did you learn") || lbl.includes("where did you find"))) {
         result[id] = "LinkedIn"; continue;
       }
 
@@ -2126,7 +2126,7 @@ exports.mapFormFields = onCall(
         if (lbl.includes("legally authorized") || lbl.includes("authorized to work")) {
           result[id] = user.workAuthorized === "No" ? "no" : "yes"; continue;
         }
-        if (lbl.includes("sponsorship") || lbl.includes("visa")) {
+        if (lbl.includes("work authorization") || lbl.includes("require authorization") || lbl.includes("require sponsorship") || lbl.includes("sponsorship") || lbl.includes("visa")) {
           result[id] = user.requiresSponsorship === "Yes" ? "yes" : "no"; continue;
         }
         if (lbl.includes("relative") || lbl.includes("family member") || lbl.includes("currently working for")) {

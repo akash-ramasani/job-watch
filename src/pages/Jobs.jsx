@@ -282,6 +282,8 @@ export default function Jobs({ user, userMeta, preferences }) {
           source: job.source,
           companyKey: job.companyKey,
           externalId: job.externalId,
+          locationName: job.locationName || "",
+          workplaceType: job.workplaceType || null,
         },
       },
       window.location.origin
