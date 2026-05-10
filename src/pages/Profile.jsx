@@ -90,14 +90,14 @@ export default function Profile({ user, userMeta }) {
   const { showToast } = useToast();
 
   const [formData, setFormData] = useState({
-    firstName: "", lastName: "", university: "",
+    firstName: "", lastName: "", middleName: "", university: "",
     country: "United States", addressLine1: "", addressLine2: "",
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
     availability: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
-    willingToRelocate: "No", pronouns: "", namePronunciation: "",
+    willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
   });
   const [generatingPronunciation, setGeneratingPronunciation] = useState(false);
@@ -150,6 +150,7 @@ export default function Profile({ user, userMeta }) {
       setFormData({
         firstName: userMeta.firstName || "",
         lastName: userMeta.lastName || "",
+        middleName: userMeta.middleName || "",
         university: userMeta.university || "",
         country: userMeta.country || "United States",
         addressLine1: userMeta.addressLine1 || "",
@@ -167,6 +168,7 @@ export default function Profile({ user, userMeta }) {
         smsConsent: userMeta.smsConsent || "No",
         usPersonExportControl: userMeta.usPersonExportControl || "Yes",
         willingToRelocate: userMeta.willingToRelocate || "No",
+        willingToWorkHybrid: userMeta.willingToWorkHybrid || "Yes",
         pronouns: userMeta.pronouns || "",
         namePronunciation: userMeta.namePronunciation || "",
         clearanceStatus: userMeta.clearanceStatus || "None",
@@ -344,10 +346,14 @@ export default function Profile({ user, userMeta }) {
           </div>
 
           <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               <div>
                 <label htmlFor="firstName" className="caps-label block mb-2">First Name</label>
                 <input id="firstName" name="firstName" type="text" value={formData.firstName} onChange={handleChange} autoComplete="given-name" className="input-standard" placeholder="Jane" />
+              </div>
+              <div>
+                <label htmlFor="middleName" className="caps-label block mb-2">Middle Name <span className="normal-case font-normal text-gray-400">(optional)</span></label>
+                <input id="middleName" name="middleName" type="text" value={formData.middleName} onChange={handleChange} autoComplete="additional-name" className="input-standard" placeholder="Marie" />
               </div>
               <div>
                 <label htmlFor="lastName" className="caps-label block mb-2">Last Name</label>
@@ -489,6 +495,7 @@ export default function Profile({ user, userMeta }) {
                 { key: "requiresSponsorship", label: "Will you now or in the future require visa sponsorship?" },
                 { key: "usPersonExportControl", label: "Are you a U.S. Person for export control purposes? (U.S. citizen, LPR, asylee, or refugee)" },
                 { key: "willingToRelocate", label: "Are you willing to relocate?" },
+                { key: "willingToWorkHybrid", label: "Are you open to hybrid / in-office work arrangements?" },
                 { key: "smsConsent", label: "Do you consent to receive SMS/text messages about your application?" },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-4">

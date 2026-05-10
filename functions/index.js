@@ -1967,6 +1967,7 @@ exports.mapFormFields = onCall(
     const userContext = {
       name: fullName,
       firstName: user.firstName || "",
+      middleName: user.middleName || "",
       email: user.email || "",
       phone: user.phone || "",
       linkedin: user.linkedin || "",
@@ -1984,6 +1985,7 @@ exports.mapFormFields = onCall(
       workAuthorized: user.workAuthorized || "Yes",
       requiresSponsorship: user.requiresSponsorship || "No",
       willingToRelocate: user.willingToRelocate || "No",
+      willingToWorkHybrid: user.willingToWorkHybrid || "Yes",
       clearanceStatus: user.clearanceStatus || "None",
       namePronunciation: user.namePronunciation || "",
       currentTitle: resume.roles?.[0]?.title || resume.experience?.[0]?.title || resume.roles?.[0]?.role || "",
@@ -2015,7 +2017,29 @@ exports.mapFormFields = onCall(
 
       const lbl = label.toLowerCase();
 
-      // Legal name — always first + last name
+      // Date fields — start/availability → 20 days from today
+      if (type === "date") {
+        if (lbl.includes("start") || lbl.includes("availab") || lbl.includes("when can you") || lbl.includes("earliest")) {
+          const d = new Date(); d.setDate(d.getDate() + 20);
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
+          const dd = String(d.getDate()).padStart(2, "0");
+          result[id] = `${mm}/${dd}/${d.getFullYear()}`; continue;
+        }
+      }
+
+      // Text/textarea "how did you hear" → always LinkedIn
+      if ((type === "text" || type === "textarea") &&
+          (lbl.includes("how did you hear") || lbl.includes("where did you hear") || lbl.includes("how did you find") || lbl.includes("how did you learn") || lbl.includes("where did you find"))) {
+        result[id] = "LinkedIn"; continue;
+      }
+
+      // Text availability/start → "Immediately"
+      if (type === "text" &&
+          (lbl.includes("availab") || (lbl.includes("start") && lbl.includes("date")) || lbl.includes("when can you start"))) {
+        result[id] = "Immediately"; continue;
+      }
+
+
       if (lbl.includes("legal name") || lbl === "full legal name") {
         result[id] = userContext.name; continue;
       }
@@ -2044,7 +2068,7 @@ exports.mapFormFields = onCall(
       if (lbl.includes("last name") || lbl.includes("surname")) {
         result[id] = user.lastName || ""; continue;
       }
-      if (lbl.includes("middle name")) { result[id] = ""; continue; }
+      if (lbl.includes("middle name")) { result[id] = userContext.middleName; continue; }
       if (lbl.includes("preferred name") || lbl === "nickname") {
         result[id] = user.firstName || ""; continue;
       }
@@ -2079,7 +2103,7 @@ exports.mapFormFields = onCall(
           result[id] = "yes"; continue;
         }
         if (lbl.includes("hybrid") || lbl.includes("in-office") || lbl.includes("in office") || lbl.includes("can you meet") || lbl.includes("days per week") || lbl.includes("on-site") || lbl.includes("onsite")) {
-          result[id] = "yes"; continue;
+          result[id] = userContext.willingToWorkHybrid === "Yes" ? "yes" : "no"; continue;
         }
         if (lbl.includes("relocat")) {
           result[id] = user.willingToRelocate === "Yes" ? "yes" : "no"; continue;
@@ -2119,7 +2143,7 @@ exports.mapFormFields = onCall(
           result[id] = "__ALL__"; continue;
         }
         if (lbl.includes("in office") || lbl.includes("in-office") || lbl.includes("hybrid") || lbl.includes("onsite") || lbl.includes("on-site") || lbl.includes("days per week") || lbl.includes("can you meet") || lbl.includes("confirm you can")) {
-          result[id] = "Yes"; continue;
+          result[id] = userContext.willingToWorkHybrid === "Yes" ? "Yes" : "No"; continue;
         }
         if (lbl.includes("sms") || lbl.includes("whatsapp") || lbl.includes("text message")) {
           result[id] = user.smsConsent === "Yes" ? "Yes" : "No"; continue;
