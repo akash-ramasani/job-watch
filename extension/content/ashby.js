@@ -1,7 +1,7 @@
 
 
 // content/ashby.js -- Injected into Ashby application pages.
-// Handles: text, email, tel, textarea, file, yes/no buttons, location combobox, radio (EEO)
+// Handles: text, email, tel, textarea, file, yes/no buttons, location combobox, radio
 
 (async function () {
   // ── Wait for form ──────────────────────────────────────────────────────────
@@ -86,6 +86,21 @@
     await new Promise(r => setTimeout(r, 300));
   }
 
+  // ── Get the visible label text for a radio input ──────────────────────────
+  function getRadioLabel(radio, entry) {
+    const parentLabel = radio.closest("label");
+    if (parentLabel) {
+      const clone = parentLabel.cloneNode(true);
+      clone.querySelectorAll("input").forEach(i => i.remove());
+      return clone.textContent.trim();
+    }
+    if (radio.id) {
+      const assoc = entry.querySelector(`label[for="${CSS.escape(radio.id)}"]`);
+      if (assoc) return assoc.textContent.trim();
+    }
+    return radio.value || "";
+  }
+
   // ── Scrape all form fields and detect their type ───────────────────────────
   function scrapeFields(form) {
     const entries = form.querySelectorAll(".ashby-application-form-field-entry");
@@ -99,15 +114,28 @@
       const fileInput = entry.querySelector("input[type=file]");
       const yesNoEl = entry.querySelector("[class*='_yesno_']");
       const combobox = entry.querySelector("input[role='combobox']");
-      const input = entry.querySelector("input:not([type=file]):not([role=combobox]), textarea");
+      const radioEl = entry.querySelector("input[type=radio]");
+      const input = entry.querySelector("input:not([type=file]):not([role=combobox]):not([type=radio]), textarea");
 
       let type;
       if (fileInput) type = "file";
       else if (yesNoEl) type = "yesno";
       else if (combobox || fieldPath === "_systemfield_location") type = "location";
+      else if (radioEl) type = "radio";
       else type = input?.type || "text";
 
-      fields.push({ id: fieldPath, label, type, required });
+      const field = { id: fieldPath, label, type, required };
+
+      // Capture radio options so the AI knows what values are available
+      if (type === "radio") {
+        const radioInputs = [...entry.querySelectorAll("input[type=radio]")];
+        field.options = radioInputs.map(r => ({
+          label: getRadioLabel(r, entry),
+          value: r.value || getRadioLabel(r, entry),
+        }));
+      }
+
+      fields.push(field);
     }
     return fields;
   }
@@ -179,6 +207,25 @@
       if (field.type === "location") {
         const value = mappings[field.id] || (field.id === "_systemfield_location" ? userDoc.city : "") || "";
         await fillLocation(entry, value);
+        continue;
+      }
+
+      // ── Radio buttons ─────────────────────────────────────────────────
+      if (field.type === "radio") {
+        const answer = mappings[field.id];
+        if (answer) {
+          const radios = [...entry.querySelectorAll("input[type=radio]")];
+          const answerLower = answer.toLowerCase().trim();
+          let target = radios.find(r => {
+            const lbl = getRadioLabel(r, entry).toLowerCase();
+            return lbl === answerLower || lbl.includes(answerLower) || answerLower.includes(lbl);
+          });
+          if (!target && radios.length) target = radios[0]; // fallback: first option
+          if (target && !target.checked) {
+            target.click();
+            await new Promise(r => setTimeout(r, 200));
+          }
+        }
         continue;
       }
 

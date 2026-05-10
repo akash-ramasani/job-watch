@@ -2182,10 +2182,15 @@ exports.mapFormFields = onCall(
     // ── Claude Haiku for open-ended / custom fields ─────────────────────────
     if (unknownFields.length > 0) {
       const fieldList = unknownFields
-        .map((f) => `- ID: "${f.id}" | Label: "${f.label}" | Type: ${f.type} | Required: ${f.required}`)
+        .map((f) => {
+          let line = `- ID: "${f.id}" | Label: "${f.label}" | Type: ${f.type} | Required: ${f.required}`;
+          if (f.options?.length) line += ` | Options: ${f.options.map(o => o.label).join(" / ")}`;
+          return line;
+        })
         .join("\n");
 
       const prompt = `You are filling out a job application for "${jobTitle}" at "${companyName}".
+Job location: ${jobLocationName || "Not specified"} (workplace type: ${jobWorkplaceType || "unspecified"}).
 
 Candidate profile:
 - Name: ${userContext.name}
@@ -2212,6 +2217,7 @@ Candidate profile:
 
 Rules:
 - For yes/no or select fields: use the candidate profile above to answer accurately.
+- For radio fields: return EXACTLY one of the Options listed for that field (case-sensitive match). For office/location radio questions, pick the option closest to the job location.
 - For "how did you hear about us?" → "LinkedIn"
 - For salary / compensation questions → "Open to discussion"
 - For cover letter / additional notes / essay fields → write 2–3 natural sentences from the candidate's summary and experience above.
