@@ -788,10 +788,12 @@ function normalizeJobMinimal(rawJob, ctx) {
       locationName: combinedLocation || primaryLoc || null,
       locationTokens,
       stateCodes,
+      workplaceType: rawJob.workplaceType || null,
+      isRemote: rawJob.isRemote != null ? Boolean(rawJob.isRemote) : null,
       sourceUpdatedTs,
       sourceUpdatedIso,
       meta,
-      fullDescription, // Save directly into Firestore
+      fullDescription,
     };
   }
 
@@ -1939,7 +1941,7 @@ exports.mapFormFields = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
 
-    const { fields = [], jobTitle = "", companyName = "" } = request.data;
+    const { fields = [], jobTitle = "", companyName = "", jobLocationName = "", jobWorkplaceType = "" } = request.data;
     if (!Array.isArray(fields) || fields.length === 0) {
       throw new HttpsError("invalid-argument", "fields array is required.");
     }
@@ -2007,7 +2009,8 @@ exports.mapFormFields = onCall(
       if (id === "_systemfield_email") { result[id] = userContext.email; continue; }
       if (id === "_systemfield_resume") { result[id] = "__FILE__"; continue; }
       if (id === "_systemfield_location") {
-        result[id] = [user.city, user.country].filter(Boolean).join(", ") || "";
+        // Use the job posting location, not the user's home address
+        result[id] = jobLocationName || [user.city, user.country].filter(Boolean).join(", ") || "";
         continue;
       }
       // EEO fields — always decline (handled by radio click in content script, skip AI)

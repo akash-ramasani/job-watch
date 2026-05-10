@@ -169,14 +169,14 @@ async function fsSet(path, data, idToken) {
 
 // ─── Cloud Function call ──────────────────────────────────────────────────────
 
-async function callMapFormFields(fields, jobTitle, companyName, idToken) {
+async function callMapFormFields(fields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken) {
   const res = await fetch(`${FUNCTIONS_BASE}/mapFormFields`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({ data: { fields, jobTitle, companyName } }),
+    body: JSON.stringify({ data: { fields, jobTitle, companyName, jobLocationName, jobWorkplaceType } }),
   });
   const json = await res.json();
   if (!res.ok || json.error) throw new Error(json.error?.message || "mapFormFields failed");
@@ -235,8 +235,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const formFields = message.fields || [];
         const jobTitle = pendingJob?.title || "";
         const companyName = pendingJob?.companyName || "";
+        const jobLocationName = pendingJob?.locationName || "";
+        const jobWorkplaceType = pendingJob?.workplaceType || "";
 
-        const mappings = await callMapFormFields(formFields, jobTitle, companyName, idToken);
+        const mappings = await callMapFormFields(formFields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken);
 
         sendResponse({
           ok: true,
@@ -300,6 +302,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   source: next.source || "",
                   companyKey: next.companyKey || "",
                   externalId: next.externalId || "",
+                  locationName: next.locationName || "",
+                  workplaceType: next.workplaceType || null,
                 },
               });
               await chrome.tabs.create({ url: applyUrl });
@@ -359,6 +363,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             source: first.source || "",
             companyKey: first.companyKey || "",
             externalId: first.externalId || "",
+            locationName: first.locationName || "",
+            workplaceType: first.workplaceType || null,
           },
         });
         await chrome.tabs.create({ url: firstApplyUrl });
