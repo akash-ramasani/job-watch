@@ -102,7 +102,9 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [onlyHighRelevant, setOnlyHighRelevant] = useState(false);
+  const [onlyAutoApply, setOnlyAutoApply] = useState(false);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   // Cover Letter State
   const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
@@ -301,6 +303,23 @@ export default function Jobs({ user, userMeta, preferences }) {
     }, 1500);
   };
 
+  const handleRefreshAshby = async () => {
+    setSyncBusy(true);
+    try {
+      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}`;
+      const resp = await fetch(endpoint, { method: "GET" });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) { showToast(data?.error || "Sync failed.", "error"); return; }
+      showToast(`Synced — scanned ${data?.scanned ?? 0}, wrote ${data?.updated ?? 0}`, "success");
+      fetchAllJobs();
+    } catch (e) {
+      showToast(e?.message || "Sync failed.", "error");
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
   const handleDownloadPdf = () => {
     if (!clState.text) return;
     const doc = new jsPDF();
@@ -361,6 +380,12 @@ export default function Jobs({ user, userMeta, preferences }) {
 
       if (onlyHighRelevant && (typeof j.relevanceScore !== "number" || j.relevanceScore < 50)) {
         return false;
+      }
+
+      if (onlyAutoApply) {
+        const src = j.source?.toLowerCase();
+        if (src !== "ashby" && src !== "ashbyhq") return false;
+        if (!j.absolute_url || j.absolute_url === "#") return false;
       }
 
       if (stateFilter) {
@@ -561,6 +586,17 @@ export default function Jobs({ user, userMeta, preferences }) {
                 </button>
               )}
 
+              <button
+                onClick={() => setOnlyAutoApply(!onlyAutoApply)}
+                className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyAutoApply
+                  ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-inner"
+                  : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                  }`}
+              >
+                <span className={`w-2 h-2 rounded-full mr-2 ${onlyAutoApply ? "bg-emerald-500" : "bg-gray-300"}`} />
+                Auto Apply
+              </button>
+
             <button
               onClick={() => setIsFilterExpanded(!isFilterExpanded)}
               className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
@@ -584,6 +620,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               setStateFilter("");
               setTimeframe("1h");
               setOnlyHighRelevant(false);
+              setOnlyAutoApply(false);
               setSelectedKeys([]);
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 py-1"
@@ -739,7 +776,18 @@ export default function Jobs({ user, userMeta, preferences }) {
               )}
             </h3>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleRefreshAshby}
+              disabled={syncBusy}
+              title="Fetch Ashby jobs from last 24h"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all disabled:opacity-50 bg-white border-gray-200 text-gray-500 hover:border-emerald-300 hover:text-emerald-600 hover:bg-emerald-50"
+            >
+              <svg className={`w-3 h-3 ${syncBusy ? "animate-spin" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H3.989a.75.75 0 00-.75.75v4.242a.75.75 0 001.5 0v-2.43l.31.31a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-3.723a.75.75 0 00.219-.53V2.929a.75.75 0 00-1.5 0V5.36l-.31-.31A7 7 0 003.239 8.188a.75.75 0 101.448.389A5.5 5.5 0 0113.89 6.11l.311.31h-2.432a.75.75 0 000 1.5h4.243a.75.75 0 00.53-.219z" clipRule="evenodd" />
+              </svg>
+              {syncBusy ? "Syncing…" : "Refresh 24h"}
+            </button>
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Feed</span>
           </div>
