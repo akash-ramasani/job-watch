@@ -101,7 +101,40 @@
     return radio.value || "";
   }
 
-  // ── Scrape all form fields and detect their type ───────────────────────────
+  // ── Find best radio match for a profile value (fuzzy) ─────────────────────
+  function findBestRadio(radios, container, profileValue) {
+    if (!profileValue) return radios[radios.length - 1];
+    const pv = profileValue.toLowerCase().trim();
+
+    // "Decline" variant → Ashby always puts it last
+    if (pv.includes("decline")) return radios[radios.length - 1];
+
+    // 1. Exact match
+    let r = radios.find(radio => getRadioLabel(radio, container).toLowerCase().trim() === pv);
+    if (r) return r;
+
+    // 2. Form label starts with profile value ("Asian" → "Asian (Not Hispanic or Latino)")
+    r = radios.find(radio => getRadioLabel(radio, container).toLowerCase().trim().startsWith(pv));
+    if (r) return r;
+
+    // 3. Form label contains profile value
+    r = radios.find(radio => getRadioLabel(radio, container).toLowerCase().includes(pv));
+    if (r) return r;
+
+    // 4. All significant words from profile appear in form label
+    const words = pv.split(/\s+/).filter(w => w.length > 4);
+    if (words.length) {
+      r = radios.find(radio => {
+        const lbl = getRadioLabel(radio, container).toLowerCase();
+        return words.every(w => lbl.includes(w));
+      });
+      if (r) return r;
+    }
+
+    return radios[radios.length - 1]; // fallback: decline
+  }
+
+
   function scrapeFields(form) {
     const entries = form.querySelectorAll(".ashby-application-form-field-entry");
     const fields = [];
@@ -215,12 +248,7 @@
         const answer = mappings[field.id];
         if (answer) {
           const radios = [...entry.querySelectorAll("input[type=radio]")];
-          const answerLower = answer.toLowerCase().trim();
-          let target = radios.find(r => {
-            const lbl = getRadioLabel(r, entry).toLowerCase();
-            return lbl === answerLower || lbl.includes(answerLower) || answerLower.includes(lbl);
-          });
-          if (!target && radios.length) target = radios[0]; // fallback: first option
+          const target = findBestRadio(radios, entry, answer);
           if (target && !target.checked) {
             target.click();
             await new Promise(r => setTimeout(r, 200));
@@ -254,16 +282,22 @@
     showOverlay("🚀 JobWatch: Submitting…");
     await new Promise(r => setTimeout(r, 800));
 
-    // ── EEO Survey (separate form — always select "Decline to self-identify") ─
+    // ── EEO Survey (separate container — use profile EEO values) ──────────────
     const surveyForm = document.querySelector(".ashby-survey-form-container");
     if (surveyForm) {
-      const fieldsets = surveyForm.querySelectorAll("fieldset");
-      for (const fieldset of fieldsets) {
-        const radios = [...fieldset.querySelectorAll("input[type=radio]")];
+      const eeoValues = {
+        "_systemfield_eeoc_gender":         userDoc.eeoGender,
+        "_systemfield_eeoc_race":           userDoc.eeoEthnicity,
+        "_systemfield_eeoc_veteran_status": userDoc.eeoVeteran,
+        "_systemfield_eeoc_disability":     userDoc.eeoDisability,
+      };
+      for (const [fieldPath, profileValue] of Object.entries(eeoValues)) {
+        const fieldEl = surveyForm.querySelector(`[data-field-path="${CSS.escape(fieldPath)}"]`);
+        if (!fieldEl) continue;
+        const radios = [...fieldEl.querySelectorAll("input[type=radio]")];
         if (!radios.length) continue;
-        // "Decline" option is always the last radio in Ashby EEO fields
-        const declineRadio = radios[radios.length - 1];
-        if (!declineRadio.checked) declineRadio.click();
+        const radio = findBestRadio(radios, fieldEl, profileValue);
+        if (radio && !radio.checked) radio.click();
         await new Promise(r => setTimeout(r, 150));
       }
     }
