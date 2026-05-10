@@ -185,6 +185,104 @@ async function callMapFormFields(fields, jobTitle, companyName, idToken) {
 
 
 
+// ─── Audit state ─────────────────────────────────────────────────────────────
+
+const audit = {
+  active: false,
+  queue:   [],   // [{ id, title, companyName, url }]
+  index:   0,
+  total:   0,
+  done:    0,
+  skipped: 0,
+  results: [],
+  tabId:   null,
+  timer:   null,
+};
+
+function auditReset() {
+  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
+  audit.active  = false;
+  audit.queue   = [];
+  audit.index   = 0;
+  audit.total   = 0;
+  audit.done    = 0;
+  audit.skipped = 0;
+  audit.results = [];
+  audit.tabId   = null;
+}
+
+async function auditOpenNext() {
+  if (!audit.active || audit.index >= audit.queue.length) return;
+  const next = audit.queue[audit.index];
+  const tab = await chrome.tabs.create({ url: next.url });
+  audit.tabId = tab.id;
+  // Fallback timeout: skip this tab if no response within 35s
+  audit.timer = setTimeout(() => {
+    console.warn("[JobWatch Audit] Timeout — skipping:", next.url);
+    auditAdvance([], "timeout");
+  }, 35000);
+}
+
+function auditAdvance(fields, error) {
+  if (!audit.active) return;
+  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
+
+  const current = audit.queue[audit.index];
+  if (audit.tabId) {
+    chrome.tabs.remove(audit.tabId).catch(() => {});
+    audit.tabId = null;
+  }
+
+  if (!error && fields && fields.length) {
+    audit.results.push({
+      job: {
+        id:          current.id,
+        title:       current.title       || "",
+        companyName: current.companyName || "",
+        url:         current.url,
+      },
+      fields,
+    });
+    audit.done++;
+  } else {
+    audit.skipped++;
+  }
+
+  audit.index++;
+  if (audit.index >= audit.queue.length) {
+    auditFinish();
+    return;
+  }
+  auditOpenNext();
+}
+
+function auditFinish() {
+  audit.active = false;
+  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
+
+  const json    = JSON.stringify(audit.results, null, 2);
+  const encoded = btoa(unescape(encodeURIComponent(json)));
+  chrome.downloads.download({
+    url:            `data:application/json;base64,${encoded}`,
+    filename:       "jobwatch-audit.json",
+    saveAs:         true,
+    conflictAction: "overwrite",
+  }).catch(err => console.error("[JobWatch Audit] Download failed:", err));
+}
+
+// ─── Inject audit script when audit tab finishes loading ─────────────────────
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "complete") return;
+  if (!audit.active || tabId !== audit.tabId) return;
+
+  chrome.scripting.executeScript({ target: { tabId }, files: ["content/ashby-audit.js"] })
+    .catch((err) => {
+      console.warn("[JobWatch Audit] Injection failed:", err.message);
+      auditAdvance([], `inject_failed: ${err.message}`);
+    });
+});
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -379,6 +477,83 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "STOP_AUTO_APPLY") {
         await chrome.storage.session.remove(["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"]);
         await chrome.storage.session.remove("pendingJob");
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── Audit: content script sends scraped fields ────────────────────────
+      if (message.type === "ASHBY_AUDIT_DATA") {
+        const tabId = sender.tab?.id;
+        if (audit.active && tabId === audit.tabId) {
+          auditAdvance(message.fields || [], message.error || null);
+        }
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── Audit: popup starts an audit run ─────────────────────────────────
+      if (message.type === "START_ASHBY_AUDIT") {
+        if (audit.active) { sendResponse({ ok: false, error: "Audit already running." }); return; }
+        auditReset();
+
+        const { idToken, uid } = await getFreshToken();
+        // Two single-field queries (no composite index needed); filter score in JS
+        const [jobs1, jobs2] = await Promise.all([
+          fsQuery(`users/${uid}`, "jobs", [{
+            fieldFilter: { field: { fieldPath: "source" }, op: "EQUAL", value: { stringValue: "ashby" } },
+          }], idToken, 500),
+          fsQuery(`users/${uid}`, "jobs", [{
+            fieldFilter: { field: { fieldPath: "source" }, op: "EQUAL", value: { stringValue: "ashbyhq" } },
+          }], idToken, 500),
+        ]);
+        console.log("[JobWatch Audit] ashby:", jobs1.length, "ashbyhq:", jobs2.length);
+        const sample = [...jobs1, ...jobs2][0];
+        if (sample) console.log("[JobWatch Audit] Sample job keys:", JSON.stringify({ id: sample.id, source: sample.source, relevanceScore: sample.relevanceScore, score: sample.score, absolute_url: sample.absolute_url }));
+
+        const seen = new Set();
+        const queue = [];
+        for (const j of [...jobs1, ...jobs2]) {
+          if (seen.has(j.id)) continue;
+          seen.add(j.id);
+          const score = Number(j.relevanceScore ?? j.score ?? 0);
+          if (score <= 60) continue;
+          if (queue.length >= 150) break;
+          let url = (j.jobUrl || j.absolute_url || j.applyUrl || "").replace(/\/$/, "");
+          if (!url) continue;
+          if (!url.includes("/application")) url += "/application";
+          url += (url.includes("?") ? "&" : "?") + "jwaudit=1";
+          if (!url.includes("ashbyhq.com")) continue;
+          queue.push({ id: j.id, title: j.title || j.jobTitle || "", companyName: j.companyName || "", url });
+        }
+        console.log("[JobWatch Audit] Eligible queue:", queue.length);
+
+        if (!queue.length) { sendResponse({ ok: true, total: 0 }); return; }
+
+        audit.queue  = queue;
+        audit.total  = queue.length;
+        audit.active = true;
+        await auditOpenNext();
+        sendResponse({ ok: true, total: queue.length });
+        return;
+      }
+
+      // ── Audit: popup polls progress ───────────────────────────────────────
+      if (message.type === "GET_ASHBY_AUDIT_STATUS") {
+        sendResponse({
+          ok:      true,
+          active:  audit.active,
+          done:    audit.done,
+          skipped: audit.skipped,
+          total:   audit.total,
+          index:   audit.index,
+        });
+        return;
+      }
+
+      // ── Audit: popup stops audit ──────────────────────────────────────────
+      if (message.type === "STOP_ASHBY_AUDIT") {
+        if (audit.tabId) chrome.tabs.remove(audit.tabId).catch(() => {});
+        auditReset();
         sendResponse({ ok: true });
         return;
       }
