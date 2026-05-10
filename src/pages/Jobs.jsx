@@ -21,7 +21,6 @@ import { ADMIN_UID } from "../App.jsx";
 
 const PAGE_SIZE = 50;
 
-const NON_US_LOCATION = /\b(afghanistan|albania|algeria|angola|argentina|armenia|australia|austria|azerbaijan|bahrain|bangladesh|belarus|belgium|belize|benin|bolivia|bosnia|botswana|brazil|bulgaria|burkina|burundi|cambodia|cameroon|canada|cape verde|chad|chile|china|colombia|congo|costa rica|croatia|cuba|cyprus|czech|denmark|dominican|ecuador|egypt|el salvador|eritrea|estonia|ethiopia|finland|france|gabon|georgia|ghana|greece|guatemala|guinea|haiti|honduras|hungary|iceland|india|indonesia|iran|iraq|ireland|israel|italy|ivory coast|jamaica|japan|jordan|kazakhstan|kenya|kosovo|kuwait|kyrgyzstan|laos|latvia|lebanon|lesotho|liberia|libya|liechtenstein|lithuania|luxembourg|madagascar|malawi|malaysia|mali|malta|mauritania|mauritius|mexico|moldova|mongolia|montenegro|morocco|mozambique|myanmar|namibia|nepal|netherlands|new zealand|nicaragua|niger|nigeria|north korea|norway|oman|pakistan|palestine|panama|paraguay|peru|philippines|poland|portugal|qatar|romania|russia|rwanda|saudi arabia|senegal|serbia|sierra leone|singapore|slovakia|slovenia|somalia|south africa|south korea|south sudan|spain|sri lanka|sudan|sweden|switzerland|syria|taiwan|tajikistan|tanzania|thailand|togo|tunisia|turkey|turkmenistan|uganda|ukraine|united arab emirates|uae|united kingdom|uk|uruguay|uzbekistan|venezuela|vietnam|yemen|zambia|zimbabwe|europe|european|emea|latam|apac|mena|apj)\b/i;
 
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
@@ -105,7 +104,6 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [timeframe, setTimeframe] = useState("1h");
   const [onlyHighRelevant, setOnlyHighRelevant] = useState(false);
   const [onlyAutoApply, setOnlyAutoApply] = useState(false);
-  const [onlyUsJobs, setOnlyUsJobs] = useState(false);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
   // Cover Letter State
@@ -373,11 +371,6 @@ export default function Jobs({ user, userMeta, preferences }) {
         if (!j.absolute_url || j.absolute_url === "#") return false;
       }
 
-      if (onlyUsJobs) {
-        const loc = (j.locationName || "").toLowerCase();
-        if (NON_US_LOCATION.test(loc)) return false;
-      }
-
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
           if (!j.stateCodes.includes(stateFilter)) return false;
@@ -392,7 +385,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     });
 
     return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter, onlyHighRelevant, onlyAutoApply, onlyUsJobs]);
+  }, [jobs, titleSearch, stateFilter, onlyHighRelevant, onlyAutoApply]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -587,16 +580,6 @@ export default function Jobs({ user, userMeta, preferences }) {
                 Auto Apply
               </button>
 
-              <button
-                onClick={() => setOnlyUsJobs(!onlyUsJobs)}
-                className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyUsJobs
-                  ? "bg-blue-50 border-blue-200 text-blue-700 shadow-inner"
-                  : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-                  }`}
-              >
-                🇺🇸 US Only
-              </button>
-
             <button
               onClick={() => setIsFilterExpanded(!isFilterExpanded)}
               className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
@@ -621,7 +604,6 @@ export default function Jobs({ user, userMeta, preferences }) {
               setTimeframe("1h");
               setOnlyHighRelevant(false);
               setOnlyAutoApply(false);
-              setOnlyUsJobs(false);
               setSelectedKeys([]);
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 py-1"

@@ -147,6 +147,8 @@ const NORM = {
 
 const LOCATION_SPLIT_REGEX = /[;|/]+|(?:\s*,\s*)/g;
 
+const NON_US_LOCATION_RE = /\b(afghanistan|albania|algeria|angola|argentina|armenia|australia|austria|azerbaijan|bahrain|bangladesh|belarus|belgium|belize|benin|bolivia|bosnia|botswana|brazil|bulgaria|burkina|burundi|cambodia|cameroon|canada|cape verde|chad|chile|china|colombia|congo|costa rica|croatia|cuba|cyprus|czech|denmark|dominican|ecuador|egypt|el salvador|eritrea|estonia|ethiopia|finland|france|gabon|ghana|greece|guatemala|guinea|haiti|honduras|hungary|iceland|india|indonesia|iran|iraq|ireland|israel|italy|ivory coast|jamaica|japan|jordan|kazakhstan|kenya|kosovo|kuwait|kyrgyzstan|laos|latvia|lebanon|lesotho|liberia|libya|liechtenstein|lithuania|luxembourg|madagascar|malawi|malaysia|mali|malta|mauritania|mauritius|mexico|moldova|mongolia|montenegro|morocco|mozambique|myanmar|namibia|nepal|netherlands|new zealand|nicaragua|niger|nigeria|north korea|norway|oman|pakistan|palestine|panama|paraguay|peru|philippines|poland|portugal|qatar|romania|russia|rwanda|saudi arabia|senegal|serbia|sierra leone|singapore|slovakia|slovenia|somalia|south africa|south korea|south sudan|spain|sri lanka|sudan|sweden|switzerland|syria|taiwan|tajikistan|tanzania|thailand|togo|tunisia|turkey|turkmenistan|uganda|ukraine|united arab emirates|uae|united kingdom|uruguay|uzbekistan|venezuela|vietnam|yemen|zambia|zimbabwe|europe|european|emea|latam|apac|mena|apj)\b/i;
+
 /**
  * =====================================================================================
  * 1) SCHEDULED: Every 1 hour sync
@@ -757,6 +759,9 @@ function normalizeJobMinimal(rawJob, ctx) {
           .filter(Boolean)
       : [];
     const combinedLocation = [primaryLoc, ...secondary].filter(Boolean).join("; ");
+
+    // Skip non-US jobs
+    if (combinedLocation && NON_US_LOCATION_RE.test(combinedLocation)) return null;
 
     const sourceUpdatedIso = rawJob.publishedAt ? String(rawJob.publishedAt) : null;
     const sourceUpdatedTs = toTimestampOrNull(sourceUpdatedIso) || now;
