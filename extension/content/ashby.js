@@ -4,7 +4,6 @@
 // Handles: text, email, tel, textarea, file, yes/no buttons, location combobox, radio (EEO)
 
 (async function () {
-
   // ── Wait for form ──────────────────────────────────────────────────────────
   function waitForForm(timeout = 10000) {
     return new Promise((resolve, reject) => {
