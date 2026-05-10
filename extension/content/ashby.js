@@ -121,7 +121,7 @@
     r = radios.find(radio => getRadioLabel(radio, container).toLowerCase().includes(pv));
     if (r) return r;
 
-    // 4. All significant words from profile appear in form label
+    // 4. All significant words (>4 chars) from profile appear in form label
     const words = pv.split(/\s+/).filter(w => w.length > 4);
     if (words.length) {
       r = radios.find(radio => {
@@ -129,6 +129,18 @@
         return words.every(w => lbl.includes(w));
       });
       if (r) return r;
+    }
+
+    // 5. Score by how many words from the answer appear in each label (best-of)
+    const allWords = pv.split(/\s+/).filter(w => w.length > 1);
+    if (allWords.length) {
+      let bestScore = 0, bestRadio = null;
+      for (const radio of radios) {
+        const lbl = getRadioLabel(radio, container).toLowerCase();
+        const score = allWords.filter(w => lbl.includes(w)).length;
+        if (score > bestScore) { bestScore = score; bestRadio = radio; }
+      }
+      if (bestScore > 0) return bestRadio;
     }
 
     return radios[radios.length - 1]; // fallback: decline
