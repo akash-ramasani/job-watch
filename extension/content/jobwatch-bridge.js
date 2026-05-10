@@ -4,12 +4,8 @@
  * Bridges window.postMessage from the web app to the extension background.
  */
 
-// Inject flag into the page's main JS world (content scripts run in an
-// isolated world so direct window assignment isn't visible to page JS)
-const __jw_flag = document.createElement("script");
-__jw_flag.textContent = "window.__JW_EXTENSION_INSTALLED__ = true;";
-(document.head || document.documentElement).appendChild(__jw_flag);
-__jw_flag.remove();
+// Note: window.__JW_EXTENSION_INSTALLED__ is set by jobwatch-main.js
+// which runs in the page's MAIN world via manifest "world": "MAIN".
 
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;

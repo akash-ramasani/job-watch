@@ -27,6 +27,17 @@
         "http://localhost:*/*",
         "http://127.0.0.1:*/*"
       ],
+      "js": ["content/jobwatch-main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://greenhouse-jobs-scrapper.web.app/*",
+        "https://jobwatch.akashramasani.com/*",
+        "http://localhost:*/*",
+        "http://127.0.0.1:*/*"
+      ],
       "js": ["content/jobwatch-bridge.js"],
       "run_at": "document_start"
     },

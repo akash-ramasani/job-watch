@@ -26,7 +26,9 @@
     const nativeSetter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
     if (nativeSetter) nativeSetter.call(el, value);
     else el.value = value;
-    el.dispatchEvent(new Event("input",  { bubbles: true }));
+    // InputEvent with inputType is more realistic than a plain Event and works
+    // better with React Hook Form / Ashby's internal form state tracking.
+    el.dispatchEvent(new InputEvent("input",  { bubbles: true, cancelable: true, inputType: "insertText", data: value }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur",   { bubbles: true }));
   }
@@ -297,6 +299,30 @@
         setInputValue(input, String(aiValue));
         await new Promise(r => setTimeout(r, 150));
       }
+    }
+
+    showOverlay("🔍 JobWatch: Verifying fields…");
+    await new Promise(r => setTimeout(r, 500));
+
+    // Pre-submit validation: abort if any required text/file fields are still empty
+    const missingFields = [];
+    for (const field of fields) {
+      if (!field.required) continue;
+      const entry = form.querySelector(`[data-field-path="${CSS.escape(field.id)}"]`);
+      if (!entry) continue;
+
+      if (field.type === "file") {
+        const fi = entry.querySelector("input[type=file]");
+        if (fi && (!fi.files || fi.files.length === 0)) missingFields.push(field.label);
+      } else if (!["yesno", "radio", "location"].includes(field.type)) {
+        const input = entry.querySelector("input:not([type=file]):not([type=radio]):not([role=combobox]), textarea");
+        if (input && !input.value?.trim()) missingFields.push(field.label);
+      }
+    }
+    if (missingFields.length > 0) {
+      showOverlay(`⚠️ ${missingFields.length} required field(s) not filled — please fill manually and submit.`, "#f59e0b");
+      console.warn("[JobWatch] Missing required fields:", missingFields);
+      return;
     }
 
     showOverlay("🚀 JobWatch: Submitting…");
