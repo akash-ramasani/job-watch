@@ -21,6 +21,8 @@ import { ADMIN_UID } from "../App.jsx";
 
 const PAGE_SIZE = 50;
 
+const NON_US_LOCATION = /\b(belgium|france|germany|united kingdom|uk\b|canada|australia|india|singapore|netherlands|poland|ukraine|ireland|spain|italy|portugal|sweden|norway|denmark|finland|switzerland|austria|czech|romania|hungary|brazil|mexico|israel|japan|china|south korea|colombia|peru|argentina|chile|europe|european|emea|latam|apac)\b/i;
+
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
   { code: "AR", name: "Arkansas" }, { code: "CA", name: "California" }, { code: "CO", name: "Colorado" },
@@ -103,6 +105,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [timeframe, setTimeframe] = useState("1h");
   const [onlyHighRelevant, setOnlyHighRelevant] = useState(false);
   const [onlyAutoApply, setOnlyAutoApply] = useState(false);
+  const [onlyUsJobs, setOnlyUsJobs] = useState(false);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
   // Cover Letter State
@@ -370,6 +373,13 @@ export default function Jobs({ user, userMeta, preferences }) {
         if (!j.absolute_url || j.absolute_url === "#") return false;
       }
 
+      if (onlyUsJobs) {
+        const hasUsState = Array.isArray(j.stateCodes) && j.stateCodes.length > 0;
+        const loc = (j.locationName || "").toLowerCase();
+        const hasNonUsCountry = NON_US_LOCATION.test(loc);
+        if (!hasUsState && hasNonUsCountry) return false;
+      }
+
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
           if (!j.stateCodes.includes(stateFilter)) return false;
@@ -384,7 +394,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     });
 
     return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter, onlyHighRelevant]);
+  }, [jobs, titleSearch, stateFilter, onlyHighRelevant, onlyAutoApply, onlyUsJobs]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -579,6 +589,16 @@ export default function Jobs({ user, userMeta, preferences }) {
                 Auto Apply
               </button>
 
+              <button
+                onClick={() => setOnlyUsJobs(!onlyUsJobs)}
+                className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyUsJobs
+                  ? "bg-blue-50 border-blue-200 text-blue-700 shadow-inner"
+                  : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
+                  }`}
+              >
+                🇺🇸 US Only
+              </button>
+
             <button
               onClick={() => setIsFilterExpanded(!isFilterExpanded)}
               className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded
@@ -603,6 +623,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               setTimeframe("1h");
               setOnlyHighRelevant(false);
               setOnlyAutoApply(false);
+              setOnlyUsJobs(false);
               setSelectedKeys([]);
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 py-1"
