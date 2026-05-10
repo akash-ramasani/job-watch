@@ -752,7 +752,9 @@ function normalizeJobMinimal(rawJob, ctx) {
 
     const primaryLoc = rawJob.location ? String(rawJob.location) : null;
     const secondary = Array.isArray(rawJob.secondaryLocations)
-      ? rawJob.secondaryLocations.filter(Boolean).map(String)
+      ? rawJob.secondaryLocations
+          .map(s => typeof s === "string" ? s : (s?.location ? String(s.location) : null))
+          .filter(Boolean)
       : [];
     const combinedLocation = [primaryLoc, ...secondary].filter(Boolean).join("; ");
 
