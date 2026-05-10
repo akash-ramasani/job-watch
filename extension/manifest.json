@@ -28,10 +28,7 @@
         "http://127.0.0.1:*/*"
       ],
       "js": ["content/jobwatch-bridge.js"],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": ["https://jobs.ashbyhq.com/*/application*"],
+      "run_at": "document_start",
       "js": ["content/ashby.js"],
       "run_at": "document_idle"
     }

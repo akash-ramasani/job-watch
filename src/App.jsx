@@ -33,15 +33,30 @@ export default function App() {
 
   const location = useLocation();
 
-  // Detect extension + sync auth state
+  // Detect extension — runs once on mount, retries briefly to handle timing
+  useEffect(() => {
+    const check = () => {
+      if (window.__JW_EXTENSION_INSTALLED__) {
+        setExtInstalled(true);
+        return true;
+      }
+      return false;
+    };
+    if (!check()) {
+      // Retry a few times in case the content script hasn't injected yet
+      const t1 = setTimeout(check, 200);
+      const t2 = setTimeout(check, 800);
+      return () => { clearTimeout(t1); clearTimeout(t2); };
+    }
+  }, []);
+
+  // Sync auth state to extension
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
 
-      const installed = !!window.__JW_EXTENSION_INSTALLED__;
-      setExtInstalled(installed);
-      if (!installed) return;
+      if (!window.__JW_EXTENSION_INSTALLED__) return;
 
       if (u) {
         // Sync login to extension
