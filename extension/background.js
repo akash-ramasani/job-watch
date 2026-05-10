@@ -195,12 +195,9 @@ const audit = {
   done:    0,
   skipped: 0,
   results: [],
-  tabId:   null,
-  timer:   null,
 };
 
 function auditReset() {
-  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
   audit.active  = false;
   audit.queue   = [];
   audit.index   = 0;
@@ -208,57 +205,74 @@ function auditReset() {
   audit.done    = 0;
   audit.skipped = 0;
   audit.results = [];
-  audit.tabId   = null;
 }
 
-async function auditOpenNext() {
-  if (!audit.active || audit.index >= audit.queue.length) return;
-  const next = audit.queue[audit.index];
-  const tab = await chrome.tabs.create({ url: next.url });
-  audit.tabId = tab.id;
-  // Fallback timeout: skip this tab if no response within 35s
-  audit.timer = setTimeout(() => {
-    console.warn("[JobWatch Audit] Timeout — skipping:", next.url);
-    auditAdvance([], "timeout");
-  }, 35000);
+function mapAshbyApiFieldType(ashbyType, hasOptions) {
+  switch (ashbyType) {
+    case "LongText":         return "textarea";
+    case "Email":            return "email";
+    case "Phone":            return "tel";
+    case "Url":              return "url";
+    case "File":             return "file";
+    case "Date":             return "date";
+    case "Boolean":          return "yesno";
+    case "Location":         return "location";
+    case "MultiValueSelect": return "multiselect";
+    case "Select":           return hasOptions ? "select" : "text";
+    default:                 return "text";
+  }
 }
 
-function auditAdvance(fields, error) {
-  if (!audit.active) return;
-  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
-
-  const current = audit.queue[audit.index];
-  if (audit.tabId) {
-    chrome.tabs.remove(audit.tabId).catch(() => {});
-    audit.tabId = null;
+async function auditFetchJob(job) {
+  try {
+    // URL format: https://jobs.ashbyhq.com/{org}/{jobId}/application
+    const match = job.url.match(/ashbyhq\.com\/([^/?]+)\/([0-9a-f-]{36})/i);
+    if (!match) return null;
+    const [, org, jobId] = match;
+    const apiUrl = `https://api.ashbyhq.com/posting-api/job-board/${org}/application-form?jobPostingId=${jobId}`;
+    const res = await fetch(apiUrl);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const sections = data?.applicationForm?.sections || [];
+    const fields = [];
+    for (const section of sections) {
+      for (const entry of section.fields || []) {
+        const f = entry.field;
+        if (!f) continue;
+        const opts = (f.selectableValues || []).map(v => v.label || v.value || "").filter(Boolean);
+        fields.push({
+          id:          f.path || "",
+          label:       f.title || "",
+          type:        mapAshbyApiFieldType(f.type, opts.length > 0),
+          required:    entry.isRequired || false,
+          description: entry.instructions || "",
+          placeholder: "",
+          options:     opts,
+        });
+      }
+    }
+    return fields.length ? { job: { id: job.id, title: job.title, companyName: job.companyName, url: job.url }, fields } : null;
+  } catch {
+    return null;
   }
+}
 
-  if (!error && fields && fields.length) {
-    audit.results.push({
-      job: {
-        id:          current.id,
-        title:       current.title       || "",
-        companyName: current.companyName || "",
-        url:         current.url,
-      },
-      fields,
-    });
-    audit.done++;
-  } else {
-    audit.skipped++;
+async function auditFetchAll() {
+  const BATCH = 8; // concurrent API requests
+  while (audit.active && audit.index < audit.queue.length) {
+    const batch = audit.queue.slice(audit.index, audit.index + BATCH);
+    const results = await Promise.all(batch.map(auditFetchJob));
+    for (const r of results) {
+      if (r) { audit.results.push(r); audit.done++; }
+      else   { audit.skipped++; }
+    }
+    audit.index += batch.length;
   }
-
-  audit.index++;
-  if (audit.index >= audit.queue.length) {
-    auditFinish();
-    return;
-  }
-  auditOpenNext();
+  auditFinish();
 }
 
 function auditFinish() {
   audit.active = false;
-  if (audit.timer) { clearTimeout(audit.timer); audit.timer = null; }
 
   const json    = JSON.stringify(audit.results, null, 2);
   const encoded = btoa(unescape(encodeURIComponent(json)));
@@ -269,19 +283,6 @@ function auditFinish() {
     conflictAction: "overwrite",
   }).catch(err => console.error("[JobWatch Audit] Download failed:", err));
 }
-
-// ─── Inject audit script when audit tab finishes loading ─────────────────────
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== "complete") return;
-  if (!audit.active || tabId !== audit.tabId) return;
-
-  chrome.scripting.executeScript({ target: { tabId }, files: ["content/ashby-audit.js"] })
-    .catch((err) => {
-      console.warn("[JobWatch Audit] Injection failed:", err.message);
-      auditAdvance([], `inject_failed: ${err.message}`);
-    });
-});
 
 // ─── Message handler ──────────────────────────────────────────────────────────
 
@@ -481,23 +482,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── Audit: content script sends scraped fields ────────────────────────
-      if (message.type === "ASHBY_AUDIT_DATA") {
-        const tabId = sender.tab?.id;
-        if (audit.active && tabId === audit.tabId) {
-          auditAdvance(message.fields || [], message.error || null);
-        }
-        sendResponse({ ok: true });
-        return;
-      }
-
       // ── Audit: popup starts an audit run ─────────────────────────────────
       if (message.type === "START_ASHBY_AUDIT") {
         if (audit.active) { sendResponse({ ok: false, error: "Audit already running." }); return; }
         auditReset();
 
         const { idToken, uid } = await getFreshToken();
-        // Two single-field queries (no composite index needed); filter score in JS
         const [jobs1, jobs2] = await Promise.all([
           fsQuery(`users/${uid}`, "jobs", [{
             fieldFilter: { field: { fieldPath: "source" }, op: "EQUAL", value: { stringValue: "ashby" } },
@@ -507,8 +497,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }], idToken, 500),
         ]);
         console.log("[JobWatch Audit] ashby:", jobs1.length, "ashbyhq:", jobs2.length);
-        const sample = [...jobs1, ...jobs2][0];
-        if (sample) console.log("[JobWatch Audit] Sample job keys:", JSON.stringify({ id: sample.id, source: sample.source, relevanceScore: sample.relevanceScore, score: sample.score, absolute_url: sample.absolute_url }));
 
         const seen = new Set();
         const queue = [];
@@ -519,10 +507,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (score <= 60) continue;
           if (queue.length >= 150) break;
           let url = (j.jobUrl || j.absolute_url || j.applyUrl || "").replace(/\/$/, "");
-          if (!url) continue;
-          if (!url.includes("/application")) url += "/application";
-          url += (url.includes("?") ? "&" : "?") + "jwaudit=1";
-          if (!url.includes("ashbyhq.com")) continue;
+          if (!url || !url.includes("ashbyhq.com")) continue;
           queue.push({ id: j.id, title: j.title || j.jobTitle || "", companyName: j.companyName || "", url });
         }
         console.log("[JobWatch Audit] Eligible queue:", queue.length);
@@ -532,7 +517,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         audit.queue  = queue;
         audit.total  = queue.length;
         audit.active = true;
-        await auditOpenNext();
+        auditFetchAll(); // runs async in background, no await
         sendResponse({ ok: true, total: queue.length });
         return;
       }
@@ -552,7 +537,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // ── Audit: popup stops audit ──────────────────────────────────────────
       if (message.type === "STOP_ASHBY_AUDIT") {
-        if (audit.tabId) chrome.tabs.remove(audit.tabId).catch(() => {});
         auditReset();
         sendResponse({ ok: true });
         return;
