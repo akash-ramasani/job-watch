@@ -99,6 +99,10 @@ export default function Profile({ user, userMeta }) {
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
+    eeoGender: "Decline to self-identify",
+    eeoEthnicity: "Decline to self-identify",
+    eeoVeteran: "I am not a protected veteran",
+    eeoDisability: "No, I don't have a disability",
   });
   const [generatingPronunciation, setGeneratingPronunciation] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -173,6 +177,10 @@ export default function Profile({ user, userMeta }) {
         namePronunciation: userMeta.namePronunciation || "",
         clearanceStatus: userMeta.clearanceStatus || "None",
         clearanceLevel: userMeta.clearanceLevel || "None",
+        eeoGender: userMeta.eeoGender || "Decline to self-identify",
+        eeoEthnicity: userMeta.eeoEthnicity || "Decline to self-identify",
+        eeoVeteran: userMeta.eeoVeteran || "I am not a protected veteran",
+        eeoDisability: userMeta.eeoDisability || "No, I don't have a disability",
       });
     }
   }, [userMeta]);
@@ -538,6 +546,33 @@ export default function Profile({ user, userMeta }) {
                   disabled={formData.clearanceStatus === "None"}
                   options={["None", "Confidential", "Secret", "Top Secret (TS)", "TS/SCI", "TS/SCI with CI Poly", "TS/SCI with Full Poly", "Other"]}
                 />
+              </div>
+            </div>
+
+            {/* EEO Survey Defaults */}
+            <div className="pt-2 border-t border-gray-100">
+              <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4">EEO Survey Defaults</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                  <label htmlFor="eeoGender" className="caps-label block mb-2">Gender Identity</label>
+                  <Select id="eeoGender" name="eeoGender" value={formData.eeoGender} onChange={handleChange}
+                    options={["Male", "Female", "Non-binary / third gender", "Prefer to self-describe", "Decline to self-identify"]} />
+                </div>
+                <div>
+                  <label htmlFor="eeoEthnicity" className="caps-label block mb-2">Race / Ethnicity</label>
+                  <Select id="eeoEthnicity" name="eeoEthnicity" value={formData.eeoEthnicity} onChange={handleChange}
+                    options={["Hispanic or Latino", "White (Not Hispanic or Latino)", "Black or African American", "Asian", "Native Hawaiian or Other Pacific Islander", "American Indian or Alaska Native", "Two or More Races", "Decline to self-identify"]} />
+                </div>
+                <div>
+                  <label htmlFor="eeoVeteran" className="caps-label block mb-2">Veteran Status</label>
+                  <Select id="eeoVeteran" name="eeoVeteran" value={formData.eeoVeteran} onChange={handleChange}
+                    options={["I am a protected veteran", "I am not a protected veteran", "Decline to self-identify"]} />
+                </div>
+                <div>
+                  <label htmlFor="eeoDisability" className="caps-label block mb-2">Disability Status</label>
+                  <Select id="eeoDisability" name="eeoDisability" value={formData.eeoDisability} onChange={handleChange}
+                    options={["Yes, I have a disability (or previously had one)", "No, I don't have a disability", "Decline to self-identify"]} />
+                </div>
               </div>
             </div>
 

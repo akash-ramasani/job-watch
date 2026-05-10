@@ -1990,6 +1990,10 @@ exports.mapFormFields = onCall(
       willingToWorkHybrid: user.willingToWorkHybrid || "Yes",
       clearanceStatus: user.clearanceStatus || "None",
       namePronunciation: user.namePronunciation || "",
+      eeoGender: user.eeoGender || "Decline to self-identify",
+      eeoEthnicity: user.eeoEthnicity || "Decline to self-identify",
+      eeoVeteran: user.eeoVeteran || "I am not a protected veteran",
+      eeoDisability: user.eeoDisability || "No, I don't have a disability",
       currentTitle: resume.roles?.[0]?.title || resume.experience?.[0]?.title || resume.roles?.[0]?.role || "",
       summary: resume.summary || "",
       skills: topSkills,
@@ -2013,9 +2017,10 @@ exports.mapFormFields = onCall(
         result[id] = jobLocationName || [user.city, user.country].filter(Boolean).join(", ") || "";
         continue;
       }
-      // EEO fields — always decline (handled by radio click in content script, skip AI)
-      if (id === "_systemfield_eeoc_gender" || id === "_systemfield_eeoc_race" || id === "_systemfield_eeoc_veteran_status") {
-        result[id] = "decline"; continue;
+      // EEO system fields — use profile values
+      if (id === "_systemfield_eeoc_gender") { result[id] = userContext.eeoGender; continue; }
+      if (id === "_systemfield_eeoc_race") { result[id] = userContext.eeoEthnicity; continue; }
+      if (id === "_systemfield_eeoc_veteran_status") { result[id] = userContext.eeoVeteran; continue; }
       }
 
       const lbl = label.toLowerCase();
@@ -2155,10 +2160,16 @@ exports.mapFormFields = onCall(
           result[id] = user.clearanceStatus || "None"; continue;
         }
         if (lbl.includes("gender") || lbl.includes("pronoun")) {
-          result[id] = user.pronouns || "Decline to self-identify"; continue;
+          result[id] = userContext.eeoGender; continue;
         }
-        if (lbl.includes("hispanic") || lbl.includes("ethnicity") || lbl.includes("veteran") || lbl.includes("disability")) {
-          result[id] = "Decline to self-identify"; continue;
+        if (lbl.includes("hispanic") || lbl.includes("ethnicity") || lbl.includes("race")) {
+          result[id] = userContext.eeoEthnicity; continue;
+        }
+        if (lbl.includes("veteran")) {
+          result[id] = userContext.eeoVeteran; continue;
+        }
+        if (lbl.includes("disability")) {
+          result[id] = userContext.eeoDisability; continue;
         }
         if (lbl.includes("how did you hear") || lbl.includes("where did you") || lbl.includes("how did you find") || lbl.includes("how did you learn")) {
           result[id] = "LinkedIn"; continue;
