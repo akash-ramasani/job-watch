@@ -177,9 +177,7 @@
 
       // ── Location combobox ──────────────────────────────────────────────
       if (field.type === "location") {
-        const value = field.id === "_systemfield_location"
-          ? (userDoc.city || mappings[field.id] || "")
-          : (mappings[field.id] || "");
+        const value = mappings[field.id] || (field.id === "_systemfield_location" ? userDoc.city : "") || "";
         await fillLocation(entry, value);
         continue;
       }
