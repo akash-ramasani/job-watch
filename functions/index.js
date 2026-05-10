@@ -2021,7 +2021,6 @@ exports.mapFormFields = onCall(
       if (id === "_systemfield_eeoc_gender") { result[id] = userContext.eeoGender; continue; }
       if (id === "_systemfield_eeoc_race") { result[id] = userContext.eeoEthnicity; continue; }
       if (id === "_systemfield_eeoc_veteran_status") { result[id] = userContext.eeoVeteran; continue; }
-      }
 
       const lbl = label.toLowerCase();
 
