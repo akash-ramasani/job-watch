@@ -21,7 +21,7 @@ import { ADMIN_UID } from "../App.jsx";
 
 const PAGE_SIZE = 50;
 
-const NON_US_LOCATION = /\b(belgium|france|germany|united kingdom|uk\b|canada|australia|india|singapore|netherlands|poland|ukraine|ireland|spain|italy|portugal|sweden|norway|denmark|finland|switzerland|austria|czech|romania|hungary|brazil|mexico|israel|japan|china|south korea|colombia|peru|argentina|chile|europe|european|emea|latam|apac)\b/i;
+const NON_US_LOCATION = /\b(afghanistan|albania|algeria|angola|argentina|armenia|australia|austria|azerbaijan|bahrain|bangladesh|belarus|belgium|belize|benin|bolivia|bosnia|botswana|brazil|bulgaria|burkina|burundi|cambodia|cameroon|canada|cape verde|chad|chile|china|colombia|congo|costa rica|croatia|cuba|cyprus|czech|denmark|dominican|ecuador|egypt|el salvador|eritrea|estonia|ethiopia|finland|france|gabon|georgia|ghana|greece|guatemala|guinea|haiti|honduras|hungary|iceland|india|indonesia|iran|iraq|ireland|israel|italy|ivory coast|jamaica|japan|jordan|kazakhstan|kenya|kosovo|kuwait|kyrgyzstan|laos|latvia|lebanon|lesotho|liberia|libya|liechtenstein|lithuania|luxembourg|madagascar|malawi|malaysia|mali|malta|mauritania|mauritius|mexico|moldova|mongolia|montenegro|morocco|mozambique|myanmar|namibia|nepal|netherlands|new zealand|nicaragua|niger|nigeria|north korea|norway|oman|pakistan|palestine|panama|paraguay|peru|philippines|poland|portugal|qatar|romania|russia|rwanda|saudi arabia|senegal|serbia|sierra leone|singapore|slovakia|slovenia|somalia|south africa|south korea|south sudan|spain|sri lanka|sudan|sweden|switzerland|syria|taiwan|tajikistan|tanzania|thailand|togo|tunisia|turkey|turkmenistan|uganda|ukraine|united arab emirates|uae|united kingdom|uk|uruguay|uzbekistan|venezuela|vietnam|yemen|zambia|zimbabwe|europe|european|emea|latam|apac|mena|apj)\b/i;
 
 const US_STATES = [
   { code: "AL", name: "Alabama" }, { code: "AK", name: "Alaska" }, { code: "AZ", name: "Arizona" },
@@ -374,10 +374,8 @@ export default function Jobs({ user, userMeta, preferences }) {
       }
 
       if (onlyUsJobs) {
-        const hasUsState = Array.isArray(j.stateCodes) && j.stateCodes.length > 0;
         const loc = (j.locationName || "").toLowerCase();
-        const hasNonUsCountry = NON_US_LOCATION.test(loc);
-        if (!hasUsState && hasNonUsCountry) return false;
+        if (NON_US_LOCATION.test(loc)) return false;
       }
 
       if (stateFilter) {
