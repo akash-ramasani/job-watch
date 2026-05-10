@@ -268,13 +268,19 @@ exports.runSyncNow = onRequest(
     }
     const userId = decodedToken.uid;
 
+    // Allow caller to override the lookback window (default: RECENT_WINDOW_MINUTES)
+    const hoursParam = parseFloat(req.query.hours);
+    const windowMinutes = (!isNaN(hoursParam) && hoursParam > 0)
+      ? Math.min(hoursParam * 60, 48 * 60) // cap at 48h
+      : RECENT_WINDOW_MINUTES;
+
     const startedAt = admin.firestore.Timestamp.now();
     const runId = String(startedAt.toMillis());
     const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
 
     const now = admin.firestore.Timestamp.now();
     const recentCutoff = admin.firestore.Timestamp.fromDate(
-      new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
+      new Date(Date.now() - windowMinutes * 60 * 1000)
     );
 
     await runRef.set(

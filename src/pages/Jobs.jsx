@@ -15,7 +15,8 @@ import {
 import { AnimatePresence, motion } from "framer-motion";
 import { jsPDF } from "jspdf";
 import { httpsCallable } from "firebase/functions";
-import { db, functions } from "../firebase";
+import { getIdToken } from "firebase/auth";
+import { db, functions, auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 
@@ -307,8 +308,12 @@ export default function Jobs({ user, userMeta, preferences }) {
     setSyncBusy(true);
     try {
       const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
-      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}`;
-      const resp = await fetch(endpoint, { method: "GET" });
+      const idToken = await getIdToken(auth.currentUser);
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}&hours=24`;
+      const resp = await fetch(endpoint, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) { showToast(data?.error || "Sync failed.", "error"); return; }
       showToast(`Synced — scanned ${data?.scanned ?? 0}, wrote ${data?.updated ?? 0}`, "success");
