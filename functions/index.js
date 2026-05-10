@@ -2095,6 +2095,25 @@ exports.mapFormFields = onCall(
       if (lbl.includes("zip") || lbl.includes("postal")) { result[id] = user.postalCode || ""; continue; }
       if (lbl.includes("country")) { result[id] = user.country || "United States"; continue; }
 
+      // Radio fields — location/office questions use job location from Firestore
+      if (type === "radio") {
+        const isLocationQ = lbl.includes("location") || lbl.includes("office") ||
+          lbl.includes("which city") || lbl.includes("interested in") || lbl.includes("which site");
+        if (isLocationQ && jobLocationName && field.options?.length) {
+          const jl = jobLocationName.toLowerCase();
+          // Find option whose label most overlaps with the job location
+          const best = field.options.find(o => {
+            const ol = o.label.toLowerCase();
+            return ol.includes(jl) || jl.includes(ol);
+          }) || field.options.reduce((a, b) => {
+            const scoreA = jl.split(/[\s,]+/).filter(w => w.length > 2 && a.label.toLowerCase().includes(w)).length;
+            const scoreB = jl.split(/[\s,]+/).filter(w => w.length > 2 && b.label.toLowerCase().includes(w)).length;
+            return scoreB > scoreA ? b : a;
+          });
+          result[id] = best.label; continue;
+        }
+      }
+
       // Common yes/no questions with safe deterministic answers
       if (type === "yesno") {
         if (lbl.includes("legally authorized") || lbl.includes("authorized to work")) {

@@ -257,7 +257,15 @@
 
       // ── Radio buttons ─────────────────────────────────────────────────
       if (field.type === "radio") {
-        const answer = mappings[field.id];
+        let answer = mappings[field.id];
+        // For office/location radio questions, job location from Firestore is ground truth
+        if (!answer && pendingJob?.locationName) {
+          const lbl = field.label.toLowerCase();
+          if (lbl.includes("location") || lbl.includes("office") || lbl.includes("which city") ||
+              lbl.includes("interested in") || lbl.includes("which site")) {
+            answer = pendingJob.locationName;
+          }
+        }
         if (answer) {
           const radios = [...entry.querySelectorAll("input[type=radio]")];
           const target = findBestRadio(radios, entry, answer);
