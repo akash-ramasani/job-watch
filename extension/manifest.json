@@ -7,10 +7,7 @@
   "permissions": ["storage", "tabs", "activeTab", "scripting", "downloads"],
 
   "host_permissions": [
-    "https://jobs.ashbyhq.com/*",
-    "https://greenhouse-jobs-scrapper.web.app/*",
-    "http://localhost:*/*",
-    "http://127.0.0.1:*/*",
+    "*://*/*",
     "https://firestore.googleapis.com/*",
     "https://firebasestorage.googleapis.com/*",
     "https://identitytoolkit.googleapis.com/*",
@@ -35,6 +32,16 @@
     {
       "matches": ["https://jobs.ashbyhq.com/*/application*"],
       "js": ["content/ashby.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://boards.greenhouse.io/*/jobs/*",
+        "https://boards.greenhouse.io/embed/*",
+        "https://job-boards.greenhouse.io/*/jobs/*",
+        "https://job-boards.greenhouse.io/embed/*"
+      ],
+      "js": ["content/greenhouse.js"],
       "run_at": "document_idle"
     }
   ],

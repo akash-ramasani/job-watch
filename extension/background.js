@@ -133,15 +133,17 @@ async function fsPatch(path, data, idToken) {
 }
 
 // Run a Firestore structured query under a parent document path
-async function fsQuery(parentPath, collectionId, filters, idToken) {
+async function fsQuery(parentPath, collectionId, filters, idToken, limit = null) {
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${parentPath}:runQuery`;
   const where = filters.length === 1 ? filters[0] : {
     compositeFilter: { op: "AND", filters },
   };
+  const structuredQuery = { from: [{ collectionId }], where };
+  if (limit) structuredQuery.limit = limit;
   const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ structuredQuery: { from: [{ collectionId }], where } }),
+    body: JSON.stringify({ structuredQuery }),
   });
   const results = await res.json();
   return (Array.isArray(results) ? results : [])
@@ -181,6 +183,39 @@ async function callMapFormFields(fields, jobTitle, companyName, idToken) {
   return json.result?.mappings || {};
 }
 
+// Track the currently open single-fill tab so we can inject greenhouse.js
+// into company-hosted career pages (e.g. careers.whop.com?gh_jid=...).
+let fillTabId = null;
+
+// Prefer the stored absolute_url if it's already a Greenhouse boards URL (boards or job-boards).
+// Only reconstruct from companyKey+externalId when the absolute_url is a company-hosted page
+// (e.g. careers.whop.com?gh_jid=...) — in that case companyKey must be a slug, not a token.
+function buildGreenhouseFillUrl(job) {
+  // Use the exact stored URL — do NOT strip query params, as company-hosted
+  // pages like careers.whop.com/?gh_jid=... need them to load the right job.
+  return (job.absolute_url || job.jobUrl || job.applyUrl || "").replace(/\/$/, "");
+}
+
+// ─── Inject greenhouse.js into any career page domain ────────────────────────
+// content_scripts only matches known Greenhouse domains; for company career pages
+// (e.g. careers.whop.com?gh_jid=...) we inject programmatically on tab load.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete") return;
+  const url = tab.url || "";
+  const alreadyInjected =
+    /boards\.greenhouse\.io\/[^/]+\/jobs\//.test(url) ||
+    /job-boards\.greenhouse\.io\/[^/]+\/jobs\//.test(url);
+
+  // ── Fill mode: inject into company-hosted career pages ──────────────────
+  if (tabId === fillTabId && !alreadyInjected) {
+    fillTabId = null; // one-shot
+    chrome.scripting.executeScript({ target: { tabId }, files: ["content/greenhouse.js"] })
+      .catch((err) => console.warn("[JobWatch Fill] Script injection failed:", err.message, url));
+    return;
+  }
+
+});
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -190,10 +225,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "AUTO_APPLY") {
         const job = message.job;
         await chrome.storage.session.set({ pendingJob: job });
-        // Ashby application form is always at {job_url}/application
-        let applyUrl = (job.absolute_url || "").replace(/\/$/, "");
-        if (!applyUrl.includes("/application")) applyUrl += "/application";
-        await chrome.tabs.create({ url: applyUrl });
+        let applyUrl;
+        if (job.source === "greenhouse") {
+          applyUrl = buildGreenhouseFillUrl(job);
+        } else {
+          applyUrl = (job.absolute_url || "").replace(/\/$/, "");
+          if (!applyUrl.includes("/application")) applyUrl += "/application";
+        }
+        console.log("[JobWatch] AUTO_APPLY → opening:", applyUrl, "| absolute_url was:", job.absolute_url);
+        const newTab = await chrome.tabs.create({ url: applyUrl });
+        if (job.source === "greenhouse") fillTabId = newTab.id;
         sendResponse({ ok: true });
         return;
       }
@@ -286,16 +327,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             if (newIndex < (q.autoApplyQueue || []).length) {
               const next = q.autoApplyQueue[newIndex];
-              const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application";
+              let applyUrl;
+              if ((next.source || "") === "greenhouse") {
+                applyUrl = buildGreenhouseFillUrl({ absolute_url: next.jobUrl || next.applyUrl || "", companyKey: next.companyKey, externalId: next.externalId });
+              } else {
+                applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "");
+                if (!applyUrl.includes("/application")) applyUrl += "/application";
+              }
               await chrome.storage.session.set({
                 pendingJob: {
                   id: next.id,
                   title: next.title || next.jobTitle || "",
                   companyName: next.companyName || "",
                   absolute_url: next.jobUrl || next.applyUrl || "",
+                  source: next.source || "",
+                  companyKey: next.companyKey || "",
+                  externalId: next.externalId || "",
                 },
               });
-              await chrome.tabs.create({ url: applyUrl });
+              const nextTab = await chrome.tabs.create({ url: applyUrl });
+              if ((next.source || "") === "greenhouse") fillTabId = nextTab.id;
             } else {
               // Queue exhausted
               await chrome.storage.session.set({ autoApplyActive: false });
@@ -307,101 +358,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 4. Popup: start audit (scrape fields, no submit) ─────────────────
-      if (message.type === "START_AUDIT") {
-        const { idToken, uid } = await getFreshToken();
-
-        const jobs = await fsQuery(`users/${uid}`, "jobs", [{
-          fieldFilter: {
-            field: { fieldPath: "relevanceScore" },
-            op: "GREATER_THAN",
-            value: { integerValue: "60" },
-          },
-        }], idToken);
-
-        const eligible = jobs.filter(j => {
-          const url = j.jobUrl || j.applyUrl || "";
-          return url.includes("ashbyhq.com");
-        });
-
-        if (!eligible.length) {
-          sendResponse({ ok: true, total: 0 });
-          return;
-        }
-
-        await chrome.storage.session.set({
-          auditQueue: eligible,
-          auditIndex: 0,
-          auditTotal: eligible.length,
-          auditResults: [],
-          auditDone: 0,
-        });
-
-        const first = eligible[0];
-        // Append ?jwaudit=1 so the content script detects audit mode via URL (session storage is unreliable in content scripts)
-        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application?jwaudit=1";
-        await chrome.storage.local.set({ auditPendingJob: { id: first.id, title: first.title || first.jobTitle || "", companyName: first.companyName || "" } });
-        await chrome.tabs.create({ url: applyUrl });
-        sendResponse({ ok: true, total: eligible.length });
-        return;
-      }
-
-      // ── 5. Content script reports audit result ───────────────────────────
-      if (message.type === "AUDIT_RESULT") {
-        const s = await new Promise(r =>
-          chrome.storage.session.get(["auditQueue", "auditIndex", "auditResults", "auditDone", "auditTotal"], r)
-        );
-
-        const results = s.auditResults || [];
-        if (!message.error) {
-          results.push({ job: message.job, fields: message.fields });
-        }
-
-        const newIndex = (s.auditIndex || 0) + 1;
-        const newDone  = (s.auditDone  || 0) + 1;
-        await chrome.storage.session.set({ auditResults: results, auditIndex: newIndex, auditDone: newDone });
-
-        const tabId = sender.tab?.id;
-        setTimeout(async () => {
-          if (tabId) chrome.tabs.remove(tabId).catch(() => {});
-          const queue = s.auditQueue || [];
-          if (newIndex < queue.length) {
-            // Open next audit tab
-            const next = queue[newIndex];
-            const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + "/application?jwaudit=1";
-            await chrome.storage.local.set({ auditPendingJob: { id: next.id, title: next.title || next.jobTitle || "", companyName: next.companyName || "" } });
-            await chrome.tabs.create({ url: applyUrl });
-          } else {
-            // All done — trigger download from background (works even if popup is closed)
-            const json = JSON.stringify(results, null, 2);
-            const dataUrl = "data:application/json;charset=utf-8," + encodeURIComponent(json);
-            chrome.downloads.download({ url: dataUrl, filename: "jobwatch-audit.json", saveAs: false });
-          }
-        }, 2500);
-
-        sendResponse({ ok: true });
-        return;
-      }
-
-      // ── 6. Popup: get audit progress/results ─────────────────────────────
-      if (message.type === "GET_AUDIT_STATUS") {
-        const s = await new Promise(r =>
-          chrome.storage.session.get(["auditDone", "auditTotal", "auditResults"], r)
-        );
-        const done  = s.auditDone  || 0;
-        const total = s.auditTotal || 0;
-        const active = total > 0 && done < total;
-        sendResponse({
-          ok: true,
-          active,
-          done,
-          total,
-          results: (!active && (s.auditResults?.length > 0)) ? s.auditResults : null,
-        });
-        return;
-      }
-
-      // ── 7. Popup: start auto-apply queue ────────────────────────────────
+      // ── 4. Popup: start auto-apply queue ────────────────────────────────
       if (message.type === "START_AUTO_APPLY") {
         const { idToken, uid } = await getFreshToken();
 
@@ -414,10 +371,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           },
         }], idToken);
 
-        // Filter: only Ashby URLs, not already auto-applied
+        // Filter: Ashby + Greenhouse jobs not already auto-applied
         const eligible = jobs.filter(j => {
-          const url = j.jobUrl || j.applyUrl || "";
-          return url.includes("ashbyhq.com") && !j.autoApplied;
+          const source = j.source || "";
+          return (source === "ashby" || source === "ashbyhq" || source === "greenhouse") && !j.autoApplied;
         });
 
         if (!eligible.length) {
@@ -435,16 +392,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         // Open first job
         const first = eligible[0];
-        const applyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "") + "/application";
+        let firstApplyUrl;
+        if ((first.source || "") === "greenhouse") {
+          firstApplyUrl = buildGreenhouseFillUrl({ absolute_url: first.jobUrl || first.applyUrl || "", companyKey: first.companyKey, externalId: first.externalId });
+        } else {
+          firstApplyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "");
+          if (!firstApplyUrl.includes("/application")) firstApplyUrl += "/application";
+        }
         await chrome.storage.session.set({
           pendingJob: {
             id: first.id,
             title: first.title || first.jobTitle || "",
             companyName: first.companyName || "",
             absolute_url: first.jobUrl || first.applyUrl || "",
+            source: first.source || "",
+            companyKey: first.companyKey || "",
+            externalId: first.externalId || "",
           },
         });
-        await chrome.tabs.create({ url: applyUrl });
+        const firstTab = await chrome.tabs.create({ url: firstApplyUrl });
+        if ((first.source || "") === "greenhouse") fillTabId = firstTab.id;
         sendResponse({ ok: true, total: eligible.length });
         return;
       }
@@ -507,6 +474,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "SIGN_OUT") {
         await clearAuth();
         await chrome.storage.session.clear();
+        sendResponse({ ok: true });
+        return;
+      }
+
+      // ── Fill mode: content script found an iframe — navigate to embed URL ───
+      if (message.type === "GREENHOUSE_FILL_REDIRECT") {
+        const tabId = sender.tab?.id;
+        if (tabId && message.newUrl) {
+          fillTabId = tabId; // re-arm so tabs.onUpdated injects script on embed URL
+          try { await chrome.tabs.update(tabId, { url: message.newUrl }); } catch (e) {
+            console.warn("[JobWatch Fill] tabs.update failed:", e.message);
+          }
+        }
         sendResponse({ ok: true });
         return;
       }

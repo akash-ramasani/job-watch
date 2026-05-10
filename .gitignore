@@ -38,3 +38,6 @@ service-account.json
 
 # MCP server (local dev tool only)
 mcp-server/node_modules/
+
+# Scratch / temp research files
+scratch/

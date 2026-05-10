@@ -86,7 +86,7 @@ function detectSourceFromUrl(raw) {
 }
 
 function prettySourceLabel(source) {
-  if (source === "ashby") return "AshbyHQ";
+  if (source === "ashby" || source === "ashbyhq") return "AshbyHQ";
   if (source === "eightfold") return "Eightfold.ai";
   if (source === "netflix") return "Netflix";
   return "Greenhouse";
@@ -203,6 +203,21 @@ export default function Feeds({ user }) {
 
   const activeFeeds = useMemo(() => feeds.filter((f) => !f.archivedAt), [feeds]);
   const archivedFeeds = useMemo(() => feeds.filter((f) => !!f.archivedAt), [feeds]);
+
+  const feedStats = useMemo(() => {
+    const counts = { greenhouse: 0, ashby: 0, eightfold: 0 };
+    for (const f of activeFeeds) {
+      const src = f.source || detectSourceFromUrl(f.url);
+      if (src === "greenhouse") counts.greenhouse++;
+      else if (src === "ashby") counts.ashby++;
+      else counts.eightfold++; // eightfold + netflix + anything else
+    }
+    return [
+      { name: "Greenhouse", value: counts.greenhouse },
+      { name: "AshbyHQ", value: counts.ashby },
+      { name: "Eightfold.ai", value: counts.eightfold },
+    ];
+  }, [activeFeeds]);
   const detectedSource = useMemo(() => detectSourceFromUrl(url), [url]);
 
   async function addFeed(e) {
@@ -382,6 +397,19 @@ export default function Feeds({ user }) {
             </div>
           </form>
         </div>
+      </div>
+
+      <div className="mt-16">
+        <dl className="grid grid-cols-1 gap-x-8 gap-y-10 text-center sm:grid-cols-3">
+          {feedStats.map((stat) => (
+            <div key={stat.name} className="mx-auto flex max-w-xs flex-col gap-y-2">
+              <dt className="text-sm text-gray-500">{stat.name}</dt>
+              <dd className="order-first text-4xl font-bold tracking-tight text-gray-900">
+                {stat.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
       </div>
 
       <div className="mt-16">

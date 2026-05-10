@@ -278,6 +278,8 @@ export default function Jobs({ user, userMeta, preferences }) {
           companyName: job.companyName,
           absolute_url: job.absolute_url,
           source: job.source,
+          companyKey: job.companyKey,
+          externalId: job.externalId,
         },
       },
       window.location.origin
@@ -454,12 +456,12 @@ export default function Jobs({ user, userMeta, preferences }) {
                 Cover Letter
               </button>
             )}
-            {job.absolute_url?.includes("ashbyhq.com") && (
+            {job.absolute_url && (job.source === "ashby" || job.source === "ashbyhq") && (
               <button
                 onClick={(e) => { e.preventDefault(); handleAutoApply(job); }}
-                className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-emerald-600 bg-emerald-50 hover:bg-emerald-100 ring-1 ring-inset ring-emerald-200/50 transition-colors"
+                className="px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest text-white bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-sm shadow-emerald-200 flex items-center gap-1.5"
               >
-                Auto Apply
+                <span>⚡</span> Auto Apply
               </button>
             )}
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">

@@ -5,10 +5,13 @@ import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
+import Select from "../components/Select.jsx";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
   `https://us-central1-${import.meta.env.VITE_FIREBASE_PROJECT_ID}.cloudfunctions.net/parseResume`;
+const GEN_PRONUNCIATION_URL =
+  `https://us-central1-${import.meta.env.VITE_FIREBASE_PROJECT_ID}.cloudfunctions.net/generateNamePronunciation`;
 
 const ACCEPTED_TYPES = [".pdf", ".docx", ".txt"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -92,9 +95,12 @@ export default function Profile({ user, userMeta }) {
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    currentCompany: "", availability: "", heardAboutUs: "", salaryExpectations: "",
-    workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No",
+    availability: "",
+    workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
+    willingToRelocate: "No", pronouns: "", namePronunciation: "",
+    clearanceStatus: "None", clearanceLevel: "None",
   });
+  const [generatingPronunciation, setGeneratingPronunciation] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [pushStatus, setPushStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
@@ -155,16 +161,39 @@ export default function Profile({ user, userMeta }) {
         linkedin: toLinkedInSlug(userMeta.linkedin || ""),
         github: toGithubSlug(userMeta.github || ""),
         portfolio: userMeta.portfolio || "",
-        currentCompany: userMeta.currentCompany || "",
         availability: userMeta.availability || "",
-        heardAboutUs: userMeta.heardAboutUs || "",
-        salaryExpectations: userMeta.salaryExpectations || "",
         workAuthorized: userMeta.workAuthorized || "Yes",
         requiresSponsorship: userMeta.requiresSponsorship || "No",
         smsConsent: userMeta.smsConsent || "No",
+        usPersonExportControl: userMeta.usPersonExportControl || "Yes",
+        willingToRelocate: userMeta.willingToRelocate || "No",
+        pronouns: userMeta.pronouns || "",
+        namePronunciation: userMeta.namePronunciation || "",
+        clearanceStatus: userMeta.clearanceStatus || "None",
+        clearanceLevel: userMeta.clearanceLevel || "None",
       });
     }
   }, [userMeta]);
+
+  async function handleGeneratePronunciation() {
+    const name = `${formData.firstName} ${formData.lastName}`.trim();
+    if (!name) { showToast("Enter your name first", "error"); return; }
+    setGeneratingPronunciation(true);
+    try {
+      const idToken = await getIdToken(user);
+      const res = await fetch(GEN_PRONUNCIATION_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({ name }),
+      });
+      const json = await res.json();
+      if (json.pronunciation) setFormData(f => ({ ...f, namePronunciation: json.pronunciation }));
+    } catch {
+      showToast("Could not generate pronunciation", "error");
+    } finally {
+      setGeneratingPronunciation(false);
+    }
+  }
 
   const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
@@ -330,14 +359,7 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="email-display" className="caps-label block mb-2">Email Address</label>
                 <div className="relative">
-                  <input id="email-display" type="email" disabled value={user?.email || ""} className="input-standard pr-20" />
-                  <div className="absolute inset-y-0 right-3 flex items-center">
-                    {user?.emailVerified ? (
-                      <span className="text-[10px] font-black uppercase text-emerald-500 tracking-widest">Verified</span>
-                    ) : (
-                      <button type="button" onClick={handleVerify} className="text-[10px] font-black uppercase text-indigo-600 hover:text-indigo-700 tracking-widest">Verify</button>
-                    )}
-                  </div>
+                  <input id="email-display" type="email" disabled value={user?.email || ""} className="input-standard" />
                 </div>
               </div>
               <div>
@@ -404,9 +426,35 @@ export default function Profile({ user, userMeta }) {
           </div>
           <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
 
-            <div>
-              <label htmlFor="currentCompany" className="caps-label block mb-2">Current Company</label>
-              <input id="currentCompany" name="currentCompany" type="text" value={formData.currentCompany} onChange={handleChange} className="input-standard" placeholder="Acme Inc." />
+            {/* Pronouns + Name Pronunciation */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="pronouns" className="caps-label block mb-2">Pronouns</label>
+                <Select
+                  id="pronouns" name="pronouns"
+                  value={formData.pronouns} onChange={handleChange}
+                  options={["He/Him", "She/Her", "They/Them", "He/They", "She/They", "Ze/Zir", "Prefer not to say"]}
+                />
+              </div>
+              <div>
+                <label htmlFor="namePronunciation" className="caps-label block mb-2">Name Pronunciation</label>
+                <div className="flex gap-2">
+                  <input
+                    id="namePronunciation" name="namePronunciation" type="text"
+                    value={formData.namePronunciation} onChange={handleChange}
+                    className="input-standard flex-1"
+                    placeholder="e.g. Ah-kash Rah-mah-sah-nee"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleGeneratePronunciation}
+                    disabled={generatingPronunciation}
+                    className="btn-secondary whitespace-nowrap text-xs px-3"
+                  >
+                    {generatingPronunciation ? "Generating…" : "✨ Generate"}
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
@@ -433,21 +481,14 @@ export default function Profile({ user, userMeta }) {
                 <label htmlFor="availability" className="caps-label block mb-2">Availability / Start Date</label>
                 <input id="availability" name="availability" type="text" value={formData.availability} onChange={handleChange} className="input-standard" placeholder="Immediately / 2 weeks / 1 month…" />
               </div>
-              <div>
-                <label htmlFor="salaryExpectations" className="caps-label block mb-2">Salary Expectations</label>
-                <input id="salaryExpectations" name="salaryExpectations" type="text" value={formData.salaryExpectations} onChange={handleChange} className="input-standard" placeholder="e.g. $130k–$150k" />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="heardAboutUs" className="caps-label block mb-2">How Did You Hear About Us?</label>
-              <input id="heardAboutUs" name="heardAboutUs" type="text" value={formData.heardAboutUs} onChange={handleChange} className="input-standard" placeholder="LinkedIn / Referral / Job board…" />
             </div>
 
             <div className="space-y-4 pt-1">
               {[
                 { key: "workAuthorized", label: "Are you legally authorized to work in the US?" },
                 { key: "requiresSponsorship", label: "Will you now or in the future require visa sponsorship?" },
+                { key: "usPersonExportControl", label: "Are you a U.S. Person for export control purposes? (U.S. citizen, LPR, asylee, or refugee)" },
+                { key: "willingToRelocate", label: "Are you willing to relocate?" },
                 { key: "smsConsent", label: "Do you consent to receive SMS/text messages about your application?" },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
@@ -470,6 +511,27 @@ export default function Profile({ user, userMeta }) {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Security Clearance */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label htmlFor="clearanceStatus" className="caps-label block mb-2">Security Clearance Status</label>
+                <Select
+                  id="clearanceStatus" name="clearanceStatus"
+                  value={formData.clearanceStatus} onChange={handleChange}
+                  options={["None", "Active", "Inactive / Expired", "Eligible"]}
+                />
+              </div>
+              <div>
+                <label htmlFor="clearanceLevel" className="caps-label block mb-2">Clearance Level</label>
+                <Select
+                  id="clearanceLevel" name="clearanceLevel"
+                  value={formData.clearanceLevel} onChange={handleChange}
+                  disabled={formData.clearanceStatus === "None"}
+                  options={["None", "Confidential", "Secret", "Top Secret (TS)", "TS/SCI", "TS/SCI with CI Poly", "TS/SCI with Full Poly", "Other"]}
+                />
+              </div>
             </div>
 
             <div className="pt-2 flex justify-end">

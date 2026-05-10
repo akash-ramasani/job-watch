@@ -1954,15 +1954,43 @@ exports.mapFormFields = onCall(
     const resume = resumeSnap.exists ? resumeSnap.data() : {};
 
     const fullName = user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim();
+
+    // Skills, experience, education from resume for richer Claude context
+    const topSkills = (resume.skills || []).slice(0, 20).join(", ");
+    const topRoles = (resume.roles || resume.experience || []).slice(0, 3)
+      .map(r => `${r.title || r.role || ""} at ${r.company || r.employer || ""} (${r.startDate || ""}–${r.endDate || "present"})`)
+      .filter(s => s.trim() !== "at ()").join("; ");
+    const topEdu = (resume.education || []).slice(0, 2)
+      .map(e => `${e.degree || ""} from ${e.institution || ""} (${e.endDate || ""})`)
+      .filter(s => s.trim() !== "from ()").join("; ");
+
     const userContext = {
       name: fullName,
       firstName: user.firstName || "",
       email: user.email || "",
       phone: user.phone || "",
       linkedin: user.linkedin || "",
+      github: user.github || "",
+      portfolio: user.portfolio || "",
+      pronouns: user.pronouns || "",
+      city: user.city || "",
+      region: user.region || "",
+      country: user.country || "United States",
       address: [user.addressLine1, user.city, user.region, user.postalCode, user.country]
         .filter(Boolean).join(", "),
+      university: user.university || "",
+      currentCompany: resume.roles?.[0]?.company || resume.experience?.[0]?.company || user.currentCompany || "",
+      availability: user.availability || "Immediately",
+      workAuthorized: user.workAuthorized || "Yes",
+      requiresSponsorship: user.requiresSponsorship || "No",
+      willingToRelocate: user.willingToRelocate || "No",
+      clearanceStatus: user.clearanceStatus || "None",
+      namePronunciation: user.namePronunciation || "",
+      currentTitle: resume.roles?.[0]?.title || resume.experience?.[0]?.title || resume.roles?.[0]?.role || "",
       summary: resume.summary || "",
+      skills: topSkills,
+      experience: topRoles,
+      education: topEdu,
     };
 
     const result = {};
@@ -1987,7 +2015,29 @@ exports.mapFormFields = onCall(
 
       const lbl = label.toLowerCase();
 
-      // Name subfields
+      // Legal name — always first + last name
+      if (lbl.includes("legal name") || lbl === "full legal name") {
+        result[id] = userContext.name; continue;
+      }
+
+      // Current / most recent job title
+      if ((lbl.includes("current") || lbl.includes("most recent")) && lbl.includes("title")) {
+        result[id] = userContext.currentTitle; continue;
+      }
+      if (lbl === "job title" || lbl === "current title") {
+        result[id] = userContext.currentTitle; continue;
+      }
+
+      // Name pronunciation
+      if (lbl.includes("name pronunciation") || lbl.includes("pronounce your name")) {
+        result[id] = userContext.namePronunciation; continue;
+      }
+
+      // Programming language — always Python
+      if (lbl.includes("proficient programming language") || lbl.includes("preferred programming language") ||
+          lbl.includes("preferred interview language") || lbl.includes("preferred coding language")) {
+        result[id] = "Python"; continue;
+      }
       if (lbl === "first name" || lbl.startsWith("first name")) {
         result[id] = user.firstName || ""; continue;
       }
@@ -2001,8 +2051,10 @@ exports.mapFormFields = onCall(
 
       // Contact
       if (lbl.includes("linkedin")) { result[id] = userContext.linkedin; continue; }
+      if (lbl.includes("github")) { result[id] = user.github || ""; continue; }
+      if (lbl.includes("website") || lbl.includes("portfolio")) { result[id] = user.portfolio || ""; continue; }
+      if (lbl.includes("pronouns")) { result[id] = user.pronouns || ""; continue; }
       if (lbl.includes("phone")) { result[id] = userContext.phone; continue; }
-      if (lbl.includes("website") || lbl.includes("portfolio")) { result[id] = userContext.linkedin; continue; }
 
       // Address subfields
       if (lbl.includes("address") && lbl.includes("line 1")) { result[id] = user.addressLine1 || ""; continue; }
@@ -2015,16 +2067,74 @@ exports.mapFormFields = onCall(
       // Common yes/no questions with safe deterministic answers
       if (type === "yesno") {
         if (lbl.includes("legally authorized") || lbl.includes("authorized to work")) {
-          result[id] = "yes"; continue;
+          result[id] = user.workAuthorized === "No" ? "no" : "yes"; continue;
+        }
+        if (lbl.includes("sponsorship") || lbl.includes("visa")) {
+          result[id] = user.requiresSponsorship === "Yes" ? "yes" : "no"; continue;
         }
         if (lbl.includes("relative") || lbl.includes("family member") || lbl.includes("currently working for")) {
           result[id] = "no"; continue;
         }
-        if (lbl.includes("agree") || lbl.includes("understand") || lbl.includes("policy") || lbl.includes("confirm")) {
+        if (lbl.includes("agree") || lbl.includes("understand") || lbl.includes("policy") || lbl.includes("confirm") || lbl.includes("acknowledge")) {
           result[id] = "yes"; continue;
         }
-        if (lbl.includes("hybrid") || lbl.includes("in-office") || lbl.includes("in office") || lbl.includes("can you meet")) {
+        if (lbl.includes("hybrid") || lbl.includes("in-office") || lbl.includes("in office") || lbl.includes("can you meet") || lbl.includes("days per week") || lbl.includes("on-site") || lbl.includes("onsite")) {
           result[id] = "yes"; continue;
+        }
+        if (lbl.includes("relocat")) {
+          result[id] = user.willingToRelocate === "Yes" ? "yes" : "no"; continue;
+        }
+        if (lbl.includes("conflict of interest") || lbl.includes("government official") || lbl.includes("previously worked") || lbl.includes("worked at") || lbl.includes("worked for") || lbl.includes("employed by")) {
+          result[id] = "no"; continue;
+        }
+        if (lbl.includes("export control") || lbl.includes("u.s. person") || lbl.includes("us person")) {
+          result[id] = user.usPersonExportControl === "No" ? "no" : "yes"; continue;
+        }
+        if (lbl.includes("sms") || lbl.includes("whatsapp") || lbl.includes("text message")) {
+          result[id] = user.smsConsent === "Yes" ? "yes" : "no"; continue;
+        }
+      }
+
+      // Select fields — deterministic answers
+      if (type === "select") {
+        if (lbl.includes("authorized to work") || lbl.includes("legally authorized")) {
+          result[id] = user.workAuthorized === "No" ? "No" : "Yes"; continue;
+        }
+        if (lbl.includes("sponsorship") || lbl.includes("require sponsorship") || lbl.includes("immigration")) {
+          result[id] = user.requiresSponsorship === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("export control") || lbl.includes("u.s. person") || lbl.includes("deemed export")) {
+          result[id] = user.usPersonExportControl === "No" ? "No" : "Yes"; continue;
+        }
+        if (lbl.includes("relocat")) {
+          result[id] = user.willingToRelocate === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("previously worked") || lbl.includes("worked at") || lbl.includes("employed by") || lbl.includes("worked for") || lbl.includes("history with")) {
+          result[id] = "No"; continue;
+        }
+        if (lbl.includes("conflict of interest") || lbl.includes("government official")) {
+          result[id] = "No"; continue;
+        }
+        if (lbl.includes("preferred office location") || lbl.includes("office location preference") || lbl.includes("office preference")) {
+          result[id] = "__ALL__"; continue;
+        }
+        if (lbl.includes("in office") || lbl.includes("in-office") || lbl.includes("hybrid") || lbl.includes("onsite") || lbl.includes("on-site") || lbl.includes("days per week") || lbl.includes("can you meet") || lbl.includes("confirm you can")) {
+          result[id] = "Yes"; continue;
+        }
+        if (lbl.includes("sms") || lbl.includes("whatsapp") || lbl.includes("text message")) {
+          result[id] = user.smsConsent === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("clearance")) {
+          result[id] = user.clearanceStatus || "None"; continue;
+        }
+        if (lbl.includes("gender") || lbl.includes("pronoun")) {
+          result[id] = user.pronouns || "Decline to self-identify"; continue;
+        }
+        if (lbl.includes("hispanic") || lbl.includes("ethnicity") || lbl.includes("veteran") || lbl.includes("disability")) {
+          result[id] = "Decline to self-identify"; continue;
+        }
+        if (lbl.includes("how did you hear") || lbl.includes("where did you") || lbl.includes("how did you find") || lbl.includes("how did you learn")) {
+          result[id] = "LinkedIn"; continue;
         }
       }
 
@@ -2041,18 +2151,35 @@ exports.mapFormFields = onCall(
 
 Candidate profile:
 - Name: ${userContext.name}
+- Name Pronunciation: ${userContext.namePronunciation}
+- Current Title: ${userContext.currentTitle}
+- Email: ${userContext.email}
+- Phone: ${userContext.phone}
+- Location: ${userContext.city}${userContext.region ? ", " + userContext.region : ""}, ${userContext.country}
+- LinkedIn: ${userContext.linkedin}
+- GitHub: ${userContext.github}
+- Portfolio: ${userContext.portfolio}
+- University: ${userContext.university}
+- Current Company: ${userContext.currentCompany}
+- Availability / Start Date: ${userContext.availability}
+- Work Authorized (US): ${userContext.workAuthorized}
+- Requires Visa Sponsorship: ${userContext.requiresSponsorship}
+- Willing to Relocate: ${userContext.willingToRelocate}
+- Security Clearance: ${userContext.clearanceStatus}
+- Pronouns: ${userContext.pronouns}
 - Summary: ${userContext.summary}
+- Skills: ${userContext.skills}
+- Recent Experience: ${userContext.experience}
+- Education: ${userContext.education}
 
 Rules:
-- For type "yesno" fields: return ONLY "yes" or "no" (lowercase). Use context to decide:
-  - Sponsorship/visa required → "yes"
-  - Relocate/travel willingness → "yes"
-  - Background check agreement → "yes"
-- For "how did you hear about us?" or "where did you find this posting?" → "Online job board"
-- For salary questions → "Open to discussion"
-- For cover letter / additional notes → 2 sentences from candidate summary
-- For unknown text fields → a brief, natural answer
-- Skip fields where you have no basis to answer (omit from JSON)
+- For yes/no or select fields: use the candidate profile above to answer accurately.
+- For "how did you hear about us?" → "LinkedIn"
+- For salary / compensation questions → "Open to discussion"
+- For cover letter / additional notes / essay fields → write 2–3 natural sentences from the candidate's summary and experience above.
+- For "when can you start?" → use availability above.
+- For unknown text fields → a brief, natural answer based on the profile above.
+- Skip fields where you have absolutely no basis to answer (omit from JSON).
 
 Return ONLY a valid JSON object: {"field_id": "answer"} — no explanation, no markdown.
 
@@ -2075,5 +2202,29 @@ ${fieldList}`;
 
     logger.info(`mapFormFields: uid=${uid}, fields=${fields.length}, unknown=${unknownFields.length}`);
     return { ok: true, mappings: result };
+  }
+);
+
+// ── Generate name pronunciation ─────────────────────────────────────────────
+exports.generateNamePronunciation = onRequest(
+  { region: REGION, timeoutSeconds: 15, memory: "128MiB", cors: CORS_ORIGINS },
+  async (req, res) => {
+    if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+    const { name } = req.body || {};
+    if (!name) return res.status(400).json({ error: "name required" });
+    try {
+      const msg = await anthropic.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: 60,
+        messages: [{
+          role: "user",
+          content: `Generate a simple phonetic pronunciation guide for the name "${name}". Return ONLY the pronunciation string, e.g. "Ah-kash Rah-mah-sah-nee". No explanation.`,
+        }],
+      });
+      const pronunciation = msg.content?.[0]?.text?.trim() || name;
+      res.json({ pronunciation });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   }
 );
