@@ -1,8 +1,31 @@
 const $ = (id) => document.getElementById(id);
 
 function showScreen(name) {
-  $("screen-login").style.display  = name === "login"   ? "block" : "none";
-  $("screen-profile").style.display = name === "profile" ? "block" : "none";
+  const login   = $("screen-login");
+  const profile = $("screen-profile");
+  const current = name === "login" ? login : profile;
+  const other   = name === "login" ? profile : login;
+
+  // Exit the current visible screen
+  if (other.classList.contains("active")) {
+    other.classList.add("exit");
+    setTimeout(() => {
+      other.classList.remove("active", "exit");
+      other.style.display = "none";
+    }, 180);
+  } else {
+    other.classList.remove("active");
+    other.style.display = "none";
+  }
+
+  // Enter the new screen after a tiny gap
+  setTimeout(() => {
+    current.style.display = "block";
+    // Force reflow so animation restarts cleanly
+    void current.offsetWidth;
+    current.classList.remove("exit");
+    current.classList.add("active");
+  }, other.classList.contains("active") ? 100 : 0);
 }
 
 function setHeaderSub(text) { $("header-sub").textContent = text; }
@@ -19,44 +42,57 @@ chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
     showScreen("login");
     setHeaderSub("Sign in to auto-apply");
     $("avatar-initials").style.display = "none";
-    setStatusPill("offline");
     document.body.classList.add("loaded");
+    // Poll immediately — if the web app tab is open and user is logged in,
+    // JW_AUTH will fire and we'll auto-transition without any button click.
+    startAuthPolling();
   }
 });
 
-// ── Enterprise Sign-in (web auth flow) ────────────────────────────────────────
-$("btn-login").addEventListener("click", () => {
-  const errEl = $("login-error");
-  errEl.style.display = "none";
+// ── Sign-in: open tab + poll until JW_AUTH syncs tokens ─────────────────────
+let authPoller = null;
 
-  $("btn-login").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
-  $("btn-login").disabled = true;
+function startAuthPolling() {
+  if (authPoller) return;
+  let attempts = 0;
+  const MAX = 40;
 
-  chrome.runtime.sendMessage({ type: "SIGN_IN_WITH_WEB" }, (response) => {
-    $("btn-login").innerHTML = '<svg width="14" height="14" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/><text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text></svg> Sign in with JobWatch';
-    $("btn-login").disabled = false;
+  // Shimmer the button to show active sync state
+  const btn = $("btn-login");
+  if (btn) btn.classList.add("btn-syncing");
 
-    if (!response?.ok) {
-      errEl.textContent = response?.error || "Sign-in was cancelled or failed. Please try again.";
-      errEl.style.display = "block";
-      return;
-    }
-
-    chrome.runtime.sendMessage({ type: "GET_USER" }, (r) => {
-      if (r?.ok) renderProfile(r.userDoc);
+  authPoller = setInterval(() => {
+    attempts++;
+    chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
+      if (response?.ok && response.userDoc) {
+        clearInterval(authPoller);
+        authPoller = null;
+        if (btn) btn.classList.remove("btn-syncing");
+        renderProfile(response.userDoc);
+      } else if (attempts >= MAX) {
+        clearInterval(authPoller);
+        authPoller = null;
+        if (btn) { btn.classList.remove("btn-syncing"); btn.innerHTML = BTN_LABEL; btn.disabled = false; }
+        setHeaderSub("Sign in to auto-apply");
+      }
     });
-  });
+  }, 1500);
+}
+
+const BTN_LABEL = '<svg width="14" height="14" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/><text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text></svg> Sign in with JobWatch';
+const BTN_LOADING = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
+
+$("btn-login").addEventListener("click", () => {
+  // Just open the site — if already logged in, JW_AUTH fires and polling picks it up.
+  // If not logged in, user logs in on the site and polling catches the sync.
+  chrome.tabs.create({ url: "https://jobwatch.akashramasani.com" });
 });
 
 
-// ── Sign out ───────────────────────────────────────────────────────────────────
-$("btn-signout").addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "SIGN_OUT" }, () => {
-    showScreen("login");
-    setHeaderSub("Sign in to auto-apply");
-    $("avatar-initials").style.display = "none";
-    setStatusPill("offline");
-  });
+
+// ── Avatar: click → open JobWatch profile page ────────────────────────────────
+$("avatar-initials").addEventListener("click", () => {
+  chrome.tabs.create({ url: "https://jobwatch.akashramasani.com/profile" });
 });
 
 // ── Render profile ─────────────────────────────────────────────────────────────
@@ -71,10 +107,14 @@ function renderProfile(userDoc) {
   const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
 
 
-  // Avatar initials
+  // Avatar pop-in
   const parts = name.split(" ");
-  $("avatar-initials").textContent = (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
-  $("avatar-initials").style.display = "flex";
+  const av = $("avatar-initials");
+  av.textContent = (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  av.classList.remove("avatar-pop");
+  void av.offsetWidth; // reflow to restart animation
+  av.classList.add("avatar-pop");
+  av.style.display = "flex";
 
 
 
@@ -103,7 +143,29 @@ function renderProfile(userDoc) {
   });
 
   pollAutoApplyStatus();
+  startAuthValidityCheck();
   document.body.classList.add("loaded");
+}
+
+// ── Auth validity check: auto-logout when web app session ends ──────────────
+let authValidityPoller = null;
+
+function startAuthValidityCheck() {
+  if (authValidityPoller) clearInterval(authValidityPoller);
+  authValidityPoller = setInterval(() => {
+    chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
+      if (!response?.ok) {
+        // Tokens gone (JW_LOGOUT was received) — switch back to login
+        clearInterval(authValidityPoller);
+        authValidityPoller = null;
+        if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
+        showScreen("login");
+        setHeaderSub("Sign in to auto-apply");
+        $("avatar-initials").style.display = "none";
+        startAuthPolling();
+      }
+    });
+  }, 10_000); // check every 10 seconds
 }
 
 // ── Auto Apply progress ────────────────────────────────────────────────────────

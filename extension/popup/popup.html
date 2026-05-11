@@ -175,9 +175,61 @@
     /* ── Divider ── */
     .divider { border: none; border-top: 1px solid #f3f4f6; margin: 12px 0; }
 
-    #screen-login, #screen-profile { display: none; }
+    /* ── Screen transitions ── */
+    #screen-login, #screen-profile {
+      display: none;
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    #screen-login.active, #screen-profile.active {
+      display: block;
+      animation: screenIn 0.28s cubic-bezier(0.34, 1.2, 0.64, 1) forwards;
+    }
+    #screen-login.exit, #screen-profile.exit {
+      animation: screenOut 0.18s ease-in forwards;
+    }
 
-    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    /* ── Keyframes ── */
+    @keyframes spin       { from { transform: rotate(0deg); }   to { transform: rotate(360deg); } }
+    @keyframes screenIn   { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes screenOut  { from { opacity: 1; transform: translateY(0); }   to { opacity: 0; transform: translateY(-8px); } }
+    @keyframes avatarPop  { 0% { transform: scale(0) rotate(-15deg); opacity: 0; } 70% { transform: scale(1.12) rotate(3deg); } 100% { transform: scale(1) rotate(0deg); opacity: 1; } }
+    @keyframes slideUp    { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse      { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    @keyframes logoFloat  { 0%, 100% { transform: translateY(0px); } 50% { transform: translateY(-2px); } }
+    @keyframes shimmer    {
+      0%   { background-position: -200% center; }
+      100% { background-position:  200% center; }
+    }
+
+    /* ── Logo float ── */
+    .header svg { animation: logoFloat 3s ease-in-out infinite; }
+
+    /* ── Avatar pop ── */
+    .avatar-pop { animation: avatarPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards !important; }
+
+    /* ── Staggered card entrance ── */
+    .anim-slide { opacity: 0; animation: slideUp 0.35s ease forwards; }
+    .anim-slide:nth-child(1) { animation-delay: 0.05s; }
+    .anim-slide:nth-child(2) { animation-delay: 0.12s; }
+    .anim-slide:nth-child(3) { animation-delay: 0.19s; }
+    .anim-slide:nth-child(4) { animation-delay: 0.26s; }
+
+    /* ── Stat card hover lift ── */
+    .stat-card { transition: transform 0.18s ease, box-shadow 0.18s ease; cursor: default; }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(99,102,241,0.12); }
+
+    /* ── Button press feedback ── */
+    .btn { transition: all 0.2s, transform 0.1s; }
+    .btn:active:not(:disabled) { transform: scale(0.97) !important; }
+
+    /* ── Sync pulse on login button when polling ── */
+    .btn-syncing {
+      background: linear-gradient(135deg, #6366f1, #7c3aed, #6366f1) !important;
+      background-size: 200% auto !important;
+      animation: shimmer 1.8s linear infinite !important;
+    }
+
   </style>
 </head>
 <body>
@@ -191,14 +243,17 @@
       <div class="header-title">JobWatch</div>
       <div class="header-sub" id="header-sub">Loading…</div>
     </div>
-    <div class="avatar" id="avatar-initials" style="width: 30px; height: 30px; font-size: 12px; display: none;">?</div>
+    <div class="avatar" id="avatar-initials" style="width: 30px; height: 30px; font-size: 12px; display: none; cursor: pointer; transition: opacity 0.15s;" title="Open profile" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'">?</div>
   </div>
 
   <!-- Login screen -->
   <div class="body" id="screen-login">
     <div style="text-align:center; padding: 8px 0 20px;">
-      <p style="font-size: 13px; color: #374151; font-weight: 600; margin-bottom: 4px;">Connect your JobWatch account</p>
-      <p style="font-size: 11px; color: #9ca3af; line-height: 1.5;">Opens a secure popup to sign you in.<br>No password is ever stored in the extension.</p>
+      <p style="font-size: 13px; color: #374151; font-weight: 600; margin-bottom: 6px;">Not synced</p>
+      <p style="font-size: 11px; color: #9ca3af; line-height: 1.6;">
+        Log in to <strong style="color:#4f46e5;">jobwatch.akashramasani.com</strong><br>
+        and the extension will sync automatically.
+      </p>
     </div>
     <div class="error-box" id="login-error"></div>
     <button class="btn btn-primary" id="btn-login">
@@ -206,18 +261,17 @@
         <rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/>
         <text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text>
       </svg>
-      Sign in with JobWatch
+      Open JobWatch
     </button>
     <p style="font-size: 10px; color: #d1d5db; text-align: center; margin-top: 10px;">
-      jobwatch.akashramasani.com
+      Will sync as soon as you log in
     </p>
   </div>
 
   <!-- Profile screen -->
   <div class="body" id="screen-profile">
 
-
-    <div class="stats-row">
+    <div class="stats-row anim-slide">
       <div class="stat-card">
         <div class="stat-value" id="stat-applied">—</div>
         <div class="stat-label">Applied</div>
@@ -228,12 +282,12 @@
       </div>
     </div>
 
-    <div class="status-notice" id="status-text">
+    <div class="status-notice anim-slide" id="status-text" style="animation-delay:0.1s">
       <span>ℹ️</span>
       <span>Open a job application page from JobWatch to auto-fill.</span>
     </div>
 
-    <button class="btn btn-apply" id="btn-auto-apply">
+    <button class="btn btn-apply anim-slide" id="btn-auto-apply" style="animation-delay:0.17s">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
       Auto Apply All <span style="opacity:0.65;font-weight:400">(score &gt; 60)</span>
     </button>
@@ -247,10 +301,7 @@
       <div class="progress-job-name" id="progress-jobs"></div>
     </div>
 
-    <hr class="divider">
-
     <button class="btn btn-ghost" id="btn-stop" style="display:none">⏹ Stop</button>
-    <button class="btn btn-ghost" id="btn-signout">Sign Out</button>
   </div>
 
   <script src="popup.js"></script>
