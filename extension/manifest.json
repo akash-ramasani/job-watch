@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Automatically fill and submit job applications from JobWatch.",
 
-  "permissions": ["storage", "tabs", "activeTab", "scripting", "downloads"],
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "downloads", "identity"],
 
   "host_permissions": [
     "*://*/*",
@@ -12,7 +12,8 @@
     "https://firebasestorage.googleapis.com/*",
     "https://identitytoolkit.googleapis.com/*",
     "https://securetoken.googleapis.com/*",
-    "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/*"
+    "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/*",
+    "https://*.chromiumapp.org/*"
   ],
 
   "background": {

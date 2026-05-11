@@ -100,6 +100,93 @@ const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
 
 /**
  * ----------------------------
+ * EXTENSION AUTH FLOW
+ * ----------------------------
+ *
+ * Enterprise pattern:
+ *   1. Web app user (already logged in) hits /extension-auth page.
+ *   2. Page calls createExtensionCode — server creates a 10-second one-time code
+ *      stored in Firestore: extensionAuthCodes/{code} = { uid, expiresAt }.
+ *   3. Page redirects to https://<ext-id>.chromiumapp.org/callback?code=<code>
+ *   4. Extension background intercepts redirect, extracts code.
+ *   5. Extension calls exchangeExtensionCode — server validates + deletes code,
+ *      mints a Firebase Custom Token, returns it.
+ *   6. Extension signs in with signInWithCustomToken → gets its own idToken + refreshToken.
+ *
+ * Security:
+ *   - Codes expire in 10 seconds (server-enforced) and are single-use.
+ *   - Extension never sees the user's password or web session cookie.
+ *   - Custom tokens are short-lived (1 hour) and auto-refreshed.
+ */
+
+exports.createExtensionCode = onRequest(
+  { region: REGION, cors: CORS_ORIGINS },
+  async (req, res) => {
+    try {
+      const decoded = await verifyToken(req);
+      const uid = decoded.uid;
+
+      // Generate a cryptographically random 32-byte hex code
+      const crypto = require("crypto");
+      const code = crypto.randomBytes(32).toString("hex");
+
+      // Store in Firestore — expires in 10 seconds
+      await db.collection("extensionAuthCodes").doc(code).set({
+        uid,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: new Date(Date.now() + 10_000), // 10s TTL
+      });
+
+      res.json({ ok: true, code });
+    } catch (err) {
+      res.status(err.statusCode || 500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+exports.exchangeExtensionCode = onRequest(
+  { region: REGION, cors: true }, // extension calls this — allow any origin
+  async (req, res) => {
+    try {
+      const { code } = req.body;
+      if (!code || typeof code !== "string") {
+        return res.status(400).json({ ok: false, error: "Missing code." });
+      }
+
+      const ref = db.collection("extensionAuthCodes").doc(code);
+      const snap = await ref.get();
+
+      if (!snap.exists) {
+        return res.status(401).json({ ok: false, error: "Invalid or expired code." });
+      }
+
+      const { uid, expiresAt } = snap.data();
+
+      // Delete immediately — one-time use
+      await ref.delete();
+
+      // Validate expiry
+      if (expiresAt.toDate() < new Date()) {
+        return res.status(401).json({ ok: false, error: "Code expired." });
+      }
+
+      // Mint a Firebase Custom Token for the extension
+      const customToken = await admin.auth().createCustomToken(uid, {
+        source: "extension",
+      });
+
+      res.json({ ok: true, customToken });
+    } catch (err) {
+      logger.error("exchangeExtensionCode error:", err);
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+
+
+/**
+ * ----------------------------
  * LOCATION FILTER CONSTANTS
  * ----------------------------
  */

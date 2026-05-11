@@ -13,8 +13,7 @@ body,
 }
 
 body {
-  /* Set Ubuntu as the primary font across the entire app */
-  font-family: 'Ubuntu', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
   @apply bg-white text-gray-900 antialiased;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
@@ -60,7 +59,7 @@ body {
 /* 7. Page Layout: Consistent structure across all authenticated pages */
 .page-wrapper {
   @apply space-y-12 py-6;
-  font-family: 'Ubuntu', sans-serif;
+  font-family: 'Plus Jakarta Sans', sans-serif;
 }
 
 .page-header {

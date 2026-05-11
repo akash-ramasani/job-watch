@@ -1,130 +1,141 @@
 const $ = (id) => document.getElementById(id);
 
 function showScreen(name) {
-  $("screen-login").style.display = name === "login" ? "block" : "none";
+  $("screen-login").style.display  = name === "login"   ? "block" : "none";
   $("screen-profile").style.display = name === "profile" ? "block" : "none";
 }
 
-function setHeaderSub(text) {
-  $("header-sub").textContent = text;
+function setHeaderSub(text) { $("header-sub").textContent = text; }
+
+function setStatusPill(state) {
+  // Pill replaced with dynamic Header Avatar. 
 }
 
-function setDot(color) {
-  $("status-dot").style.background = color;
-}
-
-// ── Boot: check if already logged in ─────────────────────────────────────────
+// ── Boot: check if already logged in ──────────────────────────────────────────
 chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
   if (response?.ok && response.userDoc) {
     renderProfile(response.userDoc);
   } else {
     showScreen("login");
-    setHeaderSub("Open Job Watch to auto-sync");
-    setDot("#9ca3af");
-    // Show a hint that login should happen in the web app
-    const errEl = $("login-error");
-    errEl.textContent = "Tip: Logging into jobwatch.akashramasani.com will automatically sync here.";
-    errEl.style.display = "block";
-    errEl.style.color = "#6366f1";
+    setHeaderSub("Sign in to auto-apply");
+    $("avatar-initials").style.display = "none";
+    setStatusPill("offline");
+    document.body.classList.add("loaded");
   }
 });
 
-// ── Login ─────────────────────────────────────────────────────────────────────
-$("btn-login").addEventListener("click", async () => {
-  const email = $("email").value.trim();
-  const password = $("password").value;
+// ── Enterprise Sign-in (web auth flow) ────────────────────────────────────────
+$("btn-login").addEventListener("click", () => {
   const errEl = $("login-error");
-
   errEl.style.display = "none";
-  if (!email || !password) { errEl.textContent = "Enter your email and password."; errEl.style.display = "block"; return; }
 
-  $("btn-login").textContent = "Signing in…";
+  $("btn-login").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
   $("btn-login").disabled = true;
 
-  chrome.runtime.sendMessage({ type: "SIGN_IN", email, password }, (response) => {
-    $("btn-login").textContent = "Sign In";
+  chrome.runtime.sendMessage({ type: "SIGN_IN_WITH_WEB" }, (response) => {
+    $("btn-login").innerHTML = '<svg width="14" height="14" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/><text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text></svg> Sign in with JobWatch';
     $("btn-login").disabled = false;
 
     if (!response?.ok) {
-      errEl.textContent = response?.error || "Login failed. Check your credentials.";
+      errEl.textContent = response?.error || "Sign-in was cancelled or failed. Please try again.";
       errEl.style.display = "block";
       return;
     }
 
-    // Fetch profile after login
     chrome.runtime.sendMessage({ type: "GET_USER" }, (r) => {
       if (r?.ok) renderProfile(r.userDoc);
     });
   });
 });
 
-$("password").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("btn-login").click();
-});
 
-// ── Sign out ──────────────────────────────────────────────────────────────────
+// ── Sign out ───────────────────────────────────────────────────────────────────
 $("btn-signout").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "SIGN_OUT" }, () => {
     showScreen("login");
-    setHeaderSub("Open Job Watch to auto-sync");
-    setDot("#9ca3af");
-    const errEl = $("login-error");
-    errEl.textContent = "Tip: Logging into jobwatch.akashramasani.com will automatically sync here.";
-    errEl.style.display = "block";
-    errEl.style.color = "#6366f1";
+    setHeaderSub("Sign in to auto-apply");
+    $("avatar-initials").style.display = "none";
+    setStatusPill("offline");
   });
 });
 
-// ── Render profile ────────────────────────────────────────────────────────────
+// ── Render profile ─────────────────────────────────────────────────────────────
 let statusPoller = null;
 
 function renderProfile(userDoc) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
-  setDot("#34d399");
+  setStatusPill("online");
 
-  const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "—";
-  $("profile-name").textContent = name;
-  $("profile-email").textContent = userDoc.email || "—";
+  // Profile info
+  const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
 
-  if (userDoc.resumeUrl) { $("badge-resume").style.display = "inline-flex"; }
-  if (userDoc.linkedin) { $("badge-linkedin").style.display = "inline-flex"; }
-  if (userDoc.phone) { $("badge-phone").style.display = "inline-flex"; }
 
-  // Check if we're on a job application page
+  // Avatar initials
+  const parts = name.split(" ");
+  $("avatar-initials").textContent = (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  $("avatar-initials").style.display = "flex";
+
+
+
+  // Detect Ashby application page
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const url = tabs[0]?.url || "";
+    const noticeEl = $("status-text");
     if (url.includes("ashbyhq.com") && url.includes("/application")) {
-      $("status-text").textContent = "✅ Ashby application detected. The form is being filled automatically.";
+      noticeEl.innerHTML = '<span>🚀</span><span>Ashby application detected! Auto-fill is active.</span>';
+      noticeEl.className = "status-notice detected";
     } else {
-      $("status-text").textContent = "Open a job application page from JobWatch to auto-fill.";
+      noticeEl.innerHTML = '<span>ℹ️</span><span>Open a job application page from JobWatch to auto-fill.</span>';
+      noticeEl.className = "status-notice";
     }
   });
 
-  // Resume polling if a run was already active
+  // Load stats
+  chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
+    if (res?.ok && res.total > 0) {
+      $("stat-applied").textContent = res.done;
+      $("stat-jobs").textContent    = res.total;
+    } else {
+      $("stat-applied").textContent = "0";
+      $("stat-jobs").textContent    = "—";
+    }
+  });
+
   pollAutoApplyStatus();
+  document.body.classList.add("loaded");
 }
 
-// ── Auto Apply ────────────────────────────────────────────────────────────────
+// ── Auto Apply progress ────────────────────────────────────────────────────────
 function setProgressUI(active, done, total) {
   const wrap = $("progress-wrap");
   const btn  = $("btn-auto-apply");
+  const stop = $("btn-stop");
+
   if (active && total > 0) {
     wrap.style.display = "block";
+    stop.style.display = "flex";
     btn.disabled = true;
-    btn.textContent = "⚡ Running…";
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Running…';
     const pct = Math.round((done / total) * 100);
-    $("progress-fill").style.width = pct + "%";
+    $("progress-fill").style.width  = pct + "%";
     $("progress-count").textContent = `${done} / ${total}`;
-    $("progress-jobs").textContent = done < total ? `Applying to job ${done + 1} of ${total}…` : "✅ All done!";
+    $("progress-label").textContent = "Applying…";
+    $("progress-jobs").textContent  = done < total ? `Working on job ${done + 1} of ${total}` : "✅ All done!";
+    $("stat-applied").textContent   = done;
+    $("stat-jobs").textContent      = total;
   } else {
-    wrap.style.display = total > 0 ? "block" : "none";
+    stop.style.display = "none";
     btn.disabled = false;
-    btn.textContent = "⚡ Auto Apply All (score > 60)";
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 60)</span>';
     if (total > 0) {
-      $("progress-fill").style.width = "100%";
+      wrap.style.display = "block";
+      $("progress-fill").style.width  = "100%";
       $("progress-count").textContent = `${done} / ${total}`;
-      $("progress-jobs").textContent = `✅ Applied to ${done} job${done !== 1 ? "s" : ""}`;
+      $("progress-label").textContent = "Completed";
+      $("progress-jobs").textContent  = `✅ Applied to ${done} job${done !== 1 ? "s" : ""}`;
+      $("stat-applied").textContent   = done;
+      $("stat-jobs").textContent      = total;
     }
   }
 }
@@ -145,14 +156,15 @@ function pollAutoApplyStatus() {
 
 $("btn-auto-apply").addEventListener("click", () => {
   $("btn-auto-apply").disabled = true;
-  $("btn-auto-apply").textContent = "⚡ Starting…";
+  $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Starting…';
   chrome.runtime.sendMessage({ type: "START_AUTO_APPLY" }, (res) => {
     if (!res?.ok || res.total === 0) {
       $("btn-auto-apply").disabled = false;
-      $("btn-auto-apply").textContent = "⚡ Auto Apply All (score > 60)";
-      $("status-text").textContent = res?.total === 0
-        ? "No eligible Ashby jobs found (score > 60, not yet applied)."
-        : "Failed to start. Please try again.";
+      $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 60)</span>';
+      const noticeEl = $("status-text");
+      noticeEl.innerHTML = res?.total === 0
+        ? '<span>⚠️</span><span>No eligible Ashby jobs found (score &gt; 60, not yet applied).</span>'
+        : '<span>❌</span><span>Failed to start. Please try again.</span>';
       return;
     }
     setProgressUI(true, 0, res.total);
@@ -169,4 +181,7 @@ $("btn-stop").addEventListener("click", () => {
   });
 });
 
-
+// ── CSS keyframe for spinner ───────────────────────────────────────────────────
+const style = document.createElement("style");
+style.textContent = `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
+document.head.appendChild(style);

@@ -17,6 +17,7 @@ import Jobs from "./pages/Jobs.jsx";
 import Feeds from "./pages/Feeds.jsx";
 import Profile from "./pages/Profile.jsx";
 import FetchHistory from "./pages/FetchHistory.jsx";
+import ExtensionAuth from "./pages/ExtensionAuth.jsx";
 import Footer from "./components/Footer.jsx";
 import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
 
@@ -109,6 +110,7 @@ export default function App() {
     if (!user) {
       return (
         <Routes location={location} key={location.pathname}>
+          <Route path="/extension-auth" element={<ExtensionAuth />} />
           <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
@@ -120,6 +122,7 @@ export default function App() {
 
     return (
       <Routes location={location} key={location.pathname}>
+        <Route path="/extension-auth" element={<ExtensionAuth />} />
         <Route path="/" element={<Home user={user} userMeta={userMeta} />} />
         <Route
           path="/feeds"

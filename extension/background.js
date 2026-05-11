@@ -516,28 +516,84 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 10. Popup: sign in ────────────────────────────────────────────────
-      if (message.type === "SIGN_IN") {
-        const { email, password } = message;
-        const res = await fetch(
-          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+      // ── 10. Popup: enterprise sign in via web app ─────────────────────────
+      if (message.type === "SIGN_IN_WITH_WEB") {
+        // Build the extension-auth URL with our chromiumapp.org redirect
+        const extId = chrome.runtime.id;
+        const redirectUri = `https://${extId}.chromiumapp.org/callback`;
+        const authUrl =
+          `https://jobwatch.akashramasani.com/extension-auth` +
+          `?redirect_uri=${encodeURIComponent(redirectUri)}`;
+
+        let callbackUrl;
+        try {
+          callbackUrl = await new Promise((resolve, reject) => {
+            chrome.identity.launchWebAuthFlow(
+              { url: authUrl, interactive: true },
+              (redirectUrl) => {
+                if (chrome.runtime.lastError) {
+                  return reject(new Error(chrome.runtime.lastError.message));
+                }
+                resolve(redirectUrl);
+              }
+            );
+          });
+        } catch (err) {
+          // User closed the window
+          sendResponse({ ok: false, error: err.message });
+          return;
+        }
+
+        // Extract one-time code from redirect URL
+        const url = new URL(callbackUrl);
+        const code = url.searchParams.get("code");
+        if (!code) {
+          sendResponse({ ok: false, error: "No code returned from auth flow." });
+          return;
+        }
+
+        // Exchange code for Firebase Custom Token
+        const exchangeRes = await fetch(
+          `${FUNCTIONS_BASE}/exchangeExtensionCode`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password, returnSecureToken: true }),
+            body: JSON.stringify({ code }),
           }
         );
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Login failed.");
+        const exchangeData = await exchangeRes.json();
+        if (!exchangeData.ok) {
+          throw new Error(exchangeData.error || "Code exchange failed.");
+        }
+
+        // Sign in with Custom Token → Firebase REST API
+        const signInRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${apiKey}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              token: exchangeData.customToken,
+              returnSecureToken: true,
+            }),
+          }
+        );
+        const signInData = await signInRes.json();
+        if (!signInRes.ok) {
+          throw new Error(signInData.error?.message || "Custom token sign-in failed.");
+        }
+
         await saveAuth({
-          idToken: data.idToken,
-          refreshToken: data.refreshToken,
-          uid: data.localId,
-          expiresIn: data.expiresIn,
+          idToken: signInData.idToken,
+          refreshToken: signInData.refreshToken,
+          uid: signInData.localId,
+          expiresIn: signInData.expiresIn,
         });
-        sendResponse({ ok: true, uid: data.localId, email: data.email });
+
+        sendResponse({ ok: true, uid: signInData.localId });
         return;
       }
+
 
       // ── 11. Popup: get current user ───────────────────────────────────────
       if (message.type === "GET_USER") {

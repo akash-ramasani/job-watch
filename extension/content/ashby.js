@@ -347,23 +347,93 @@
   }
 
   // ─── Overlay UI ──────────────────────────────────────────────────────────
-  function showOverlay(text, color = "#4f46e5") {
+  // ─── Premium Toast Notification ──────────────────────────────────────────
+  const TOAST_ICONS = {
+    "⏳": "⏳", "✍️": "✍️", "🔍": "🔍", "🤖": "🤖",
+    "🚀": "🚀", "🔄": "🔄", "✅": "✅", "⚠️": "⚠️", "❌": "❌"
+  };
+
+  function showOverlay(text, type = "info") {
+    // Inject styles once
+    if (!document.getElementById("jw-toast-styles")) {
+      const s = document.createElement("style");
+      s.id = "jw-toast-styles";
+      s.textContent = `
+        #jw-overlay {
+          position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
+          display: flex; align-items: center; gap: 10px;
+          padding: 12px 16px; border-radius: 14px; max-width: 340px;
+          font-family: 'Inter', system-ui, sans-serif; font-size: 13px; font-weight: 500;
+          color: #f1f5f9; line-height: 1.4;
+          background: rgba(15, 15, 26, 0.85);
+          backdrop-filter: blur(20px) saturate(180%);
+          -webkit-backdrop-filter: blur(20px) saturate(180%);
+          border: 1px solid rgba(255,255,255,0.08);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+          transform: translateY(12px); opacity: 0;
+          transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease, border-color 0.3s;
+          will-change: transform, opacity;
+        }
+        #jw-overlay.jw-visible { transform: translateY(0); opacity: 1; }
+        #jw-overlay.jw-hiding  { transform: translateY(8px); opacity: 0; }
+        #jw-overlay-bar {
+          position: absolute; bottom: 0; left: 0; height: 3px;
+          border-radius: 0 0 14px 14px; transition: width 0.4s ease;
+        }
+        #jw-overlay-icon { font-size: 18px; flex-shrink: 0; line-height: 1; }
+        #jw-overlay-text { flex: 1; }
+      `;
+      document.head.appendChild(s);
+    }
+
+    const COLORS = {
+      info:    { border: "rgba(99,102,241,0.35)",  bar: "linear-gradient(90deg,#4f46e5,#7c3aed)" },
+      success: { border: "rgba(16,185,129,0.35)",  bar: "linear-gradient(90deg,#10b981,#34d399)" },
+      warning: { border: "rgba(245,158,11,0.35)",  bar: "linear-gradient(90deg,#f59e0b,#fbbf24)" },
+      error:   { border: "rgba(239,68,68,0.35)",   bar: "linear-gradient(90deg,#ef4444,#f87171)" },
+      ai:      { border: "rgba(124,58,237,0.35)",  bar: "linear-gradient(90deg,#7c3aed,#a855f7)" },
+    };
+
+    // Detect type from emoji prefix if type not explicitly set
+    if (type === "info") {
+      if (text.startsWith("✅")) type = "success";
+      else if (text.startsWith("⚠️")) type = "warning";
+      else if (text.startsWith("❌")) type = "error";
+      else if (text.startsWith("🤖") || text.startsWith("🔄")) type = "ai";
+    }
+
+    const colors = COLORS[type] || COLORS.info;
+
+    // Extract icon (first emoji char cluster)
+    const iconMatch = text.match(/^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})\s*/u);
+    const icon = iconMatch ? iconMatch[0].trim() : "🔹";
+    const message = iconMatch ? text.slice(iconMatch[0].length).trim() : text;
+
     let el = document.getElementById("jw-overlay");
     if (!el) {
-      el = Object.assign(document.createElement("div"), { id: "jw-overlay" });
-      el.style.cssText = [
-        "position:fixed", "bottom:24px", "right:24px", "z-index:99999",
-        "color:white", "font-family:system-ui,sans-serif", "font-size:13px",
-        "font-weight:600", "padding:12px 18px", "border-radius:12px",
-        "box-shadow:0 8px 32px rgba(0,0,0,0.2)", "display:flex",
-        "align-items:center", "gap:8px", "max-width:320px", "transition:background 0.3s",
-      ].join(";");
+      el = document.createElement("div");
+      el.id = "jw-overlay";
+      el.innerHTML = `<div id="jw-overlay-icon"></div><div id="jw-overlay-text"></div><div id="jw-overlay-bar"></div>`;
       document.body.appendChild(el);
+      requestAnimationFrame(() => el.classList.add("jw-visible"));
     }
-    el.style.background = color;
-    el.textContent = text;
+
+    el.classList.remove("jw-hiding");
+    requestAnimationFrame(() => el.classList.add("jw-visible"));
+    el.style.borderColor = colors.border;
+    el.querySelector("#jw-overlay-icon").textContent = icon;
+    el.querySelector("#jw-overlay-text").textContent = message;
+    el.querySelector("#jw-overlay-bar").style.background = colors.bar;
+    el.querySelector("#jw-overlay-bar").style.width = "100%";
   }
-  function removeOverlay() { document.getElementById("jw-overlay")?.remove(); }
+
+  function removeOverlay() {
+    const el = document.getElementById("jw-overlay");
+    if (!el) return;
+    el.classList.remove("jw-visible");
+    el.classList.add("jw-hiding");
+    setTimeout(() => el.remove(), 350);
+  }
 
   // ─── Send message to background (promisified) ─────────────────────────────
   function sendMsg(payload) {

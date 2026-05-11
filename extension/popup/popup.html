@@ -4,155 +4,253 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>JobWatch Auto Apply</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,500;1,700&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      width: 320px;
-      font-family: system-ui, -apple-system, sans-serif;
-      background: #fff;
+      width: 340px;
+      font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+      background: #ffffff;
       color: #111827;
+      -webkit-font-smoothing: antialiased;
+      opacity: 0;
+      transition: opacity 0.25s ease-out;
     }
+    body.loaded { opacity: 1; }
 
     /* ── Header ── */
     .header {
-      background: linear-gradient(135deg, #4f46e5, #6366f1);
-      padding: 16px 20px;
-      color: white;
-      display: flex;
-      align-items: center;
-      gap: 10px;
+      padding: 14px 18px;
+      border-bottom: 1px solid #f3f4f6;
+      background: #fff;
+      display: flex; align-items: center; gap: 12px;
     }
-    .header-logo { width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; border: 2px solid rgba(255,255,255,0.25); overflow: hidden; }
-    .header-title { font-size: 13px; font-weight: 800; letter-spacing: 0.15em; text-transform: uppercase; }
-    .header-sub { font-size: 10px; opacity: 0.7; margin-top: 1px; }
+    .logo-wrap {
+      width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 12px rgba(79,70,229,0.3);
+    }
+    .logo-wrap svg { width: 20px; height: 20px; }
+    .header-text { flex: 1; }
+    .header-title { font-size: 13px; font-weight: 700; color: #111827; letter-spacing: 0.01em; }
+    .header-sub   { font-size: 10px; color: #9ca3af; margin-top: 1px; }
+    .status-pill {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 10px; font-weight: 600; padding: 3px 9px;
+      border-radius: 999px; background: #f3f4f6; color: #6b7280;
+      border: 1px solid #e5e7eb; transition: all 0.3s;
+    }
+    .status-pill .dot {
+      width: 6px; height: 6px; border-radius: 50%; background: #d1d5db;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .status-pill.active { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
+    .status-pill.active .dot { background: #10b981; box-shadow: 0 0 5px #10b981; }
 
     /* ── Body ── */
-    .body { padding: 20px; }
+    .body { padding: 16px 18px; }
 
-    /* ── Auth form ── */
-    .field { margin-bottom: 14px; }
-    .field label { display: block; font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #6b7280; margin-bottom: 6px; }
-    .field input {
-      width: 100%; padding: 9px 12px; border: 1px solid #e5e7eb;
-      border-radius: 8px; font-size: 13px; outline: none; transition: border-color 0.15s;
+    /* ── Login ── */
+    .hint-box {
+      background: #eef2ff; border: 1px solid #c7d2fe;
+      border-radius: 10px; padding: 11px 13px; margin-bottom: 14px;
+      display: flex; gap: 9px; align-items: flex-start;
     }
+    .hint-box .hint-icon { font-size: 15px; flex-shrink: 0; margin-top: 1px; }
+    .hint-box p { font-size: 11px; color: #4338ca; line-height: 1.5; }
+
+    .error-box {
+      background: #fef2f2; border: 1px solid #fecaca;
+      border-radius: 10px; padding: 10px 13px; margin-bottom: 12px;
+      font-size: 11px; color: #dc2626; display: none;
+    }
+
+    .field { margin-bottom: 12px; }
+    .field label {
+      display: block; font-size: 10px; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase;
+      color: #6b7280; margin-bottom: 5px;
+    }
+    .field input {
+      width: 100%; padding: 9px 12px;
+      background: #fff; border: 1px solid #e5e7eb;
+      border-radius: 8px; font-size: 13px; color: #111827;
+      outline: none; transition: all 0.2s; font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .field input::placeholder { color: #d1d5db; }
     .field input:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 
     /* ── Buttons ── */
     .btn {
-      width: 100%; padding: 10px 16px; border-radius: 10px;
-      font-size: 12px; font-weight: 800; letter-spacing: 0.05em;
-      text-transform: uppercase; cursor: pointer; border: none;
-      transition: all 0.15s; display: flex; align-items: center; justify-content: center; gap-6px;
+      width: 100%; padding: 10px 16px; border-radius: 9px;
+      font-size: 12px; font-weight: 700; letter-spacing: 0.03em;
+      cursor: pointer; border: none; display: flex;
+      align-items: center; justify-content: center; gap: 7px;
+      transition: all 0.2s; font-family: 'Plus Jakarta Sans', sans-serif;
     }
-    .btn-primary { background: #4f46e5; color: white; }
-    .btn-primary:hover:not(:disabled) { background: #4338ca; }
-    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btn-secondary {
-      background: #f9fafb; color: #6b7280; border: 1px solid #e5e7eb;
-      margin-top: 8px;
+    .btn-primary {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      color: white; box-shadow: 0 4px 14px rgba(79,70,229,0.25);
     }
-    .btn-secondary:hover { background: #f3f4f6; color: #374151; }
-    .error {
-      background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
-      padding: 10px 12px; font-size: 12px; color: #dc2626;
-      margin-bottom: 14px; display: none;
+    .btn-primary:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(79,70,229,0.35); }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-ghost {
+      background: #f9fafb; color: #6b7280; font-size: 11px;
+      border: 1px solid #e5e7eb; margin-top: 8px;
     }
+    .btn-ghost:hover { background: #f3f4f6; color: #374151; }
 
     /* ── Profile card ── */
     .profile-card {
-      background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px;
-      padding: 14px 16px; margin-bottom: 16px;
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 12px; padding: 13px 14px; margin-bottom: 12px;
+      display: flex; align-items: center; gap: 11px;
     }
-    .profile-name { font-size: 14px; font-weight: 700; color: #111827; }
-    .profile-email { font-size: 11px; color: #6b7280; margin-top: 2px; }
-    .profile-meta { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .avatar {
+      width: 40px; height: 40px; border-radius: 50%; flex-shrink: 0;
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 700; color: white;
+    }
+    .profile-info { flex: 1; min-width: 0; }
+    .profile-name  { font-size: 13px; font-weight: 700; color: #111827; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .profile-email { font-size: 11px; color: #9ca3af; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .profile-badges { display: flex; gap: 5px; margin-top: 7px; flex-wrap: wrap; }
     .badge {
-      font-size: 10px; font-weight: 700; padding: 2px 8px;
-      border-radius: 999px; background: #ede9fe; color: #5b21b6;
+      font-size: 9px; font-weight: 700; padding: 2px 8px;
+      border-radius: 999px; letter-spacing: 0.04em; text-transform: uppercase;
     }
-    .badge.green { background: #d1fae5; color: #065f46; }
-    .badge.gray { background: #f3f4f6; color: #6b7280; }
+    .badge-indigo { background: #ede9fe; color: #5b21b6; }
+    .badge-green  { background: #d1fae5; color: #065f46; }
+    .badge-gray   { background: #f3f4f6; color: #6b7280; }
 
-    /* ── Status ── */
-    .status {
-      font-size: 11px; color: #6b7280; text-align: center;
-      padding: 8px 0; border-top: 1px solid #f3f4f6; margin-top: 4px;
+    /* ── Stats ── */
+    .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+    .stat-card {
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 10px; padding: 10px 12px;
     }
+    .stat-value { font-size: 20px; font-weight: 700; color: #111827; line-height: 1; }
+    .stat-label { font-size: 10px; color: #9ca3af; margin-top: 3px; font-weight: 500; }
 
-    /* ── Auto Apply ── */
-    .auto-apply { margin-top: 12px; }
-    .btn-auto { background: linear-gradient(135deg, #4f46e5, #6366f1); color: white; gap: 6px; }
-    .btn-auto:hover:not(:disabled) { background: linear-gradient(135deg, #4338ca, #4f46e5); }
-    .btn-auto:disabled { opacity: 0.5; cursor: not-allowed; }
-    .progress-wrap { margin-top: 12px; display: none; }
-    .progress-label { font-size: 11px; color: #6b7280; margin-bottom: 6px; display: flex; justify-content: space-between; }
-    .progress-track { height: 6px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
-    .progress-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #6366f1); border-radius: 999px; transition: width 0.4s ease; width: 0%; }
-    .progress-jobs { font-size: 10px; color: #9ca3af; text-align: center; margin-top: 5px; }
+    /* ── Status notice ── */
+    .status-notice {
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;
+      font-size: 11px; color: #6b7280; line-height: 1.5;
+      display: flex; align-items: flex-start; gap: 8px;
+    }
+    .status-notice.detected { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+
+    /* ── Apply button ── */
+    .btn-apply {
+      background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      color: white; padding: 11px 16px;
+      box-shadow: 0 4px 14px rgba(79,70,229,0.25);
+    }
+    .btn-apply:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(79,70,229,0.35); }
+    .btn-apply:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Progress ── */
+    .progress-wrap {
+      margin-top: 10px; background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 10px; padding: 12px; display: none;
+    }
+    .progress-header { display: flex; justify-content: space-between; margin-bottom: 7px; }
+    .progress-header span { font-size: 11px; color: #9ca3af; }
+    .progress-header strong { font-size: 11px; color: #374151; font-weight: 700; }
+    .progress-track { height: 5px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
+    .progress-fill {
+      height: 100%; border-radius: 999px; transition: width 0.5s ease;
+      width: 0%; background: linear-gradient(90deg, #4f46e5, #7c3aed);
+    }
+    .progress-job-name { font-size: 10px; color: #9ca3af; margin-top: 7px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Divider ── */
+    .divider { border: none; border-top: 1px solid #f3f4f6; margin: 12px 0; }
 
     #screen-login, #screen-profile { display: none; }
+
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+  <!-- Header -->
   <div class="header">
-    <div class="header-logo">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-        <rect width="32" height="32" rx="7" fill="#4f46e5"/>
-        <text x="16" y="23" font-family="Ubuntu,Arial,sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">J</text>
-      </svg>
-    </div>
-    <div style="flex:1">
-      <div class="header-title">JobWatch Auto Apply</div>
+    <svg width="36" height="36" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(79,70,229,0.25);">
+      <rect width="32" height="32" rx="7" fill="#4f46e5"/>
+      <text x="16" y="23" font-family="Ubuntu,Arial,sans-serif" font-size="20" font-weight="700" fill="white" text-anchor="middle">J</text>
+    </svg>
+    <div class="header-text">
+      <div class="header-title">JobWatch</div>
       <div class="header-sub" id="header-sub">Loading…</div>
     </div>
-    <div id="status-dot" style="width:8px;height:8px;border-radius:50%;background:#9ca3af;flex-shrink:0;"></div>
+    <div class="avatar" id="avatar-initials" style="width: 30px; height: 30px; font-size: 12px; display: none;">?</div>
   </div>
 
   <!-- Login screen -->
   <div class="body" id="screen-login">
-    <div class="error" id="login-error"></div>
-    <div class="field">
-      <label>Email</label>
-      <input type="email" id="email" placeholder="you@example.com" autocomplete="email" />
+    <div style="text-align:center; padding: 8px 0 20px;">
+      <p style="font-size: 13px; color: #374151; font-weight: 600; margin-bottom: 4px;">Connect your JobWatch account</p>
+      <p style="font-size: 11px; color: #9ca3af; line-height: 1.5;">Opens a secure popup to sign you in.<br>No password is ever stored in the extension.</p>
     </div>
-    <div class="field">
-      <label>Password</label>
-      <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
-    </div>
-    <button class="btn btn-primary" id="btn-login">Sign In</button>
+    <div class="error-box" id="login-error"></div>
+    <button class="btn btn-primary" id="btn-login">
+      <svg width="14" height="14" viewBox="0 0 32 32" fill="none">
+        <rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/>
+        <text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text>
+      </svg>
+      Sign in with JobWatch
+    </button>
+    <p style="font-size: 10px; color: #d1d5db; text-align: center; margin-top: 10px;">
+      jobwatch.akashramasani.com
+    </p>
   </div>
 
   <!-- Profile screen -->
   <div class="body" id="screen-profile">
-    <div class="profile-card">
-      <div class="profile-name" id="profile-name">—</div>
-      <div class="profile-email" id="profile-email">—</div>
-      <div class="profile-meta">
-        <span class="badge green" id="badge-resume" style="display:none">✓ Resume</span>
-        <span class="badge" id="badge-linkedin" style="display:none">LinkedIn</span>
-        <span class="badge gray" id="badge-phone" style="display:none">Phone</span>
+
+
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-value" id="stat-applied">—</div>
+        <div class="stat-label">Applied</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="stat-jobs">—</div>
+        <div class="stat-label">Eligible Jobs</div>
       </div>
     </div>
 
-    <div class="status" id="status-text">Open a job application page to auto-fill.</div>
-
-    <!-- Auto Apply -->
-    <div class="auto-apply">
-      <button class="btn btn-auto" id="btn-auto-apply">⚡ Auto Apply All (score &gt; 60)</button>
-      <div class="progress-wrap" id="progress-wrap">
-        <div class="progress-label">
-          <span>Applying…</span>
-          <span id="progress-count">0 / 0</span>
-        </div>
-        <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-        <div class="progress-jobs" id="progress-jobs"></div>
-        <button class="btn btn-secondary" id="btn-stop" style="margin-top:10px">⏹ Stop</button>
-      </div>
-
-      <button class="btn btn-secondary" id="btn-signout" style="margin-top:12px">Sign Out</button>
+    <div class="status-notice" id="status-text">
+      <span>ℹ️</span>
+      <span>Open a job application page from JobWatch to auto-fill.</span>
     </div>
+
+    <button class="btn btn-apply" id="btn-auto-apply">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      Auto Apply All <span style="opacity:0.65;font-weight:400">(score &gt; 60)</span>
+    </button>
+
+    <div class="progress-wrap" id="progress-wrap">
+      <div class="progress-header">
+        <span id="progress-label">Applying…</span>
+        <strong id="progress-count">0 / 0</strong>
+      </div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div class="progress-job-name" id="progress-jobs"></div>
+    </div>
+
+    <hr class="divider">
+
+    <button class="btn btn-ghost" id="btn-stop" style="display:none">⏹ Stop</button>
+    <button class="btn btn-ghost" id="btn-signout">Sign Out</button>
   </div>
 
   <script src="popup.js"></script>
