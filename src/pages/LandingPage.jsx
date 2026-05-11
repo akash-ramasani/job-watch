@@ -282,7 +282,7 @@ function MagneticButton({ children, className = "" }) {
 
 export default function LandingPage() {
   return (
-    <div style={{ fontFamily: "Ubuntu, sans-serif" }}>
+    <div>
 
       {/* ═══ PUBLIC NAVBAR ═══ */}
       <nav className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md">

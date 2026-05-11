@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* ── Design System Font ── */
+/* Registers Plus Jakarta Sans as the Tailwind v4 default sans font.     */
+/* This overrides Preflight's reset and applies the font to every element */
+/* that inherits from body — all pages, components, inputs, buttons.      */
+@theme {
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
 :root {
   color-scheme: light;
 }
@@ -13,7 +21,7 @@ body,
 }
 
 body {
-  font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   @apply bg-white text-gray-900 antialiased;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
