@@ -304,25 +304,97 @@
     showOverlay("🔍 JobWatch: Verifying fields…");
     await new Promise(r => setTimeout(r, 500));
 
-    // Pre-submit validation: abort if any required text/file fields are still empty
-    const missingFields = [];
-    for (const field of fields) {
-      if (!field.required) continue;
-      const entry = form.querySelector(`[data-field-path="${CSS.escape(field.id)}"]`);
-      if (!entry) continue;
+    // ── Scan for required text/file fields that are still empty ───────────
+    function scanMissing() {
+      const stuck = [];    // Had a value but React state didn't accept it → retry harder
+      const unknown = [];  // No value from AI → ask AI again
+      const filesMissing = []; // File inputs still empty (AI can't help)
 
-      if (field.type === "file") {
-        const fi = entry.querySelector("input[type=file]");
-        if (fi && (!fi.files || fi.files.length === 0)) missingFields.push(field.label);
-      } else if (!["yesno", "radio", "location"].includes(field.type)) {
-        const input = entry.querySelector("input:not([type=file]):not([type=radio]):not([role=combobox]), textarea");
-        if (input && !input.value?.trim()) missingFields.push(field.label);
+      for (const field of fields) {
+        if (!field.required) continue;
+        const entry = form.querySelector(`[data-field-path="${CSS.escape(field.id)}"]`);
+        if (!entry) continue;
+
+        if (field.type === "file") {
+          const fi = entry.querySelector("input[type=file]");
+          if (fi && (!fi.files || fi.files.length === 0))
+            filesMissing.push({ ...field, entry });
+        } else if (!["yesno", "radio", "location"].includes(field.type)) {
+          const input = entry.querySelector("input:not([type=file]):not([type=radio]):not([role=combobox]), textarea");
+          if (!input || input.value?.trim()) continue;
+
+          const hadMapping = mappings[field.id] && String(mappings[field.id]).trim();
+          const isSystemField = field.id === "_systemfield_name" || field.id === "_systemfield_email";
+          if (hadMapping || isSystemField) stuck.push({ ...field, entry, input });
+          else unknown.push({ ...field, entry, input });
+        }
       }
+      return { stuck, unknown, filesMissing };
     }
-    if (missingFields.length > 0) {
-      showOverlay(`⚠️ ${missingFields.length} required field(s) not filled — please fill manually and submit.`, "#f59e0b");
-      console.warn("[JobWatch] Missing required fields:", missingFields);
-      return;
+
+    const firstCheck = scanMissing();
+    const totalMissing = firstCheck.stuck.length + firstCheck.unknown.length + firstCheck.filesMissing.length;
+
+    if (totalMissing > 0) {
+      showOverlay(`🤖 AI re-attempting ${totalMissing} missing field(s)…`);
+      await new Promise(r => setTimeout(r, 400));
+
+      // 1. Re-apply values that AI had but didn't stick (React controlled input issue)
+      for (const field of firstCheck.stuck) {
+        const value = field.id === "_systemfield_name"
+          ? (userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim())
+          : field.id === "_systemfield_email"
+          ? userDoc.email
+          : mappings[field.id] || "";
+        if (value && String(value).trim()) {
+          field.input.focus();
+          setInputValue(field.input, String(value).trim());
+          field.input.dispatchEvent(new Event("blur", { bubbles: true }));
+          await new Promise(r => setTimeout(r, 300));
+        }
+      }
+
+      // 2. For truly unknown fields, ask AI again with just those fields
+      if (firstCheck.unknown.length > 0) {
+        showOverlay(`🤖 Asking AI about ${firstCheck.unknown.length} unanswered field(s)…`);
+        try {
+          const retryData = await new Promise((resolve, reject) => {
+            chrome.runtime.sendMessage(
+              { type: "GET_FILL_DATA", fields: firstCheck.unknown },
+              (response) => {
+                if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+                if (!response?.ok) return reject(new Error(response?.error || "AI retry failed"));
+                resolve(response);
+              }
+            );
+          });
+          for (const field of firstCheck.unknown) {
+            const value = retryData.mappings?.[field.id];
+            if (value && String(value).trim()) {
+              field.input.focus();
+              setInputValue(field.input, String(value).trim());
+              field.input.dispatchEvent(new Event("blur", { bubbles: true }));
+              await new Promise(r => setTimeout(r, 300));
+            }
+          }
+        } catch (retryErr) {
+          console.warn("[JobWatch] AI retry error:", retryErr.message);
+        }
+      }
+
+      // 3. Final check — after retry, see what's still empty
+      await new Promise(r => setTimeout(r, 400));
+      const finalCheck = scanMissing();
+      const stillMissing = [
+        ...finalCheck.stuck.map(f => f.label),
+        ...finalCheck.unknown.map(f => f.label),
+        ...finalCheck.filesMissing.map(f => f.label),
+      ];
+      if (stillMissing.length > 0) {
+        showOverlay(`⚠️ Please complete manually: ${stillMissing.join(", ")}`, "#f59e0b");
+        console.warn("[JobWatch] Fields still missing after AI retry:", stillMissing);
+        return;
+      }
     }
 
     showOverlay("🚀 JobWatch: Submitting…");
