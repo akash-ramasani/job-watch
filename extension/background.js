@@ -170,14 +170,14 @@ async function fsSet(path, data, idToken) {
 
 // ─── Cloud Function call ──────────────────────────────────────────────────────
 
-async function callMapFormFields(fields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken) {
+async function callMapFormFields(fields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken, errorContext) {
   const res = await fetch(`${FUNCTIONS_BASE}/mapFormFields`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${idToken}`,
     },
-    body: JSON.stringify({ data: { fields, jobTitle, companyName, jobLocationName, jobWorkplaceType } }),
+    body: JSON.stringify({ data: { fields, jobTitle, companyName, jobLocationName, jobWorkplaceType, errorContext: errorContext || null } }),
   });
   const json = await res.json();
   if (!res.ok || json.error) throw new Error(json.error?.message || "mapFormFields failed");
@@ -275,12 +275,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const companyName = pendingJob?.companyName || "";
         const jobLocationName = pendingJob?.locationName || "";
         const jobWorkplaceType = pendingJob?.workplaceType || "";
+        const errorContext = message.errorContext || null; // validation errors from previous submit attempt
 
         // If auth is broken, AI may also fail — return empty mappings so at
         // least the profile fields (name, email) can still be filled from cache.
         let mappings = {};
         try {
-          mappings = await callMapFormFields(formFields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken);
+          mappings = await callMapFormFields(formFields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken, errorContext);
         } catch (aiErr) {
           console.warn("[JobWatch] mapFormFields failed (will fill from profile only):", aiErr.message);
         }
@@ -296,23 +297,104 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // ── 3. Ashby content script reports done ────────────────────────────
+      // ── 3. Execute script in MAIN world (bypasses CSP) ─────────────────
+      if (message.type === "EXEC_MAIN_WORLD") {
+        const { action, id, value, b64Data, fileName } = message;
+        
+        const setReactValue = async (fieldId, val) => {
+          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
+          const node = entry?.querySelector("input:not([type=file]):not([type=radio]):not([type=checkbox]), textarea");
+
+          if (!node) return { ok: false, actual: "", error: "input not found" };
+
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            node.focus();
+            if (node.select) node.select();
+
+            // Method 1: closest to real user typing
+            const worked = document.execCommand("insertText", false, val);
+
+            // Fallback: React tracker hack
+            if (!worked || node.value !== val) {
+              const proto = node.tagName === "TEXTAREA"
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+
+              const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+              const oldValue = node.value;
+
+              if (setter) setter.call(node, val);
+              if (node._valueTracker) node._valueTracker.setValue(oldValue);
+
+              node.dispatchEvent(new Event("input", { bubbles: true }));
+              node.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+
+            node.dispatchEvent(new Event("blur", { bubbles: true }));
+
+            await sleep(300);
+
+            if (node.value === val) {
+              return { ok: true, actual: node.value, attempt };
+            }
+          }
+
+          return { ok: false, actual: node.value, error: "React reset value" };
+        };
+
+        const setReactFile = async (fieldId, b64, name) => {
+          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
+          const node = entry ? entry.querySelector("input[type=file]") : null;
+          if (!node) return { ok: false, error: "file input not found" };
+          
+          const ext = (name || "resume.pdf").split(".").pop().toLowerCase();
+          const mime = ext === "pdf" ? "application/pdf"
+            : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : "application/octet-stream";
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const dt = new DataTransfer();
+          dt.items.add(new File([bytes], name || "resume.pdf", { type: mime }));
+          node.files = dt.files;
+          node.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
+          node.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
+          return { ok: true, actual: node.files[0]?.name };
+        };
+
+        chrome.scripting.executeScript({
+          target: { tabId: sender.tab.id },
+          world: "MAIN",
+          func: action === "setInput" ? setReactValue : setReactFile,
+          args: action === "setInput" ? [id, value] : [id, b64Data, fileName]
+        })
+        .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
+        .catch(err => sendResponse({ ok: false, error: err.message }));
+        
+        return true;
+      }
+
+      // ── 4. Ashby content script reports done ────────────────────────────
       if (message.type === "APPLICATION_DONE") {
         const { idToken, uid } = await getFreshToken();
-        const { jobId, jobTitle, companyName, status } = message;
+        const { jobId, jobTitle, companyName, status, answersLog } = message;
 
-        // Log to applications sub-collection
+        // Log to applications sub-collection with full answer record
         const docPath = `users/${uid}/applications/${jobId || Date.now()}`;
         await fsSet(docPath, {
           status: status || "submitted",
           jobTitle: jobTitle || "",
           companyName: companyName || "",
           appliedAt: new Date().toISOString(),
+          answersLog: answersLog || {},   // every question label + answer submitted
+          source: "ashby",
         }, idToken);
 
         // Mark the job document itself as auto-applied so it won't be queued again
         if (jobId) {
-          await fsPatch(`users/${uid}/jobs/${jobId}`, { autoApplied: true }, idToken).catch(() => {});
+          await fsPatch(`users/${uid}/jobs/${jobId}`, { autoApplied: true, appliedAt: new Date().toISOString() }, idToken).catch(() => {});
         }
 
         await chrome.storage.session.remove("pendingJob");

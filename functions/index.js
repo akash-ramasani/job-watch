@@ -1948,7 +1948,7 @@ exports.mapFormFields = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
 
-    const { fields = [], jobTitle = "", companyName = "", jobLocationName = "", jobWorkplaceType = "" } = request.data;
+    const { fields = [], jobTitle = "", companyName = "", jobLocationName = "", jobWorkplaceType = "", errorContext = null } = request.data;
     if (!Array.isArray(fields) || fields.length === 0) {
       throw new HttpsError("invalid-argument", "fields array is required.");
     }
@@ -2237,8 +2237,12 @@ exports.mapFormFields = onCall(
         })
         .join("\n");
 
+      const errorSection = errorContext && Array.isArray(errorContext) && errorContext.length
+        ? `\n\nIMPORTANT — Previous submit attempt failed with these validation errors:\n${errorContext.map(e => `  - ${e}`).join("\n")}\nYou MUST provide correct, non-empty answers for those specific fields.`
+        : "";
+
       const prompt = `You are filling out a job application for "${jobTitle}" at "${companyName}".
-Job location: ${jobLocationName || "Not specified"} (workplace type: ${jobWorkplaceType || "unspecified"}).
+Job location: ${jobLocationName || "Not specified"} (workplace type: ${jobWorkplaceType || "unspecified"}).${errorSection}
 
 Candidate profile:
 - Name: ${userContext.name}
@@ -2265,13 +2269,13 @@ Candidate profile:
 
 Rules:
 - For yes/no or select fields: use the candidate profile above to answer accurately.
-- For radio fields: return EXACTLY one of the Options listed for that field (case-sensitive match). For office/location radio questions, pick the option closest to the job location.
+- For radio fields: you MUST return EXACTLY one of the option labels listed for that field (copy it verbatim, case-sensitive). Never invent a new value.
 - For "how did you hear about us?" → "LinkedIn"
 - For salary / compensation questions → "Open to discussion"
-- For cover letter / additional notes / essay fields → write 2–3 natural sentences from the candidate's summary and experience above.
-- For "when can you start?" → use availability above.
-- For unknown text fields → a brief, natural answer based on the profile above.
-- Skip fields where you have absolutely no basis to answer (omit from JSON).
+- For cover letter / essay / motivation fields → write 2–3 natural sentences from the candidate's summary and experience.
+- For "when can you start?" → use the availability field above.
+- For unknown text fields → a brief, natural answer based on the profile.
+- Omit fields where you have no basis to answer.
 
 Return ONLY a valid JSON object: {"field_id": "answer"} — no explanation, no markdown.
 
