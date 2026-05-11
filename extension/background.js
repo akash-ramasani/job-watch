@@ -53,18 +53,18 @@ async function clearAuth() {
 
 /**
  * Returns a fresh (not-expired) ID token.
- * Refreshes automatically if the stored token is within 60s of expiry.
+ * Pass forceRefresh=true to always hit the token endpoint regardless of expiry.
  */
-async function getFreshToken() {
+async function getFreshToken(forceRefresh = false) {
   const { jwIdToken, jwRefreshToken, jwUid, jwTokenExpiry } = await getStoredAuth();
 
-  if (!jwRefreshToken) throw new Error("Not logged in.");
+  if (!jwRefreshToken) throw new Error("Not logged in. Open Job Watch and log in first.");
 
-  if (jwIdToken && jwTokenExpiry && Date.now() < jwTokenExpiry) {
+  if (!forceRefresh && jwIdToken && jwTokenExpiry && Date.now() < jwTokenExpiry) {
     return { idToken: jwIdToken, uid: jwUid };
   }
 
-  // Refresh
+  // Refresh the token via Firebase REST API
   const res = await fetch(
     `https://securetoken.googleapis.com/v1/token?key=${apiKey}`,
     {
@@ -74,7 +74,7 @@ async function getFreshToken() {
     }
   );
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || "Token refresh failed.");
+  if (!res.ok) throw new Error(data.error?.message || "Token refresh failed. Please log in again.");
 
   const idToken = data.id_token;
   const uid = data.user_id;
@@ -114,6 +114,7 @@ function parseFs(fields = {}) {
 async function fsGet(path, idToken) {
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${idToken}` } });
+  if (res.status === 404) return {};  // Document doesn't exist yet — treat as empty
   if (!res.ok) throw new Error(`Firestore GET ${path} failed: ${res.status}`);
   const doc = await res.json();
   return parseFs(doc.fields || {});
@@ -208,13 +209,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           chrome.storage.session.get("pendingJob", r)
         );
 
-        const { idToken, uid } = await getFreshToken();
+        let { idToken, uid } = await getFreshToken();
 
-        // Fetch user profile and resume profile in parallel
-        const [userDoc, resumeDoc] = await Promise.all([
-          fsGet(`users/${uid}`, idToken),
-          fsGet(`users/${uid}/resume/profile`, idToken),
-        ]);
+        // Fetch user profile and resume profile — retry once with a force-refreshed
+        // token if Firestore returns 401 (stored token may be stale even before expiry)
+        let userDoc, resumeDoc;
+        try {
+          [userDoc, resumeDoc] = await Promise.all([
+            fsGet(`users/${uid}`, idToken),
+            fsGet(`users/${uid}/resume/profile`, idToken),
+          ]);
+        } catch (err) {
+          if (err.message.includes("401")) {
+            console.warn("[JobWatch] 401 on Firestore fetch — force-refreshing token and retrying…");
+            ({ idToken, uid } = await getFreshToken(true));
+            [userDoc, resumeDoc] = await Promise.all([
+              fsGet(`users/${uid}`, idToken),
+              fsGet(`users/${uid}/resume/profile`, idToken),
+            ]);
+          } else {
+            throw err;
+          }
+        }
 
         // Fetch resume PDF in background (no CORS restrictions here)
         let resumeBase64 = null;
