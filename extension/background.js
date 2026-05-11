@@ -211,22 +211,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         let { idToken, uid } = await getFreshToken();
 
-        // Fetch user profile and resume profile — retry once with a force-refreshed
-        // token if Firestore returns 401 (stored token may be stale even before expiry)
+        // Fetch user profile and resume profile.
+        // On 401: force-refresh token and retry.
+        // On continued failure: fall back to locally cached profile so AI
+        // can still fill the form even if Firestore is temporarily unavailable.
         let userDoc, resumeDoc;
         try {
           [userDoc, resumeDoc] = await Promise.all([
             fsGet(`users/${uid}`, idToken),
             fsGet(`users/${uid}/resume/profile`, idToken),
           ]);
+          // Cache the profile locally after every successful fetch
+          await chrome.storage.local.set({
+            jwCachedUserDoc: userDoc,
+            jwCachedResumeDoc: resumeDoc,
+          });
         } catch (err) {
           if (err.message.includes("401")) {
             console.warn("[JobWatch] 401 on Firestore fetch — force-refreshing token and retrying…");
-            ({ idToken, uid } = await getFreshToken(true));
-            [userDoc, resumeDoc] = await Promise.all([
-              fsGet(`users/${uid}`, idToken),
-              fsGet(`users/${uid}/resume/profile`, idToken),
-            ]);
+            try {
+              ({ idToken, uid } = await getFreshToken(true));
+              [userDoc, resumeDoc] = await Promise.all([
+                fsGet(`users/${uid}`, idToken),
+                fsGet(`users/${uid}/resume/profile`, idToken),
+              ]);
+              await chrome.storage.local.set({
+                jwCachedUserDoc: userDoc,
+                jwCachedResumeDoc: resumeDoc,
+              });
+            } catch (retryErr) {
+              // Auth still broken — fall back to cached profile so AI can still run
+              console.warn("[JobWatch] Token refresh failed — using cached profile:", retryErr.message);
+              const cached = await new Promise(r =>
+                chrome.storage.local.get(["jwCachedUserDoc", "jwCachedResumeDoc"], r)
+              );
+              if (!cached.jwCachedUserDoc) throw retryErr; // no cache at all, give up
+              userDoc = cached.jwCachedUserDoc;
+              resumeDoc = cached.jwCachedResumeDoc || {};
+            }
           } else {
             throw err;
           }
@@ -254,7 +276,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const jobLocationName = pendingJob?.locationName || "";
         const jobWorkplaceType = pendingJob?.workplaceType || "";
 
-        const mappings = await callMapFormFields(formFields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken);
+        // If auth is broken, AI may also fail — return empty mappings so at
+        // least the profile fields (name, email) can still be filled from cache.
+        let mappings = {};
+        try {
+          mappings = await callMapFormFields(formFields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken);
+        } catch (aiErr) {
+          console.warn("[JobWatch] mapFormFields failed (will fill from profile only):", aiErr.message);
+        }
 
         sendResponse({
           ok: true,
