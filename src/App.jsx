@@ -1,6 +1,6 @@
 
 import React, { useEffect, useMemo, useState } from "react";
-import { onAuthStateChanged, signOut } from "firebase/auth";
+import { onAuthStateChanged, onIdTokenChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
@@ -50,25 +50,25 @@ export default function App() {
     }
   }, []);
 
-  // Sync auth state to extension
+  // Sync auth state to extension.
+  // onIdTokenChanged fires on login, logout, AND every ~1h when Firebase
+  // silently refreshes the token — so the extension always has a fresh token.
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
+    const unsub = onIdTokenChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
 
       if (!window.__JW_EXTENSION_INSTALLED__) return;
 
       if (u) {
-        // Sync login to extension — use getIdTokenResult to get actual expiry
         try {
           const result = await u.getIdTokenResult();
-          const expiresIn = Math.max(60, Math.floor((new Date(result.expirationTime) - Date.now()) / 1000));
+          const expiresIn = Math.max(300, Math.floor((new Date(result.expirationTime) - Date.now()) / 1000));
           window.postMessage({ type: "JW_AUTH", idToken: result.token, refreshToken: u.refreshToken, uid: u.uid, expiresIn }, "*");
         } catch (e) {
           console.warn("[JobWatch] Could not sync auth to extension:", e.message);
         }
       } else {
-        // Sync logout to extension
         window.postMessage({ type: "JW_LOGOUT" }, "*");
       }
     });
