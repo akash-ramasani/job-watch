@@ -2119,6 +2119,29 @@ exports.mapFormFields = onCall(
           });
           result[id] = best.label; continue;
         }
+
+        // Yes/No radio questions — same deterministic rules as yesno buttons
+        if (lbl.includes("legally authorized") || lbl.includes("authorized to work") || lbl.includes("authorized to work lawfully")) {
+          result[id] = user.workAuthorized === "No" ? "No" : "Yes"; continue;
+        }
+        if (lbl.includes("work authorization") || lbl.includes("require authorization") || lbl.includes("require sponsorship") || lbl.includes("sponsorship") || lbl.includes("visa")) {
+          result[id] = user.requiresSponsorship === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("relocat")) {
+          result[id] = user.willingToRelocate === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("relative") || lbl.includes("family member") || lbl.includes("currently working for") || lbl.includes("conflict of interest") || lbl.includes("government official") || lbl.includes("previously worked") || lbl.includes("worked at") || lbl.includes("employed by")) {
+          result[id] = "No"; continue;
+        }
+        if (lbl.includes("agree") || lbl.includes("understand") || lbl.includes("policy") || lbl.includes("confirm") || lbl.includes("acknowledge")) {
+          result[id] = "Yes"; continue;
+        }
+        if (lbl.includes("hybrid") || lbl.includes("in-office") || lbl.includes("in office") || lbl.includes("on-site") || lbl.includes("onsite") || lbl.includes("days per week")) {
+          result[id] = userContext.willingToWorkHybrid === "Yes" ? "Yes" : "No"; continue;
+        }
+        if (lbl.includes("export control") || lbl.includes("u.s. person") || lbl.includes("us person")) {
+          result[id] = user.usPersonExportControl === "No" ? "No" : "Yes"; continue;
+        }
       }
 
       // Common yes/no questions with safe deterministic answers
