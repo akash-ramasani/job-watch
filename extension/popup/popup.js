@@ -131,21 +131,62 @@ function renderProfile(userDoc) {
     }
   });
 
-  // Load stats
-  chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
-    if (res?.ok && res.total > 0) {
-      $("stat-applied").textContent = res.done;
-      $("stat-jobs").textContent    = res.total;
-    } else {
-      $("stat-applied").textContent = "0";
-      $("stat-jobs").textContent    = "—";
-    }
-  });
+  // Load live stats from Firestore + refresh every 30s
+  loadEligibleStats();
+  if (window._statsPoller) clearInterval(window._statsPoller);
+  window._statsPoller = setInterval(loadEligibleStats, 30_000);
 
   pollAutoApplyStatus();
   startAuthValidityCheck();
   document.body.classList.add("loaded");
 }
+
+// ── Live eligible job count ────────────────────────────────────────────────────
+function loadEligibleStats() {
+  // 1. Show cached values instantly (no loading flash)
+  chrome.storage.session.get("eligibleStats", ({ eligibleStats }) => {
+    if (eligibleStats) {
+      $("stat-applied").textContent = eligibleStats.applied;
+      $("stat-jobs").textContent    = eligibleStats.remaining;
+    } else {
+      $("stat-applied").textContent = "—";
+      $("stat-jobs").textContent    = "—";
+    }
+
+    // 2. Silently fetch fresh data in the background
+    chrome.runtime.sendMessage({ type: "GET_ELIGIBLE_COUNT" }, (res) => {
+      if (chrome.runtime.lastError || !res?.ok) return;
+
+      // Only update + animate if the numbers actually changed
+      const prev = eligibleStats || {};
+      if (res.applied !== prev.applied || res.remaining !== prev.remaining) {
+        animateCount("stat-applied", res.applied);
+        animateCount("stat-jobs",    res.remaining);
+      }
+
+      // Cache for next open
+      chrome.storage.session.set({ eligibleStats: { applied: res.applied, remaining: res.remaining } });
+    });
+  });
+}
+
+
+
+function animateCount(id, target) {
+  const el = $(id);
+  const duration = 600;
+  const start = performance.now();
+  const from = 0;
+
+  function step(now) {
+    const progress = Math.min((now - start) / duration, 1);
+    const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    el.textContent = Math.round(from + (target - from) * ease);
+    if (progress < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
 
 // ── Auth validity check: auto-logout when web app session ends ──────────────
 let authValidityPoller = null;
@@ -189,7 +230,7 @@ function setProgressUI(active, done, total) {
   } else {
     stop.style.display = "none";
     btn.disabled = false;
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 60)</span>';
+    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 40)</span>';
     if (total > 0) {
       wrap.style.display = "block";
       $("progress-fill").style.width  = "100%";
@@ -222,10 +263,10 @@ $("btn-auto-apply").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "START_AUTO_APPLY" }, (res) => {
     if (!res?.ok || res.total === 0) {
       $("btn-auto-apply").disabled = false;
-      $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 60)</span>';
+      $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 40)</span>';
       const noticeEl = $("status-text");
       noticeEl.innerHTML = res?.total === 0
-        ? '<span>⚠️</span><span>No eligible Ashby jobs found (score &gt; 60, not yet applied).</span>'
+        ? '<span>⚠️</span><span>No eligible Ashby jobs found (score &gt; 40, not yet applied).</span>'
         : '<span>❌</span><span>Failed to start. Please try again.</span>';
       return;
     }
@@ -240,6 +281,60 @@ $("btn-stop").addEventListener("click", () => {
     chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
       if (res?.ok) setProgressUI(false, res.done, res.total);
     });
+  });
+});
+
+// ── Audit Forms button ─────────────────────────────────────────────────────────
+let auditPoller = null;
+
+$("btn-audit").addEventListener("click", () => {
+  const btn = $("btn-audit");
+  btn.disabled = true;
+  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Starting…`;
+
+  $("audit-progress").style.display = "block";
+  $("audit-label").textContent = "Querying jobs…";
+  $("audit-count").textContent = "…";
+  $("audit-bar").style.width   = "0%";
+  $("audit-status").textContent = "";
+
+  chrome.runtime.sendMessage({ type: "AUDIT_ASHBY_FORMS", hours: 24, timeout: 12000 }, (res) => {
+    if (chrome.runtime.lastError || !res?.ok) {
+      $("audit-label").textContent  = "❌ Failed to start";
+      $("audit-status").textContent = chrome.runtime.lastError?.message || "Unknown error";
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 17H5a2 2 0 0 0-2 2"/><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v14"/><rect x="9" y="11" width="13" height="10" rx="1"/></svg> Audit Forms (24h)`;
+      return;
+    }
+
+    const total = res.total;
+    $("audit-label").textContent  = `Scraping ${total} forms…`;
+    $("audit-count").textContent  = `0 / ${total}`;
+    $("audit-status").textContent = "Fetching application pages…";
+
+    // Poll progress from storage every 1.5s
+    if (auditPoller) clearInterval(auditPoller);
+    auditPoller = setInterval(() => {
+      chrome.storage.session.get("auditState", ({ auditState }) => {
+        if (!auditState) return;
+        const { phase, total: tot, done, errors, filename } = auditState;
+
+        const pct = tot > 0 ? Math.round(((done + errors) / tot) * 100) : 0;
+        $("audit-bar").style.width   = pct + "%";
+        $("audit-count").textContent = `${done + errors} / ${tot}`;
+        $("audit-status").textContent = errors > 0 ? `✅ ${done} saved · ❌ ${errors} skipped` : `✅ ${done} saved`;
+
+        if (phase === "done") {
+          clearInterval(auditPoller);
+          auditPoller = null;
+          $("audit-label").textContent  = "✅ Done! File saved to Downloads";
+          $("audit-bar").style.width    = "100%";
+          $("audit-status").textContent = `📁 ${filename || "ashby_forms.txt"}`;
+          btn.disabled = false;
+          btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 17H5a2 2 0 0 0-2 2"/><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v14"/><rect x="9" y="11" width="13" height="10" rx="1"/></svg> Audit Forms (24h)`;
+        }
+      });
+    }, 1500);
   });
 });
 

@@ -2360,6 +2360,7 @@ Rules:
 - For "how did you hear about us?" → "LinkedIn"
 - For salary / compensation questions → "Open to discussion"
 - For cover letter / essay / motivation fields → write 2–3 natural sentences from the candidate's summary and experience.
+- CRITICAL WRITING STYLE: You MUST write like a real human. DO NOT use em dashes. DO NOT use typical AI buzzwords, bullet points, or standard AI essay structures. It is highly encouraged to include minor, natural grammatical imperfections (like missing a comma or using casual phrasing) so it passes as human. The primary goal is to sound completely organic to maximize the chances of getting an interview callback.
 - For "when can you start?" → use the availability field above.
 - For unknown text fields → a brief, natural answer based on the profile.
 - Omit fields where you have no basis to answer.

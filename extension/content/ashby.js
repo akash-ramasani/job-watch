@@ -59,25 +59,70 @@
     return false;
   }
 
-  // ─── Fill location combobox (polls instead of fixed wait) ────────────────
+  // ─── Fill location combobox ───────────────────────────────────────────────
   async function fillLocation(entry, value) {
     const box = entry.querySelector("input[role='combobox']") || entry.querySelector("input");
     if (!box || !value) return;
-    await setInputValue(entry.dataset.fieldPath, value);
+
+    // Clear any existing value first
     box.focus();
-    box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    box.click();
+    await new Promise(r => setTimeout(r, 200));
+
+    // Select-all + delete to clear
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    await new Promise(r => setTimeout(r, 100));
+
+    // Type character by character from the MAIN world to bypass CSP/Isolated World restrictions
+    await sendMsg({
+      type: "EXEC_MAIN_WORLD",
+      action: "typeCharByChar",
+      id: entry.dataset.fieldPath || box.id,
+      value: value
+    });
+
+    // Poll for a suggestion dropdown (up to 4 seconds)
     let option = null;
-    for (let i = 0; i < 18; i++) {
+    for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 100));
-      option = document.querySelector("[role='option']")
-        || document.querySelector("[class*='_suggestion_']")
-        || document.querySelector("[class*='_listItem_']");
-      if (option) break;
+      const allOptions = [
+        ...entry.querySelectorAll("[role='option']"),
+        ...entry.querySelectorAll("[class*='_suggestion_']"),
+        ...document.querySelectorAll("[role='listbox'] [role='option']"),
+        ...document.querySelectorAll("[class*='_suggestion_']"),
+        ...document.querySelectorAll("[class*='_listItem_']"),
+      ];
+      if (!allOptions.length) continue;
+
+      // Find best match: prefer option whose text contains the city name
+      const city = value.split(",")[0].trim().toLowerCase();
+      option = allOptions.find(o => o.textContent.toLowerCase().includes(city))
+        || allOptions[0];
+      break;
     }
-    if (option) option.click();
-    else box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+
+    if (option) {
+      console.log("[JobWatch] Location: clicking option:", option.textContent.trim());
+      option.click();
+      await new Promise(r => setTimeout(r, 400));
+
+      // Verify it accepted by checking the input has a non-empty value
+      if (!box.value) {
+        // Try mousedown + mouseup combo (some dropdowns require it)
+        option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+        option.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+        option.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        await new Promise(r => setTimeout(r, 300));
+      }
+    } else {
+      // No dropdown appeared — press Enter as last resort
+      console.warn("[JobWatch] Location: no dropdown found, pressing Enter for:", value);
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    }
     await new Promise(r => setTimeout(r, 300));
   }
+
 
   // ─── Get visible label for a radio/checkbox input ────────────────────────
   function getInputLabel(input, scope) {
@@ -190,6 +235,258 @@
       .filter(Boolean);
   }
 
+  // ─── Deterministic Text Rule Engine ────────────────────────────────────────
+  // Instantly maps known text fields using regex — no Claude needed.
+  function applyTextRules(fields, mappings, userDoc, resumeDoc = {}) {
+    const cityRegion = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
+
+    const RULES = [
+      // ── Identity ──────────────────────────────────────────────────────────
+      {
+        patterns: [/^email(\s*address)?$/i],
+        answer: () => userDoc.email || ""
+      },
+      {
+        patterns: [/^first.?name/i, /preferred.?first/i],
+        answer: () => userDoc.firstName || ""
+      },
+      {
+        patterns: [/^last.?name/i, /surname/i],
+        answer: () => userDoc.lastName || ""
+      },
+      {
+        patterns: [/middle.?name/i],
+        answer: () => userDoc.middleName || ""
+      },
+      {
+        patterns: [/preferred.?name/i, /nickname/i],
+        answer: () => userDoc.firstName || ""
+      },
+      // Full/legal — after preferred/first/last so it doesn't steal them
+      {
+        patterns: [/^name$/i, /full.?name/i, /legal.?name/i, /legal.?full/i],
+        answer: () => userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim()
+      },
+      {
+        patterns: [/pronouns/i],
+        answer: () => userDoc.pronouns || ""
+      },
+      {
+        patterns: [/pronounc/i, /name.*sound/i, /how.*say.*name/i],
+        answer: () => userDoc.namePronunciation || ""
+      },
+
+      // ── Contact ───────────────────────────────────────────────────────────────
+      {
+        patterns: [/phone/i, /tel/i, /mobile/i],
+        answer: () => userDoc.phone || ""
+      },
+
+      // ── Social / URLs ──────────────────────────────────────────────────────
+      {
+        patterns: [/linkedin/i, /linked.?in/i],
+        answer: () => userDoc.linkedin || ""
+      },
+      // Combined "GitHub/Portfolio/Twitter/Etc" fields
+      {
+        patterns: [/github.*portfolio|portfolio.*github|github.*twitter|social.*link/i],
+        answer: () => userDoc.github || userDoc.portfolio || ""
+      },
+      {
+        patterns: [/github/i, /git.?hub/i],
+        answer: () => userDoc.github || ""
+      },
+      {
+        patterns: [/portfolio/i, /personal.?site/i, /portfolio.?link/i, /portfolio.?url/i],
+        answer: () => userDoc.portfolio || ""
+      },
+      {
+        patterns: [/^website$/i, /personal.?website/i],
+        answer: () => userDoc.portfolio || ""
+      },
+
+      // ── Location (text inputs — the Location widget type is handled separately) ──
+      {
+        patterns: [/^location$/i, /current.?location/i, /where.*located/i, /where.*based/i, /where.*currently/i],
+        answer: () => cityRegion
+      },
+
+      // ── Availability / Start Date ──────────────────────────────────────
+      {
+        patterns: [/start.?date/i, /availability/i, /when can you start/i,
+          /soonest.*start/i, /available.*start/i, /earliest.*start/i,
+          /when.*available/i, /when.*start.*full/i, /available.*full.?time/i,
+          /please list your current availability/i],
+        answer: () => userDoc.availability || "Immediately"
+      },
+
+      // ── Current Company (from last resume role) ───────────────────────────
+      {
+        patterns: [/current.?company/i, /current.?employer/i, /where.*currently.*work/i,
+          /where.*most.*recently.*work/i, /most.*recent.*employer/i],
+        answer: () => (resumeDoc?.roles?.[0]?.company) || ""
+      },
+
+      // ── How did you hear about this role ─────────────────────────────
+      {
+        patterns: [/how did you hear/i, /how.*hear.*about/i, /how.*find.*role/i,
+          /how.*discover/i, /referral.*source/i, /source.*referral/i],
+        answer: () => "LinkedIn"
+      },
+
+      // ── Visa sponsorship as text (some companies use Textarea not yesno) ───
+      {
+        patterns: [/require.*sponsorship/i, /need.*sponsorship/i, /visa.*sponsorship/i,
+          /sponsorship.*visa/i, /h.?1.?b/i],
+        answer: () => userDoc.requiresSponsorship === "Yes"
+          ? "Yes, I will require visa sponsorship in the future"
+          : "No, I do not require visa sponsorship"
+      },
+    ];
+
+    for (const field of fields) {
+      if (field.type !== "text" && field.type !== "tel" && field.type !== "url" && field.type !== "textarea") continue;
+      // Skip built-in system fields — those are hardcoded in applyMappings
+      if (field.id.startsWith("_systemfield_")) continue;
+      // Skip location-widget fields — their value is determined by the job, not the user
+      if (field.type === "location") continue;
+
+      const lbl = field.label || "";
+      for (const rule of RULES) {
+        if (rule.patterns.some(p => p.test(lbl))) {
+          const ans = rule.answer();
+          if (ans) {
+            mappings[field.id] = ans;
+            console.log(`[JobWatch] Text rule: "${lbl}" → ${ans}`);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // ─── Deterministic Yes/No rule engine ──────────────────────────────────────
+  // Overrides Claude answers for well-known checkbox questions so we never
+  // misanswer visa / work-auth / office questions.
+  function applyYesNoRules(fields, mappings, userDoc) {
+    // User profile flags (with safe defaults matching Firestore strings)
+    const isAuthorized = userDoc.workAuthorized === "Yes";
+    const needsSponsorship = userDoc.requiresSponsorship === "Yes";
+    const isUsPerson = userDoc.usPersonExportControl === "Yes";
+    const openToRelocate = userDoc.willingToRelocate === "Yes";
+    const openToOffice = userDoc.willingToWorkHybrid === "Yes";
+
+    // Pattern buckets → answer
+    const RULES = [
+      // Work authorization — answer YES
+      {
+        patterns: [
+          /authoriz.{0,30}work/i,
+          /eligible.{0,30}work/i,
+          /legally.{0,30}work/i,
+          /right.{0,15}work/i,
+          /work.{0,20}authoriz/i,
+          /authoriz.{0,20}employ/i,
+          /permitted.{0,20}work/i,
+        ],
+        answer: () => isAuthorized ? "yes" : "no",
+      },
+      // Visa / sponsorship — answer NO (user does not need it)
+      {
+        patterns: [
+          /require.{0,30}sponsorship/i,
+          /need.{0,20}sponsorship/i,
+          /sponsorship.{0,30}visa/i,
+          /visa.{0,20}sponsorship/i,
+          /h.?1.?b/i,
+          /immigration.{0,20}sponsor/i,
+          /work.{0,20}permit.{0,20}sponsor/i,
+        ],
+        answer: () => needsSponsorship ? "yes" : "no",
+      },
+      // U.S. Person / export control
+      {
+        patterns: [
+          /u\.?s\.?.{0,10}person/i,
+          /export.{0,20}control/i,
+          /itar/i,
+          /citizen.{0,20}legal.{0,20}resident/i,
+        ],
+        answer: () => isUsPerson ? "yes" : "no",
+      },
+      // Office / hybrid / in-person — answer YES
+      {
+        patterns: [
+          /comfortable.{0,40}(office|hybrid|in.person|on.?site)/i,
+          /work.{0,30}(office|hybrid|in.person|on.?site)/i,
+          /in.office.{0,30}(day|week|month)/i,
+          /on.?site/i,
+          /commut/i,
+        ],
+        answer: () => openToOffice ? "yes" : "no",
+      },
+      // Relocation — answer YES
+      {
+        patterns: [
+          /reloca/i,
+          /willing.{0,20}move/i,
+        ],
+        answer: () => openToRelocate ? "yes" : "no",
+      },
+      // Background / consent questions — always YES
+      {
+        patterns: [
+          /consent.{0,30}(background|check)/i,
+          /background.{0,20}check/i,
+          /drug.{0,20}test/i,
+          /consent.{0,20}(sms|text|email|contact)/i,
+          /receive.{0,30}(sms|text|message)/i,
+          /acknowledge/i,
+        ],
+        answer: () => "yes",
+      },
+    ];
+
+    for (const field of fields) {
+      if (field.type !== "yesno") continue;
+      const lbl = field.label || "";
+      // Fallback for required yesno fields not matched by any rule:
+      // job-specific experience questions ("Have you worked at X?", "Do you have X?")
+      // default to "no" — safer than leaving blank or letting Claude guess wrong
+      if (!mappings[field.id] && field.required) {
+        let ruleMatched = false;
+        for (const rule of RULES) {
+          if (rule.patterns.some(p => p.test(lbl))) { ruleMatched = true; break; }
+        }
+        if (!ruleMatched) {
+          mappings[field.id] = "no";
+          console.log(`[JobWatch] YesNo fallback "no" for unrecognised field: "${lbl}"`);
+        }
+      }
+      for (const rule of RULES) {
+        if (rule.patterns.some(p => p.test(lbl))) {
+          const ans = rule.answer();
+          // Only override if Claude's answer doesn't look like a valid yes/no
+          const current = (mappings[field.id] || "").toLowerCase().trim();
+          if (current !== "yes" && current !== "no") {
+            // Claude returned something non-binary — always override
+            mappings[field.id] = ans;
+            console.log(`[JobWatch] Rule engine overrode "${lbl}" → ${ans}`);
+          } else if (current === "yes" && ans === "no") {
+            // Claude said yes but rule says no — trust rule engine
+            mappings[field.id] = ans;
+            console.log(`[JobWatch] Rule engine corrected "${lbl}": yes → no`);
+          } else if (current === "no" && ans === "yes") {
+            // Claude said no but rule says yes — trust rule engine
+            mappings[field.id] = ans;
+            console.log(`[JobWatch] Rule engine corrected "${lbl}": no → yes`);
+          }
+          break; // first matching rule wins
+        }
+      }
+    }
+  }
+
   // ─── Apply a mappings object to the form ─────────────────────────────────
   async function applyMappings(form, fields, mappings, userDoc, pendingJob, resumeBase64, answersLog) {
     for (const field of fields) {
@@ -230,12 +527,65 @@
 
       // LOCATION
       if (field.type === "location") {
-        const value = mappings[field.id]
-          || (field.id === "_systemfield_location" ? (pendingJob?.locationName || userDoc.city) : "")
-          || "";
+        // Priority:
+        // 1) Ashby embeds job data as JSON in __NEXT_DATA__ — most reliable
+        // 2) JSON-LD schema — used by newer Ashby/Parafin instances
+        // 3) pendingJob from session storage (set when auto-apply was triggered)
+        // 4) Nothing — never fall back to Claude's answer or user's home city
+        let pageJobLocation = null;
+        try {
+          const nextData = JSON.parse(document.getElementById("__NEXT_DATA__")?.textContent || "{}");
+          pageJobLocation =
+            nextData?.props?.pageProps?.posting?.locationName
+            || nextData?.props?.pageProps?.jobPosting?.locationName
+            || nextData?.props?.pageProps?.job?.locationName
+            || null;
+        } catch (e) { }
+
+        if (!pageJobLocation) {
+          try {
+            const ldScripts = [...document.querySelectorAll('script[type="application/ld+json"]')];
+            for (const script of ldScripts) {
+              const data = JSON.parse(script.textContent || "{}");
+              if (data["@type"] === "JobPosting" && data.jobLocation?.address?.addressLocality) {
+                pageJobLocation = data.jobLocation.address.addressLocality;
+                if (data.jobLocation.address.addressRegion) {
+                  pageJobLocation += ", " + data.jobLocation.address.addressRegion;
+                }
+                break;
+              }
+            }
+          } catch (e) { }
+        }
+
+        // Just in case it's literally just embedded anywhere as locationName:"..."
+        if (!pageJobLocation) {
+          const match = document.body.innerHTML.match(/"locationName":"([^"]+)"/);
+          if (match) pageJobLocation = match[1];
+        }
+
+        if (pageJobLocation) pageJobLocation = pageJobLocation.replace(/\s*-\s*US$/i, "").trim();
+
+        const value = pageJobLocation || pendingJob?.locationName || "";
+        console.log("[JobWatch] Location →", { pageJobLocation, pendingJobLoc: pendingJob?.locationName, final: value });
+        if (!value) console.warn("[JobWatch] Location is empty! pendingJob:", JSON.stringify(pendingJob));
+
         if (value) {
           await fillLocation(entry, value);
           answersLog[field.id] = { label: field.label, answer: value, type: "location" };
+        }
+        continue;
+      }
+
+      // DATE PICKER
+      if (field.type === "date" || field.type === "Date Picker") {
+        const val = mappings[field.id] || userDoc.availability || "";
+        if (val) {
+          const input = entry.querySelector("input[type=date], input[type=text]");
+          if (input) {
+            await setInputValue(field.id, val);
+            answersLog[field.id] = { label: field.label, answer: val, type: "date" };
+          }
         }
         continue;
       }
@@ -361,37 +711,41 @@
       s.textContent = `
         #jw-overlay {
           position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
-          display: flex; align-items: center; gap: 10px;
-          padding: 12px 16px; border-radius: 14px; max-width: 340px;
+          display: flex; align-items: center; gap: 12px;
+          padding: 12px 16px; border-radius: 12px; max-width: 380px;
           font-family: 'Inter', system-ui, sans-serif; font-size: 13px; font-weight: 500;
-          color: #f1f5f9; line-height: 1.4;
-          background: rgba(15, 15, 26, 0.85);
+          color: #f1f5f9; background: rgba(15, 15, 26, 0.95);
           backdrop-filter: blur(20px) saturate(180%);
           -webkit-backdrop-filter: blur(20px) saturate(180%);
-          border: 1px solid rgba(255,255,255,0.08);
+          border: 1px solid rgba(255,255,255,0.1);
           box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
           transform: translateY(12px); opacity: 0;
           transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease, border-color 0.3s;
           will-change: transform, opacity;
+          box-sizing: border-box;
         }
+        #jw-overlay * { box-sizing: border-box; }
         #jw-overlay.jw-visible { transform: translateY(0); opacity: 1; }
         #jw-overlay.jw-hiding  { transform: translateY(8px); opacity: 0; }
-        #jw-overlay-bar {
-          position: absolute; bottom: 0; left: 0; height: 3px;
-          border-radius: 0 0 14px 14px; transition: width 0.4s ease;
+        #jw-overlay-icon { 
+          font-size: 18px; flex-shrink: 0; 
+          line-height: 1 !important; margin: 0 !important; padding: 0 !important;
+          display: flex; align-items: center; justify-content: center;
         }
-        #jw-overlay-icon { font-size: 18px; flex-shrink: 0; line-height: 1; }
-        #jw-overlay-text { flex: 1; }
+        #jw-overlay-text { 
+          flex: 1; word-break: break-word; 
+          line-height: 1.5 !important; margin: 0 !important; padding: 0 !important;
+        }
       `;
       document.head.appendChild(s);
     }
 
     const COLORS = {
-      info:    { border: "rgba(99,102,241,0.35)",  bar: "linear-gradient(90deg,#4f46e5,#7c3aed)" },
-      success: { border: "rgba(16,185,129,0.35)",  bar: "linear-gradient(90deg,#10b981,#34d399)" },
-      warning: { border: "rgba(245,158,11,0.35)",  bar: "linear-gradient(90deg,#f59e0b,#fbbf24)" },
-      error:   { border: "rgba(239,68,68,0.35)",   bar: "linear-gradient(90deg,#ef4444,#f87171)" },
-      ai:      { border: "rgba(124,58,237,0.35)",  bar: "linear-gradient(90deg,#7c3aed,#a855f7)" },
+      info: { border: "rgba(99,102,241,0.35)", bar: "linear-gradient(90deg,#4f46e5,#7c3aed)" },
+      success: { border: "rgba(16,185,129,0.35)", bar: "linear-gradient(90deg,#10b981,#34d399)" },
+      warning: { border: "rgba(245,158,11,0.35)", bar: "linear-gradient(90deg,#f59e0b,#fbbf24)" },
+      error: { border: "rgba(239,68,68,0.35)", bar: "linear-gradient(90deg,#ef4444,#f87171)" },
+      ai: { border: "rgba(124,58,237,0.35)", bar: "linear-gradient(90deg,#7c3aed,#a855f7)" },
     };
 
     // Detect type from emoji prefix if type not explicitly set
@@ -413,7 +767,7 @@
     if (!el) {
       el = document.createElement("div");
       el.id = "jw-overlay";
-      el.innerHTML = `<div id="jw-overlay-icon"></div><div id="jw-overlay-text"></div><div id="jw-overlay-bar"></div>`;
+      el.innerHTML = `<div id="jw-overlay-icon"></div><div id="jw-overlay-text"></div>`;
       document.body.appendChild(el);
       requestAnimationFrame(() => el.classList.add("jw-visible"));
     }
@@ -423,8 +777,6 @@
     el.style.borderColor = colors.border;
     el.querySelector("#jw-overlay-icon").textContent = icon;
     el.querySelector("#jw-overlay-text").textContent = message;
-    el.querySelector("#jw-overlay-bar").style.background = colors.bar;
-    el.querySelector("#jw-overlay-bar").style.width = "100%";
   }
 
   function removeOverlay() {
@@ -458,7 +810,12 @@
 
     showOverlay("⏳ JobWatch: Fetching your profile…");
     const fillData = await sendMsg({ type: "GET_FILL_DATA", fields });
-    const { userDoc, mappings, pendingJob, resumeBase64 } = fillData;
+    const { userDoc, mappings, pendingJob, resumeBase64, resumeDoc = {} } = fillData;
+
+    // Apply deterministic rule engines BEFORE filling
+    // This entirely overrides Claude for standard questions (Phone, LinkedIn, Visa, Office)
+    applyTextRules(fields, mappings, userDoc, resumeDoc);
+    applyYesNoRules(fields, mappings, userDoc);
 
     showOverlay("✍️ JobWatch: Filling form…");
     await new Promise(r => setTimeout(r, 600));
@@ -474,13 +831,21 @@
       showOverlay(`🤖 AI filling ${preCheck.length} missing field(s)…`);
       try {
         const retry = await sendMsg({ type: "GET_FILL_DATA", fields: preCheck });
+        applyTextRules(preCheck, retry.mappings, userDoc, resumeDoc);
+        applyYesNoRules(preCheck, retry.mappings, userDoc);
         await applyMappings(form, preCheck, retry.mappings, userDoc, pendingJob, resumeBase64, answersLog);
         await new Promise(r => setTimeout(r, 400));
       } catch (e) { console.warn("[JobWatch] Pre-submit retry error:", e.message); }
 
       const stillEmpty = getUnfilledRequired(form, fields);
       if (stillEmpty.length) {
-        showOverlay(`⚠️ Complete manually: ${stillEmpty.map(f => f.label).join(", ")}`, "#f59e0b");
+        const displayLabels = stillEmpty.slice(0, 2).map(f => {
+          let l = f.label.replace(/\s*\([^)]*\)/g, '');
+          return l.length > 35 ? l.substring(0, 35) + "…" : l;
+        });
+        let msg = `⚠️ Complete manually: ${displayLabels.join(", ")}`;
+        if (stillEmpty.length > 2) msg += `, +${stillEmpty.length - 2} more`;
+        showOverlay(msg, "#f59e0b");
         console.warn("[JobWatch] Still missing:", stillEmpty);
         return;
       }
