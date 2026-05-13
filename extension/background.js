@@ -492,6 +492,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
         };
 
+        // Set a React-controlled Radio button by index
+        const setReactRadio = async (fieldId, index) => {
+          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
+          if (!entry) return { ok: false, error: "radio entry not found" };
+
+          const radios = [...entry.querySelectorAll("input[type=radio]")];
+          if (!radios[index]) return { ok: false, error: "radio at index not found" };
+
+          const target = radios[index];
+          target.click();
+          await new Promise(r => setTimeout(r, 200));
+
+          return { ok: true, checked: target.checked };
+        };
+
         const extractSchema = () => {
           const results = [];
           try {
@@ -544,6 +559,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
         if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
+        if (action === "clickRadio") { funcToRun = setReactRadio; argsToRun = [id, value]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({

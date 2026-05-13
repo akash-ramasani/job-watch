@@ -97,6 +97,22 @@
     }
   }
 
+  // ─── Click a Radio button ──────────────────────────────────────────────────
+  async function clickRadio(fieldId, index) {
+    try {
+      const res = await sendMsg({
+        type: "EXEC_MAIN_WORLD",
+        action: "clickRadio",
+        id: fieldId,
+        value: index
+      });
+      return res?.result || { ok: false, error: "no result" };
+    } catch (e) {
+      console.warn("[JobWatch] Radio click failed:", e.message);
+      return { ok: false, error: e.message };
+    }
+  }
+
   // ─── Fill location combobox ───────────────────────────────────────────────
   async function fillLocation(entry, value) {
     const box = entry.querySelector("input[role='combobox']") || entry.querySelector("input");
@@ -1053,8 +1069,11 @@
           const radios = [...entry.querySelectorAll("input[type=radio]")];
           const target = findBestRadio(radios, entry, answer);
           if (target && !target.checked) {
-            target.click();
-            answersLog[field.id] = { label: field.label, answer: getInputLabel(target, entry), type: "radio" };
+            const index = radios.indexOf(target);
+            const result = await clickRadio(field.id, index);
+            if (result?.ok) {
+              answersLog[field.id] = { label: field.label, answer: getInputLabel(target, entry), type: "radio" };
+            }
             await new Promise(r => setTimeout(r, 200));
           }
         }
