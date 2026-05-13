@@ -49,12 +49,15 @@
 
   // ─── Click a Yes/No button ────────────────────────────────────────────────
   function clickYesNo(entry, answer) {
-    const container = entry.querySelector("[class*='_yesno_']");
-    if (!container) return false;
+    const container = entry.querySelector("[class*='_yesno_']") || entry;
     const target = (answer || "").toLowerCase().trim();
     const buttons = [...container.querySelectorAll("button")];
+    if (buttons.length < 2) return false;
+    
+    // Find the button that matches the answer text exactly, or fallback to index 0/1 for yes/no
     const btn = buttons.find(b => b.textContent.trim().toLowerCase() === target)
-      || buttons[target === "yes" ? 0 : 1];
+      || (target === "yes" ? buttons[0] : buttons[1]);
+    
     if (btn) { btn.click(); return true; }
     return false;
   }
@@ -175,15 +178,20 @@
 
       const fileInput = entry.querySelector("input[type=file]");
       const yesNoEl = entry.querySelector("[class*='_yesno_']");
+      const buttons = [...entry.querySelectorAll("button")];
+      const isYesNo = yesNoEl || (buttons.length === 2 && /yes/i.test(buttons[0].textContent) && /no/i.test(buttons[1].textContent));
+      
       const combobox = entry.querySelector("input[role='combobox']");
       const radioEl = entry.querySelector("input[type=radio]");
+      const checkboxEl = entry.querySelector("input[type=checkbox]");
       const inputEl = entry.querySelector("input:not([type=file]):not([role=combobox]):not([type=radio]):not([type=checkbox]), textarea");
 
       let type;
       if (fileInput) type = "file";
-      else if (yesNoEl) type = "yesno";
+      else if (isYesNo) type = "yesno";
       else if (combobox || id === "_systemfield_location") type = "location";
       else if (radioEl) type = "radio";
+      else if (checkboxEl) type = "checkbox";
       else type = inputEl?.type || "text";
 
       const field = { id, label, type, required };
