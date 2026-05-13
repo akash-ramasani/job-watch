@@ -81,49 +81,20 @@
   }
 
   // ─── Click a Yes/No button ────────────────────────────────────────────────
-  function clickYesNo(entry, answer) {
-    const target = (answer || "").toLowerCase().trim();
+  async function clickYesNo(fieldId, answer) {
+    try {
+      const res = await sendMsg({
+        type: "EXEC_MAIN_WORLD",
+        action: "clickYesNo",
+        id: fieldId,
+        value: answer
+      });
 
-    // Try multiple strategies to find the Yes/No buttons
-    let buttons = [];
-
-    // Strategy 1: Ashby _yesno_ container
-    const yesNoContainer = entry.querySelector("[class*='_yesno_']");
-    if (yesNoContainer) {
-      buttons = [...yesNoContainer.querySelectorAll("button")];
+      return res?.result || { ok: false, error: "no result" };
+    } catch (e) {
+      console.warn("[JobWatch] Yes/No click failed:", e.message);
+      return { ok: false, error: e.message };
     }
-
-    // Strategy 2: All buttons directly in the entry
-    if (buttons.length < 2) {
-      buttons = [...entry.querySelectorAll("button")];
-    }
-
-    // Strategy 3: Look for buttons by text content anywhere in entry
-    if (buttons.length < 2) {
-      buttons = [...entry.querySelectorAll("*")].filter(el =>
-        el.tagName === "BUTTON" || (el.role === "button") ||
-        (el.tabIndex >= 0 && /^(yes|no)$/i.test(el.textContent.trim()))
-      );
-    }
-
-    if (buttons.length < 2) {
-      console.warn(`[JobWatch] clickYesNo FAILED: found ${buttons.length} button(s) in entry for "${entry.dataset.fieldPath}"`);
-      return false;
-    }
-
-    // Find the button that matches the answer text
-    const btn = buttons.find(b => b.textContent.trim().toLowerCase() === target)
-      || (target === "yes" ? buttons[0] : buttons[1]);
-
-    if (btn) {
-      console.log(`[JobWatch] clickYesNo: clicking "${btn.textContent.trim()}" for target "${target}"`);
-      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      return true;
-    }
-    console.warn(`[JobWatch] clickYesNo: no matching button found for "${target}"`);
-    return false;
   }
 
   // ─── Fill location combobox ───────────────────────────────────────────────
@@ -722,6 +693,13 @@
       if (matchedRule) {
         const ans = matchedRule.answer();
         const current = (mappings[field.id] || "").toLowerCase().trim();
+
+        console.log("[JobWatch] YESNO mapped:", {
+          id: field.id,
+          label: lbl,
+          answer: ans
+        });
+
         if (current !== "yes" && current !== "no") {
           mappings[field.id] = ans;
           console.log(`[JobWatch] Rule engine overrode "${lbl}" → ${ans} (desc: "${desc.substring(0, 60)}…")`);
@@ -892,11 +870,28 @@
       // YESNO
       if (field.type === "yesno") {
         const answer = mappings[field.id];
+
+        console.log("[JobWatch] YESNO attempting:", {
+          id: field.id,
+          label: field.label,
+          answer
+        });
+
         if (answer) {
-          const ok = clickYesNo(entry, answer);
-          if (ok) answersLog[field.id] = { label: field.label, answer, type: "yesno" };
-          await new Promise(r => setTimeout(r, 200));
+          const result = await clickYesNo(field.id, answer);
+
+          console.log("[JobWatch] YESNO result:", result);
+
+          if (result?.ok) {
+            answersLog[field.id] = {
+              label: field.label,
+              answer,
+              type: "yesno"
+            };
+          }
         }
+
+        await new Promise(r => setTimeout(r, 250));
         continue;
       }
 
@@ -1145,8 +1140,9 @@
         const box = entry.querySelector("input[role='combobox']") || entry.querySelector("input");
         if (!box?.value?.trim()) missing.push(field);
       } else if (field.type === "yesno") {
-        const activeBtn = entry.querySelector("button[aria-pressed='true'], button._active_101oc_20, [class*='_active_']");
-        if (!activeBtn) missing.push(field);
+        if (!answersLog[field.id]) {
+          missing.push(field);
+        }
       } else if (field.type === "checkbox") {
         const checkedBox = entry.querySelector("input[type=checkbox]:checked");
         if (!checkedBox) missing.push(field);

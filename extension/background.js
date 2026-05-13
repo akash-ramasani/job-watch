@@ -462,7 +462,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: true, actual: node.files[0]?.name };
         };
 
-        // Extract Ashby form schema from window.__appData
+        // Set a React-controlled Yes/No button
+        const setReactYesNo = async (fieldId, answer) => {
+          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
+          if (!entry) return { ok: false, error: "yes/no entry not found" };
+
+          const target = String(answer || "").toLowerCase().trim();
+          const container = entry.querySelector("[class*='_yesno_']") || entry;
+          const buttons = [...container.querySelectorAll("button")];
+
+          const btn = buttons.find(b => b.textContent.trim().toLowerCase() === target);
+
+          if (!btn) {
+            return {
+              ok: false,
+              error: `yes/no button "${target}" not found`,
+              buttons: buttons.map(b => b.textContent.trim())
+            };
+          }
+
+          btn.click();
+          await new Promise(r => setTimeout(r, 250));
+
+          const input = entry.querySelector("input[type='checkbox']");
+          return {
+            ok: true,
+            clicked: btn.textContent.trim(),
+            checkboxChecked: input?.checked ?? null
+          };
+        };
+
         const extractSchema = () => {
           const results = [];
           try {
@@ -514,6 +543,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let argsToRun = [id, b64Data, fileName];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
+        if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({
