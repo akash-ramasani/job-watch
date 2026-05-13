@@ -362,9 +362,14 @@ exports.runSyncNow = onRequest(
     const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
 
     const now = admin.firestore.Timestamp.now();
-    const recentCutoff = admin.firestore.Timestamp.fromDate(
-      new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
-    );
+    const isFullSync = req.query.fullSync === "true";
+    const targetUrl = req.query.targetUrl;
+
+    const recentCutoff = isFullSync
+      ? admin.firestore.Timestamp.fromDate(new Date("2000-01-01"))
+      : admin.firestore.Timestamp.fromDate(
+          new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
+        );
 
     await runRef.set(
       {
@@ -382,7 +387,7 @@ exports.runSyncNow = onRequest(
     );
 
     try {
-      const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
+      const summary = await syncUserRecentJobs({ userId, now, recentCutoff, targetUrl });
 
       const finishedAt = admin.firestore.Timestamp.now();
       const durationMs = finishedAt.toMillis() - startedAt.toMillis();
@@ -463,7 +468,7 @@ exports.runSyncNow = onRequest(
  * USER SYNC CORE
  * ----------------------------
  */
-async function syncUserRecentJobs({ userId, now, recentCutoff }) {
+async function syncUserRecentJobs({ userId, now, recentCutoff, targetUrl }) {
   const feedsSnap = await db
     .collection("users")
     .doc(userId)
@@ -471,7 +476,10 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     .where("archivedAt", "==", null)
     .get();
 
-  const feeds = feedsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  let feeds = feedsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (targetUrl) {
+    feeds = feeds.filter(f => f.url === targetUrl);
+  }
   const feedsCount = feeds.length;
 
   if (feedsCount === 0) {

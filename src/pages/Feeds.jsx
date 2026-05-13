@@ -294,6 +294,38 @@ export default function Feeds({ user }) {
     }
   }
 
+  async function runPilotFullSync() {
+    setBusyRunNow(true);
+    setLastRunSummary(null);
+    try {
+      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
+      if (!projectId) {
+        showToast("Missing project id env.", "error");
+        return;
+      }
+      const idToken = await user.getIdToken();
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}&fullSync=true&targetUrl=${encodeURIComponent("https://boards-api.greenhouse.io/v1/boards/pilothq/jobs")}`;
+      const resp = await fetch(endpoint, { 
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${idToken}`
+        }
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        showToast(data?.error || "PilotHQ sync failed.", "error");
+        return;
+      }
+      setLastRunSummary(data);
+      showToast(`PilotHQ full sync complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
+    } catch (e) {
+      console.error(e);
+      showToast(e?.message || "PilotHQ sync failed.", "error");
+    } finally {
+      setBusyRunNow(false);
+    }
+  }
+
   async function archiveFeed(feedId) {
     setBusyArchiveId(feedId);
     try {
@@ -343,13 +375,21 @@ export default function Feeds({ user }) {
             <span className="font-semibold">Eightfold.ai</span> (Microsoft, PayPal, Nvidia, etc.) job boards.
           </p>
 
-          <div className="mt-6">
+          <div className="mt-6 space-y-3">
             <button
               onClick={runSyncNow}
               disabled={busyRunNow}
               className="btn-primary w-full shadow-lg shadow-indigo-200/50 uppercase tracking-widest text-[11px] font-black py-3"
             >
               {busyRunNow ? "Syncing..." : "Run sync now"}
+            </button>
+            
+            <button
+              onClick={runPilotFullSync}
+              disabled={busyRunNow}
+              className="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-lg shadow-amber-200/50 uppercase tracking-widest text-[11px] font-black py-3 transition-colors"
+            >
+              {busyRunNow ? "Syncing PilotHQ..." : "TEMP: Full Sync PilotHQ"}
             </button>
           </div>
 
