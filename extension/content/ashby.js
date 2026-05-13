@@ -278,7 +278,8 @@
 
       // ── Contact ───────────────────────────────────────────────────────────────
       {
-        patterns: [/phone/i, /tel/i, /mobile/i],
+        // Intentionally narrow: only exact phone/tel/mobile labels — avoid matching textarea questions
+        patterns: [/^phone(\s*(number)?)?$/i, /^(cell|mobile)(\s*number)?$/i, /^tel(ephone)?(\s*number)?$/i, /contact.*number/i, /your.*phone/i],
         answer: () => userDoc.phone || ""
       },
 
@@ -414,7 +415,7 @@
         ],
         answer: () => isUsPerson ? "yes" : "no",
       },
-      // Office / hybrid / in-person — answer YES
+      // Office / hybrid / in-person — answer YES (or user preference)
       {
         patterns: [
           /comfortable.{0,40}(office|hybrid|in.person|on.?site)/i,
@@ -422,10 +423,26 @@
           /in.office.{0,30}(day|week|month)/i,
           /on.?site/i,
           /commut/i,
+          /able.{0,30}(office|on.?site|in.person)/i,
+          /work.{0,30}(monday|tuesday|wednesday|thursday|friday)/i,
         ],
         answer: () => openToOffice ? "yes" : "no",
       },
-      // Relocation — answer YES
+      // Availability / scheduling (weekends, evenings, shifts) — answer YES
+      {
+        patterns: [
+          /availab.{0,40}(weekend|evening|holiday|night|shift)/i,
+          /work.{0,30}(weekend|evening|holiday|night|shift)/i,
+          /weekend/i,
+          /evening/i,
+          /minimum.{0,20}hour/i,
+          /hours.{0,20}week/i,
+          /flexible.{0,20}hour/i,
+          /part.?time/i,
+        ],
+        answer: () => "yes",
+      },
+      // Relocation — answer based on user preference
       {
         patterns: [
           /reloca/i,
@@ -447,12 +464,21 @@
       },
     ];
 
+    const FIELD_TYPES_HANDLED = new Set(["yesno", "radio"]);
     for (const field of fields) {
-      if (field.type !== "yesno") continue;
+      if (!FIELD_TYPES_HANDLED.has(field.type)) continue;
       const lbl = field.label || "";
-      // Fallback for required yesno fields not matched by any rule:
-      // job-specific experience questions ("Have you worked at X?", "Do you have X?")
-      // default to "no" — safer than leaving blank or letting Claude guess wrong
+
+      // For RADIO fields that ask yes/no — check if options are just Yes/No
+      // and apply the same rule engine
+      if (field.type === "radio") {
+        const opts = (field.options || []).map(o => o.label.toLowerCase().trim());
+        const isYesNoRadio = opts.includes("yes") && opts.includes("no") && opts.length <= 3;
+        if (!isYesNoRadio) continue; // not a yes/no radio, skip
+      }
+
+      // Fallback for required yesno/radio-yesno fields not matched by any rule:
+      // default to "no" — safer than leaving blank
       if (!mappings[field.id] && field.required) {
         let ruleMatched = false;
         for (const rule of RULES) {
@@ -466,22 +492,18 @@
       for (const rule of RULES) {
         if (rule.patterns.some(p => p.test(lbl))) {
           const ans = rule.answer();
-          // Only override if Claude's answer doesn't look like a valid yes/no
           const current = (mappings[field.id] || "").toLowerCase().trim();
           if (current !== "yes" && current !== "no") {
-            // Claude returned something non-binary — always override
             mappings[field.id] = ans;
             console.log(`[JobWatch] Rule engine overrode "${lbl}" → ${ans}`);
           } else if (current === "yes" && ans === "no") {
-            // Claude said yes but rule says no — trust rule engine
             mappings[field.id] = ans;
             console.log(`[JobWatch] Rule engine corrected "${lbl}": yes → no`);
           } else if (current === "no" && ans === "yes") {
-            // Claude said no but rule says yes — trust rule engine
             mappings[field.id] = ans;
             console.log(`[JobWatch] Rule engine corrected "${lbl}": no → yes`);
           }
-          break; // first matching rule wins
+          break;
         }
       }
     }
@@ -502,14 +524,46 @@
         continue;
       }
 
-      // CHECKBOX — auto-check all required checkboxes (always legal agreements)
+      // CHECKBOX — smart selection: match by label when possible, else check all
       if (field.type === "checkbox") {
         const checkboxes = [...entry.querySelectorAll("input[type=checkbox]")];
+        const lbl = (field.label || "").toLowerCase();
         const checked = [];
-        for (const cb of checkboxes) {
-          if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
-          checked.push(getInputLabel(cb, entry) || "acknowledged");
+
+        // Detect special multi-select checkbox groups
+        const isPronounField = lbl.includes("pronoun");
+        const isHowDidYouHear = lbl.includes("how did you hear") || lbl.includes("how did you find") || lbl.includes("how did you learn") || lbl.includes("where did you hear");
+
+        if (isPronounField) {
+          // Only check the checkbox that matches the user's pronoun setting
+          const userPronoun = (userDoc.pronouns || "He/Him").toLowerCase();
+          for (const cb of checkboxes) {
+            const cbLabel = getInputLabel(cb, entry).toLowerCase();
+            const shouldCheck = cbLabel.includes(userPronoun) ||
+              (userPronoun.includes("he") && cbLabel.includes("he/him")) ||
+              (userPronoun.includes("she") && cbLabel.includes("she/her")) ||
+              (userPronoun.includes("they") && cbLabel.includes("they/them"));
+            if (shouldCheck && !cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (cb.checked) checked.push(getInputLabel(cb, entry));
+          }
+        } else if (isHowDidYouHear) {
+          // Only check "LinkedIn" option
+          for (const cb of checkboxes) {
+            const cbLabel = getInputLabel(cb, entry).toLowerCase();
+            if (cbLabel.includes("linkedin")) {
+              if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+              checked.push(getInputLabel(cb, entry));
+              break;
+            }
+          }
+        } else {
+          // Legal agreements / consent / other — check all
+          for (const cb of checkboxes) {
+            if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            checked.push(getInputLabel(cb, entry) || "acknowledged");
+          }
         }
+
         if (checked.length) answersLog[field.id] = { label: field.label, answer: checked.join("; "), type: "checkbox" };
         continue;
       }
@@ -577,15 +631,80 @@
         continue;
       }
 
-      // DATE PICKER
+      // DATE PICKER — handles both native <input type=date> and custom calendar widgets (Ashby)
       if (field.type === "date" || field.type === "Date Picker") {
-        const val = mappings[field.id] || userDoc.availability || "";
-        if (val) {
-          const input = entry.querySelector("input[type=date], input[type=text]");
-          if (input) {
-            await setInputValue(field.id, val);
-            answersLog[field.id] = { label: field.label, answer: val, type: "date" };
+        // Compute target date: 20 days from today
+        const targetDate = new Date();
+        targetDate.setDate(targetDate.getDate() + 20);
+
+        // Check if this field has a custom calendar widget (Ashby's date picker)
+        const calendarTrigger = entry.querySelector("[data-testid='date-picker'], [class*='datePicker'], [class*='DatePicker'], [class*='calendar'], button[aria-label*='calendar']")
+          || entry.querySelector("input[readonly]")  // Ashby uses readonly inputs for calendar triggers
+          || entry.querySelector("button svg")?.closest("button"); // calendar icon button
+
+        const nativeInput = entry.querySelector("input[type='date']");
+
+        if (nativeInput) {
+          // Native date input — just set the value
+          const mm = String(targetDate.getMonth() + 1).padStart(2, "0");
+          const dd = String(targetDate.getDate()).padStart(2, "0");
+          const yyyy = targetDate.getFullYear();
+          await setInputValue(field.id, `${mm}/${dd}/${yyyy}`);
+          answersLog[field.id] = { label: field.label, answer: `${mm}/${dd}/${yyyy}`, type: "date" };
+        } else {
+          // Custom calendar widget — click to open, navigate months, click day
+          const openBtn = entry.querySelector("button") || entry.querySelector("input");
+          if (openBtn) {
+            openBtn.click();
+            await new Promise(r => setTimeout(r, 400));
           }
+
+          // Calendar should now be open somewhere on the page
+          const tryPickDate = async () => {
+            const targetMonth = targetDate.getMonth(); // 0-indexed
+            const targetYear = targetDate.getFullYear();
+            const targetDay = targetDate.getDate();
+
+            for (let attempt = 0; attempt < 24; attempt++) {
+              // Detect the visible month/year header
+              const header = document.querySelector("[class*='calendar'] [class*='month'], [class*='Calendar'] [class*='Month'], [class*='datepicker'] h2, [class*='DatePicker'] h2, [aria-label*='month'], [aria-label*='May'], [aria-label*='June'], [aria-label*='July'], [aria-label*='August']")
+                || document.querySelector("h2, [role='heading']");
+
+              if (header) {
+                const headerText = header.textContent.trim();
+                // Parse month name from header (e.g. "May 2026")
+                const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+                let visibleMonth = -1, visibleYear = -1;
+                months.forEach((m, i) => { if (headerText.toLowerCase().includes(m)) visibleMonth = i; });
+                const yearMatch = headerText.match(/\d{4}/);
+                if (yearMatch) visibleYear = parseInt(yearMatch[0]);
+
+                if (visibleMonth === targetMonth && visibleYear === targetYear) break; // correct month
+
+                // Need to advance or go back — find next/prev buttons
+                const navBtns = document.querySelectorAll("[class*='calendar'] button, [class*='Calendar'] button, [class*='DatePicker'] button");
+                const isAfter = (visibleYear > targetYear) || (visibleYear === targetYear && visibleMonth > targetMonth);
+                // Pick left (prev) or right (next) arrow
+                const arrowBtn = isAfter ? navBtns[0] : navBtns[navBtns.length - 1];
+                if (arrowBtn) { arrowBtn.click(); await new Promise(r => setTimeout(r, 250)); }
+                else break;
+              } else break;
+            }
+
+            // Now click the target day cell
+            const dayCells = [...document.querySelectorAll("[class*='calendar'] td, [class*='Calendar'] td, [class*='day']:not([class*='disabled']):not([class*='outside'])")];
+            const dayCell = dayCells.find(el => {
+              const t = el.textContent.trim();
+              return t === String(targetDay) || t === String(targetDay).padStart(2, "0");
+            });
+            if (dayCell) {
+              dayCell.click();
+              await new Promise(r => setTimeout(r, 300));
+              answersLog[field.id] = { label: field.label, answer: targetDate.toDateString(), type: "date" };
+            }
+          };
+
+          await tryPickDate();
         }
         continue;
       }
@@ -593,13 +712,20 @@
       // RADIO
       if (field.type === "radio") {
         let answer = mappings[field.id];
-        if (!answer && pendingJob?.locationName) {
-          const lbl = field.label.toLowerCase();
-          if (lbl.includes("location") || lbl.includes("office") || lbl.includes("which city") ||
-            lbl.includes("interested in") || lbl.includes("which site")) {
-            answer = pendingJob.locationName;
-          }
+        const lbl = (field.label || "").toLowerCase();
+
+        // For yes/no radios: the applyYesNoRules already set mappings[field.id] = "yes"/"no"
+        // For location/office radios: try to match job location
+        if (!answer && (lbl.includes("location") || lbl.includes("office") || lbl.includes("which city") ||
+          lbl.includes("interested in") || lbl.includes("which site"))) {
+          if (pendingJob?.locationName) answer = pendingJob.locationName;
         }
+
+        // For "where are you based" with city/state hint — answer with user's city
+        if (!answer && (lbl.includes("where are you based") || lbl.includes("where do you live") || lbl.includes("which city are you in"))) {
+          answer = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
+        }
+
         if (answer) {
           const radios = [...entry.querySelectorAll("input[type=radio]")];
           const target = findBestRadio(radios, entry, answer);
@@ -870,7 +996,7 @@
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       showOverlay(attempt === 0 ? "🚀 JobWatch: Submitting…" : `🔄 Retrying submission (${attempt}/${MAX_RETRIES})…`);
       console.log("[JobWatch] Submitting. answersLog:", JSON.stringify(answersLog, null, 2));
-      submitBtn.click();
+      // submitBtn.click();
       await new Promise(r => setTimeout(r, 2200));
 
       const formErrors = scrapeFormErrors(form);
