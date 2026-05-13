@@ -405,6 +405,7 @@ export default function Feeds({ user }) {
         </div>
       </div>
 
+      {/* 
       <div className="mt-16">
         <dl className="grid grid-cols-1 gap-x-8 gap-y-10 text-center sm:grid-cols-3">
           {feedStats.map((stat) => (
@@ -459,7 +460,7 @@ export default function Feeds({ user }) {
                   <div className="w-full flex flex-col items-center">
                     <div className="mb-6 w-full">
                       <LogoImage
-                        src={logoUrl}
+                         src={logoUrl}
                         alt={feed.company}
                         company={feed.company}
                       />
@@ -485,7 +486,7 @@ export default function Feeds({ user }) {
           <div className="mt-16">
             <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6">Archived History</h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-4">
-              {archivedFeeds.map((feed) => (
+               {archivedFeeds.map((feed) => (
                 <div key={feed.id} className="group bg-gray-50/50 p-4 rounded-xl border border-gray-100 flex flex-col items-center opacity-60 hover:opacity-100 transition-opacity">
                   <span className="text-[10px] font-bold text-gray-900 truncate w-full text-center">{feed.company}</span>
                   <button
@@ -500,6 +501,7 @@ export default function Feeds({ user }) {
           </div>
         )}
       </div>
+      */ }
     </div>
   );
 }
