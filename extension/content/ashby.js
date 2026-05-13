@@ -1053,30 +1053,46 @@
         let answer = mappings[field.id];
         const lbl = (field.label || "").toLowerCase();
 
-        // For yes/no radios: the applyYesNoRules already set mappings[field.id] = "yes"/"no"
-        // For location/office radios: try to match job location
-        if (!answer && (lbl.includes("location") || lbl.includes("office") || lbl.includes("which city") ||
-          lbl.includes("interested in") || lbl.includes("which site"))) {
+        if (!answer && (
+          lbl.includes("location") ||
+          lbl.includes("office") ||
+          lbl.includes("which city") ||
+          lbl.includes("interested in") ||
+          lbl.includes("which site")
+        )) {
           if (pendingJob?.locationName) answer = pendingJob.locationName;
         }
 
-        // For "where are you based" with city/state hint — answer with user's city
-        if (!answer && (lbl.includes("where are you based") || lbl.includes("where do you live") || lbl.includes("which city are you in"))) {
+        if (!answer && (
+          lbl.includes("where are you based") ||
+          lbl.includes("where do you live") ||
+          lbl.includes("which city are you in")
+        )) {
           answer = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
         }
 
+        console.log("[JobWatch] RADIO attempting:", {
+          id: field.id,
+          label: field.label,
+          answer
+        });
+
         if (answer) {
-          const radios = [...entry.querySelectorAll("input[type=radio]")];
-          const target = findBestRadio(radios, entry, answer);
-          if (target && !target.checked) {
-            const index = radios.indexOf(target);
-            const result = await clickRadio(field.id, index);
-            if (result?.ok) {
-              answersLog[field.id] = { label: field.label, answer: getInputLabel(target, entry), type: "radio" };
-            }
-            await new Promise(r => setTimeout(r, 200));
+          const result = await clickRadio(field.id, answer);
+
+          console.log("[JobWatch] RADIO result:", result);
+
+          if (result?.ok) {
+            answersLog[field.id] = {
+              label: field.label,
+              answer: result.selectedLabel || answer,
+              type: "radio"
+            };
           }
+
+          await new Promise(r => setTimeout(r, 250));
         }
+
         continue;
       }
 

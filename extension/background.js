@@ -492,19 +492,71 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
         };
 
-        // Set a React-controlled Radio button by index
-        const setReactRadio = async (fieldId, index) => {
-          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
-          if (!entry) return { ok: false, error: "radio entry not found" };
+        const clickReactRadio = async (fieldId, answer) => {
+          const entry = document.querySelector(
+            `[data-field-path="${CSS.escape(fieldId)}"]`
+          );
 
-          const radios = [...entry.querySelectorAll("input[type=radio]")];
-          if (!radios[index]) return { ok: false, error: "radio at index not found" };
+          if (!entry) {
+            return { ok: false, error: "radio field entry not found" };
+          }
 
-          const target = radios[index];
-          target.click();
-          await new Promise(r => setTimeout(r, 200));
+          const target = String(answer || "").toLowerCase().trim();
+          const radios = [...entry.querySelectorAll("input[type='radio']")];
 
-          return { ok: true, checked: target.checked };
+          if (!radios.length) {
+            return { ok: false, error: "no radio inputs found" };
+          }
+
+          const getLabel = (radio) => {
+            if (radio.id) {
+              const label = entry.querySelector(
+                `label[for="${CSS.escape(radio.id)}"]`
+              );
+              if (label) return label.textContent.trim();
+            }
+
+            const parentLabel = radio.closest("label");
+            if (parentLabel) return parentLabel.textContent.trim();
+
+            return radio.value || "";
+          };
+
+          const bestRadio =
+            radios.find(r => getLabel(r).toLowerCase().trim() === target) ||
+            radios.find(r => getLabel(r).toLowerCase().includes(target)) ||
+            radios.find(r => target.includes(getLabel(r).toLowerCase()));
+
+          if (!bestRadio) {
+            return {
+              ok: false,
+              error: `radio option "${target}" not found`,
+              options: radios.map(getLabel)
+            };
+          }
+
+          const selectedLabel = getLabel(bestRadio);
+
+          // Prefer clicking the visible label, which Ashby wires to React
+          let clickable = null;
+
+          if (bestRadio.id) {
+            clickable = entry.querySelector(
+              `label[for="${CSS.escape(bestRadio.id)}"]`
+            );
+          }
+
+          clickable = clickable || bestRadio;
+
+          clickable.click();
+
+          await new Promise(r => setTimeout(r, 250));
+
+          return {
+            ok: bestRadio.checked,
+            selectedLabel,
+            checked: bestRadio.checked
+          };
         };
 
         const extractSchema = () => {
@@ -559,7 +611,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
         if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
-        if (action === "clickRadio") { funcToRun = setReactRadio; argsToRun = [id, value]; }
+        if (action === "clickRadio") { funcToRun = clickReactRadio; argsToRun = [id, value]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({
