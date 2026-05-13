@@ -294,37 +294,7 @@ export default function Feeds({ user }) {
     }
   }
 
-  async function runNotableFullSync() {
-    setBusyRunNow(true);
-    setLastRunSummary(null);
-    try {
-      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
-      if (!projectId) {
-        showToast("Missing project id env.", "error");
-        return;
-      }
-      const idToken = await user.getIdToken();
-      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}&fullSync=true&forceRescore=true&targetUrl=${encodeURIComponent("https://api.ashbyhq.com/posting-api/job-board/notable")}`;
-      const resp = await fetch(endpoint, { 
-        method: "GET",
-        headers: {
-          "Authorization": `Bearer ${idToken}`
-        }
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        showToast(data?.error || "Notable sync failed.", "error");
-        return;
-      }
-      setLastRunSummary(data);
-      showToast(`Notable full sync & rescore complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
-    } catch (e) {
-      console.error(e);
-      showToast(e?.message || "Notable sync failed.", "error");
-    } finally {
-      setBusyRunNow(false);
-    }
-  }
+
 
   async function archiveFeed(feedId) {
     setBusyArchiveId(feedId);
@@ -375,21 +345,13 @@ export default function Feeds({ user }) {
             <span className="font-semibold">Eightfold.ai</span> (Microsoft, PayPal, Nvidia, etc.) job boards.
           </p>
 
-          <div className="mt-6 space-y-3">
+          <div className="mt-6">
             <button
               onClick={runSyncNow}
               disabled={busyRunNow}
               className="btn-primary w-full shadow-lg shadow-indigo-200/50 uppercase tracking-widest text-[11px] font-black py-3"
             >
               {busyRunNow ? "Syncing..." : "Run sync now"}
-            </button>
-            
-            <button
-              onClick={runNotableFullSync}
-              disabled={busyRunNow}
-              className="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-lg shadow-amber-200/50 uppercase tracking-widest text-[11px] font-black py-3 transition-colors"
-            >
-              {busyRunNow ? "Syncing & Rescoring Notable..." : "TEMP: Full Sync & Rescore Notable"}
             </button>
           </div>
 
@@ -445,7 +407,6 @@ export default function Feeds({ user }) {
         </div>
       </div>
 
-      {/* 
       <div className="mt-16">
         <dl className="grid grid-cols-1 gap-x-8 gap-y-10 text-center sm:grid-cols-3">
           {feedStats.map((stat) => (
@@ -541,7 +502,6 @@ export default function Feeds({ user }) {
           </div>
         )}
       </div>
-      */ }
     </div>
   );
 }

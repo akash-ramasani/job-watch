@@ -362,15 +362,9 @@ exports.runSyncNow = onRequest(
     const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
 
     const now = admin.firestore.Timestamp.now();
-    const isFullSync = req.query.fullSync === "true";
-    const forceRescore = req.query.forceRescore === "true";
-    const targetUrl = req.query.targetUrl;
-
-    const recentCutoff = isFullSync
-      ? admin.firestore.Timestamp.fromDate(new Date("2000-01-01"))
-      : admin.firestore.Timestamp.fromDate(
-          new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
-        );
+    const recentCutoff = admin.firestore.Timestamp.fromDate(
+      new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
+    );
 
     await runRef.set(
       {
@@ -388,7 +382,7 @@ exports.runSyncNow = onRequest(
     );
 
     try {
-      const summary = await syncUserRecentJobs({ userId, now, recentCutoff, targetUrl, forceRescore });
+      const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
 
       const finishedAt = admin.firestore.Timestamp.now();
       const durationMs = finishedAt.toMillis() - startedAt.toMillis();
@@ -469,7 +463,7 @@ exports.runSyncNow = onRequest(
  * USER SYNC CORE
  * ----------------------------
  */
-async function syncUserRecentJobs({ userId, now, recentCutoff, targetUrl, forceRescore }) {
+async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   const feedsSnap = await db
     .collection("users")
     .doc(userId)
@@ -477,10 +471,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, targetUrl, forceR
     .where("archivedAt", "==", null)
     .get();
 
-  let feeds = feedsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
-  if (targetUrl) {
-    feeds = feeds.filter(f => f.url === targetUrl);
-  }
+  const feeds = feedsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
   const feedsCount = feeds.length;
 
   if (feedsCount === 0) {
@@ -643,7 +634,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, targetUrl, forceR
 
   // AWAIT scoring — Cloud Functions terminate any un-awaited Promises immediately upon return!
   if (newJobsForScoring.length > 0) {
-    await scoreNewJobsForUser(userId, newJobsForScoring, forceRescore).catch((err) =>
+    await scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
       logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
     );
   }
@@ -1282,7 +1273,7 @@ Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
  * Fetches JDs, scores with Claude, writes score back to job doc.
  * Never stores the JD itself.
  */
-async function scoreNewJobsForUser(userId, newJobs, forceRescore = false) {
+async function scoreNewJobsForUser(userId, newJobs) {
   if (!newJobs || newJobs.length === 0) return;
 
   // Check user's AI scoring toggle — stored at users/{uid}/settings/preferences
@@ -1358,7 +1349,7 @@ async function scoreNewJobsForUser(userId, newJobs, forceRescore = false) {
     const snap = snapshots[i];
     const job = uniqueNewJobs[i];
     const existingScore = snap.exists ? snap.data()?.relevanceScore : null;
-    if (!forceRescore && existingScore !== null && existingScore >= 0) {
+    if (existingScore !== null && existingScore >= 0) {
       logger.info(`scoreNewJobsForUser: ${job.jobDocId} already has valid score (${existingScore}), skipping`);
       continue;
     }
