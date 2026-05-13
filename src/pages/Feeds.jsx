@@ -292,6 +292,8 @@ export default function Feeds({ user }) {
     } finally {
       setBusyRunNow(false);
     }
+  }
+
   async function runNotableFullSync() {
     setBusyRunNow(true);
     setLastRunSummary(null);
