@@ -208,6 +208,8 @@
       const id = entry.dataset.fieldPath || "";
       const labelEl = entry.querySelector("label.ashby-application-form-question-title");
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
+      const descEl = entry.querySelector(".ashby-application-form-question-description, [class*='_description_']");
+      const description = descEl ? descEl.textContent.trim() : "";
       const required = !!(labelEl?.classList.contains("_required_101oc_92") || entry.querySelector("[required]"));
 
       // ── Schema-first type detection ──
@@ -246,7 +248,7 @@
         else type = inputEl?.type || "text";
       }
 
-      const field = { id, label, type, required };
+      const field = { id, label, description, type, required };
       if (options) {
         field.options = options;
       } else if (type === "radio") {
@@ -499,8 +501,9 @@
       if (field.type === "location") continue;
 
       const lbl = field.label || "";
+      const textToTest = `${lbl} ${field.description || ""}`;
       for (const rule of RULES) {
-        if (rule.patterns.some(p => p.test(lbl))) {
+        if (rule.patterns.some(p => p.test(lbl)) || rule.patterns.some(p => p.test(textToTest))) {
           const ans = rule.answer();
           if (ans) {
             mappings[field.id] = ans;
@@ -665,21 +668,35 @@
 
       // Do not auto-default required yes/no fields to "no" anymore.
       // Unrecognized questions (e.g. compliance, strict requirements) should fall to AI or manual review.
-      for (const rule of RULES) {
-        if (rule.patterns.some(p => p.test(lbl))) {
-          const ans = rule.answer();
-          const current = (mappings[field.id] || "").toLowerCase().trim();
-          if (current !== "yes" && current !== "no") {
-            mappings[field.id] = ans;
-            console.log(`[JobWatch] Rule engine overrode "${lbl}" → ${ans}`);
-          } else if (current === "yes" && ans === "no") {
-            mappings[field.id] = ans;
-            console.log(`[JobWatch] Rule engine corrected "${lbl}": yes → no`);
-          } else if (current === "no" && ans === "yes") {
-            mappings[field.id] = ans;
-            console.log(`[JobWatch] Rule engine corrected "${lbl}": no → yes`);
-          }
-          break;
+
+      // Match rules against DESCRIPTION first (contains the actual question),
+      // then fall back to LABEL. This prevents label="Work Authorization" from
+      // overriding description="Do you require sponsorship?"
+      let matchedRule = null;
+      const desc = field.description || "";
+
+      // 1. Try description first (most specific)
+      if (desc) {
+        for (const rule of RULES) {
+          if (rule.patterns.some(p => p.test(desc))) { matchedRule = rule; break; }
+        }
+      }
+      // 2. Fall back to label if no description match
+      if (!matchedRule) {
+        for (const rule of RULES) {
+          if (rule.patterns.some(p => p.test(lbl))) { matchedRule = rule; break; }
+        }
+      }
+
+      if (matchedRule) {
+        const ans = matchedRule.answer();
+        const current = (mappings[field.id] || "").toLowerCase().trim();
+        if (current !== "yes" && current !== "no") {
+          mappings[field.id] = ans;
+          console.log(`[JobWatch] Rule engine overrode "${lbl}" → ${ans} (desc: "${desc.substring(0, 60)}…")`);
+        } else if (current !== ans) {
+          mappings[field.id] = ans;
+          console.log(`[JobWatch] Rule engine corrected "${lbl}": ${current} → ${ans}`);
         }
       }
     }
