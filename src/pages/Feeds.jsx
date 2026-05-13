@@ -292,9 +292,7 @@ export default function Feeds({ user }) {
     } finally {
       setBusyRunNow(false);
     }
-  }
-
-  async function runPilotFullSync() {
+  async function runNotableFullSync() {
     setBusyRunNow(true);
     setLastRunSummary(null);
     try {
@@ -304,7 +302,7 @@ export default function Feeds({ user }) {
         return;
       }
       const idToken = await user.getIdToken();
-      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}&fullSync=true&targetUrl=${encodeURIComponent("https://boards-api.greenhouse.io/v1/boards/pilothq/jobs")}`;
+      const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}&fullSync=true&forceRescore=true&targetUrl=${encodeURIComponent("https://api.ashbyhq.com/posting-api/job-board/notable")}`;
       const resp = await fetch(endpoint, { 
         method: "GET",
         headers: {
@@ -313,14 +311,14 @@ export default function Feeds({ user }) {
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        showToast(data?.error || "PilotHQ sync failed.", "error");
+        showToast(data?.error || "Notable sync failed.", "error");
         return;
       }
       setLastRunSummary(data);
-      showToast(`PilotHQ full sync complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
+      showToast(`Notable full sync & rescore complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
     } catch (e) {
       console.error(e);
-      showToast(e?.message || "PilotHQ sync failed.", "error");
+      showToast(e?.message || "Notable sync failed.", "error");
     } finally {
       setBusyRunNow(false);
     }
@@ -385,11 +383,11 @@ export default function Feeds({ user }) {
             </button>
             
             <button
-              onClick={runPilotFullSync}
+              onClick={runNotableFullSync}
               disabled={busyRunNow}
               className="w-full bg-amber-500 hover:bg-amber-600 text-white rounded-xl shadow-lg shadow-amber-200/50 uppercase tracking-widest text-[11px] font-black py-3 transition-colors"
             >
-              {busyRunNow ? "Syncing PilotHQ..." : "TEMP: Full Sync PilotHQ"}
+              {busyRunNow ? "Syncing & Rescoring Notable..." : "TEMP: Full Sync & Rescore Notable"}
             </button>
           </div>
 
