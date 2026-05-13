@@ -271,8 +271,14 @@ export default function Feeds({ user }) {
         showToast("Missing project id env.", "error");
         return;
       }
+      const idToken = await user.getIdToken();
       const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}`;
-      const resp = await fetch(endpoint, { method: "GET" });
+      const resp = await fetch(endpoint, { 
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${idToken}`
+        }
+      });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
         showToast(data?.error || "Manual run failed.", "error");
