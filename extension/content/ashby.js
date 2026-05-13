@@ -288,28 +288,50 @@
         patterns: [/linkedin/i, /linked.?in/i],
         answer: () => userDoc.linkedin || ""
       },
-      // Combined "GitHub/Portfolio/Twitter/Etc" fields
+      // Combined "GitHub/Portfolio/Twitter/Etc" fields — must come before individual checks
       {
-        patterns: [/github.*portfolio|portfolio.*github|github.*twitter|social.*link/i],
+        patterns: [/github.*portfolio|portfolio.*github|github.*twitter|social.*link/i,
+          /a link we should look at/i, /website.*link.*(github|portfolio)/i],
         answer: () => userDoc.github || userDoc.portfolio || ""
       },
       {
-        patterns: [/github/i, /git.?hub/i],
+        patterns: [/github/i, /git.?hub/i, /github url/i],
         answer: () => userDoc.github || ""
+      },
+      {
+        patterns: [/google.?scholar/i],
+        answer: () => userDoc.googleScholar || userDoc.portfolio || ""
+      },
+      {
+        patterns: [/^x \(formerly twitter\)/i, /twitter.*url/i, /^twitter$/i],
+        answer: () => userDoc.twitter || ""
       },
       {
         patterns: [/portfolio/i, /personal.?site/i, /portfolio.?link/i, /portfolio.?url/i],
         answer: () => userDoc.portfolio || ""
       },
       {
-        patterns: [/^website$/i, /personal.?website/i],
+        patterns: [/^website$/i, /personal.?website/i, /other.?website/i],
         answer: () => userDoc.portfolio || ""
       },
 
       // ── Location (text inputs — the Location widget type is handled separately) ──
       {
-        patterns: [/^location$/i, /current.?location/i, /where.*located/i, /where.*based/i, /where.*currently/i],
+        patterns: [/^location$/i, /current.?location/i, /where.*located/i, /where.*based/i,
+          /where.*currently/i, /what.*city.*live/i, /what.*city.*state.*reside/i,
+          /city.*state.*country/i, /physical.*location/i],
         answer: () => cityRegion
+      },
+      // City-only text field
+      {
+        patterns: [/^what city do you live/i, /^which city are you/i, /^city$/i],
+        answer: () => userDoc.city || ""
+      },
+      // State-only / payroll state
+      {
+        patterns: [/state.*work.*from/i, /payroll.*state/i, /which state.*work/i,
+          /from which.*state/i, /^state$/i],
+        answer: () => userDoc.region || "California"
       },
 
       // ── Availability / Start Date ──────────────────────────────────────
@@ -321,24 +343,69 @@
         answer: () => userDoc.availability || "Immediately"
       },
 
+      // ── Notice period ──────────────────────────────────────────────────
+      {
+        patterns: [/notice.{0,30}(period|give|employer|current)/i, /how.{0,20}notice/i,
+          /notice.*required/i, /required.*notice/i, /when.*start.*notice/i],
+        answer: () => userDoc.noticePeriod || "2 weeks"
+      },
+
+      // ── Current Job Title ─────────────────────────────────────────────
+      {
+        patterns: [/current.?job.?title/i, /current.?title/i, /your.?current.?title/i,
+          /^job.?title$/i, /^(your )?title$/i, /position.?title/i],
+        answer: () => resumeDoc?.roles?.[0]?.title || ""
+      },
+
       // ── Current Company (from last resume role) ───────────────────────────
       {
         patterns: [/current.?company/i, /current.?employer/i, /where.*currently.*work/i,
-          /where.*most.*recently.*work/i, /most.*recent.*employer/i],
+          /where.*most.*recently.*work/i, /most.*recent.*employer/i,
+          /current or most recent employer/i],
         answer: () => (resumeDoc?.roles?.[0]?.company) || ""
+      },
+
+      // ── University / Education ────────────────────────────────────────
+      {
+        patterns: [/university.*attend/i, /school.*attend/i, /^university$/i,
+          /^college$/i, /^institution$/i, /degree.*from/i, /where.*study/i,
+          /undergraduate.*institution/i, /alma mater/i],
+        answer: () => userDoc.university || ""
+      },
+
+      // ── Salary / Compensation ─────────────────────────────────────────
+      {
+        patterns: [/salary/i, /compensation/i, /pay.{0,15}expect/i, /target.*comp/i,
+          /desired.*pay/i, /minimum.*salary/i, /annual.*expectation/i, /total.*cash/i,
+          /base.*salary/i, /what.*looking.*for.*comp/i, /comp.*expect/i,
+          /salary.*range/i, /expected.*salary/i, /target.*salary/i,
+          /what.*salary.*targeting/i, /desired.*annual/i, /annual.*base/i,
+          /ote/i],
+        answer: () => userDoc.salaryExpectation || "Open to discussion"
       },
 
       // ── How did you hear about this role ─────────────────────────────
       {
         patterns: [/how did you hear/i, /how.*hear.*about/i, /how.*find.*role/i,
-          /how.*discover/i, /referral.*source/i, /source.*referral/i],
+          /how.*discover/i, /referral.*source/i, /source.*referral/i,
+          /where.*find.*posting/i, /where.*find.*job/i, /how.*find.*out/i,
+          /where.*hear.*about/i, /what brought you.*posting/i,
+          /how.*learn.*about.*position/i, /how.*learn.*about.*opportunit/i],
+        answer: () => "LinkedIn"
+      },
+
+      // ── "If you selected Other, please specify" ───────────────────────
+      {
+        patterns: [/if.{0,20}(selected|chose).{0,20}other/i, /if other.*specify/i,
+          /if.*other.*please/i, /other.*not listed.*list/i],
         answer: () => "LinkedIn"
       },
 
       // ── Visa sponsorship as text (some companies use Textarea not yesno) ───
       {
         patterns: [/require.*sponsorship/i, /need.*sponsorship/i, /visa.*sponsorship/i,
-          /sponsorship.*visa/i, /h.?1.?b/i],
+          /sponsorship.*visa/i, /h.?1.?b/i, /require.*employer.*sponsor/i,
+          /sponsor.*immigr/i],
         answer: () => userDoc.requiresSponsorship === "Yes"
           ? "Yes, I will require visa sponsorship in the future"
           : "No, I do not require visa sponsorship"
@@ -379,7 +446,8 @@
 
     // Pattern buckets → answer
     const RULES = [
-      // Work authorization — answer YES
+      // Work authorization — YES (authorized) or NO (not authorized)
+      // NOTE: "without sponsorship" phrasing still means authorized=YES even if we need future sponsorship
       {
         patterns: [
           /authoriz.{0,30}work/i,
@@ -389,10 +457,31 @@
           /work.{0,20}authoriz/i,
           /authoriz.{0,20}employ/i,
           /permitted.{0,20}work/i,
+          /authoriz.{0,50}without.{0,20}sponsorship/i,
+          /eligible.{0,50}without.{0,20}sponsorship/i,
+          /indefinitely.{0,30}without/i,
+          /right.{0,20}work.{0,20}indefinitely/i,
+          /legally.{0,30}eligible.{0,30}employ/i,
+          /legally.{0,30}eligible.{0,30}work/i,
+          /without.{0,20}restriction/i,
+          /without.{0,20}sponsorship.{0,30}(any|your)/i,
         ],
         answer: () => isAuthorized ? "yes" : "no",
       },
-      // Visa / sponsorship — answer NO (user does not need it)
+      // US residency — are you IN the US right now?
+      {
+        patterns: [
+          /currently reside in.{0,20}(us|united states)/i,
+          /live in.{0,20}(us|united states)/i,
+          /currently located in.{0,20}(us|united states)/i,
+          /reside.{0,20}(us|united states)/i,
+          /based in.{0,20}(us|united states)/i,
+          /currently in.{0,20}(us|united states)/i,
+          /^do you currently reside in the us/i,
+        ],
+        answer: () => (userDoc.country === "United States" || !userDoc.country) ? "yes" : "no",
+      },
+      // Visa / sponsorship — YES if needs it, NO if doesn't
       {
         patterns: [
           /require.{0,30}sponsorship/i,
@@ -402,6 +491,12 @@
           /h.?1.?b/i,
           /immigration.{0,20}sponsor/i,
           /work.{0,20}permit.{0,20}sponsor/i,
+          /require.{0,40}employ.{0,20}visa/i,
+          /require.{0,30}employer.{0,30}sponsor/i,
+          /employer.{0,30}sponsor.{0,30}(case|status)/i,
+          /sponsor.{0,40}immigr/i,
+          /employment.*visa.*(e\.?g|h.?1|tn|o.?1)/i,
+          /visa.*(status|case).*(sponsor|petition)/i,
         ],
         answer: () => needsSponsorship ? "yes" : "no",
       },
