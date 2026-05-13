@@ -1125,12 +1125,16 @@
   }
 
   // ─── Return list of required fields that are still empty ─────────────────
-  function getUnfilledRequired(form, fields) {
+  function getUnfilledRequired(form, fields, answersLog = {}) {
     const missing = [];
     for (const field of fields) {
       if (!field.required) continue;
       const entry = form.querySelector(`[data-field-path="${CSS.escape(field.id)}"]`);
       if (!entry) continue;
+
+      // If the AI already successfully filled it this session, trust the log
+      // (Bypasses brittle DOM checks for base64 files and React yes/no states)
+      if (answersLog[field.id]) continue;
 
       if (field.type === "file") {
         const fi = entry.querySelector("input[type=file]");
@@ -1286,7 +1290,7 @@
     // ── Pre-submit: fix any still-empty required fields ───────────────────
     showOverlay("🔍 JobWatch: Verifying required fields…");
     await new Promise(r => setTimeout(r, 400));
-    const preCheck = getUnfilledRequired(form, fields);
+    const preCheck = getUnfilledRequired(form, fields, answersLog);
 
     if (preCheck.length) {
       showOverlay(`🤖 AI filling ${preCheck.length} missing field(s)…`);
@@ -1298,7 +1302,7 @@
         await new Promise(r => setTimeout(r, 400));
       } catch (e) { console.warn("[JobWatch] Pre-submit retry error:", e.message); }
 
-      const stillEmpty = getUnfilledRequired(form, fields);
+      const stillEmpty = getUnfilledRequired(form, fields, answersLog);
       if (stillEmpty.length) {
         const displayLabels = stillEmpty.slice(0, 2).map(f => {
           let l = f.label.replace(/\s*\([^)]*\)/g, '');
