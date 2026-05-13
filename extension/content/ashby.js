@@ -82,16 +82,45 @@
 
   // ─── Click a Yes/No button ────────────────────────────────────────────────
   function clickYesNo(entry, answer) {
-    const container = entry.querySelector("[class*='_yesno_']") || entry;
     const target = (answer || "").toLowerCase().trim();
-    const buttons = [...container.querySelectorAll("button")];
-    if (buttons.length < 2) return false;
-    
-    // Find the button that matches the answer text exactly, or fallback to index 0/1 for yes/no
+
+    // Try multiple strategies to find the Yes/No buttons
+    let buttons = [];
+
+    // Strategy 1: Ashby _yesno_ container
+    const yesNoContainer = entry.querySelector("[class*='_yesno_']");
+    if (yesNoContainer) {
+      buttons = [...yesNoContainer.querySelectorAll("button")];
+    }
+
+    // Strategy 2: All buttons directly in the entry
+    if (buttons.length < 2) {
+      buttons = [...entry.querySelectorAll("button")];
+    }
+
+    // Strategy 3: Look for buttons by text content anywhere in entry
+    if (buttons.length < 2) {
+      buttons = [...entry.querySelectorAll("*")].filter(el =>
+        el.tagName === "BUTTON" || (el.role === "button") ||
+        (el.tabIndex >= 0 && /^(yes|no)$/i.test(el.textContent.trim()))
+      );
+    }
+
+    if (buttons.length < 2) {
+      console.warn(`[JobWatch] clickYesNo FAILED: found ${buttons.length} button(s) in entry for "${entry.dataset.fieldPath}"`);
+      return false;
+    }
+
+    // Find the button that matches the answer text
     const btn = buttons.find(b => b.textContent.trim().toLowerCase() === target)
       || (target === "yes" ? buttons[0] : buttons[1]);
-    
-    if (btn) { btn.click(); return true; }
+
+    if (btn) {
+      console.log(`[JobWatch] clickYesNo: clicking "${btn.textContent.trim()}" for target "${target}"`);
+      btn.click();
+      return true;
+    }
+    console.warn(`[JobWatch] clickYesNo: no matching button found for "${target}"`);
     return false;
   }
 
@@ -528,8 +557,8 @@
 
     // Pattern buckets → answer
     const RULES = [
-      // "Require work authorization" — INVERTED semantics!
-      // "Will you require work authorization?" → authorized people answer NO
+      // "Will you require work authorization?" = "Will you need sponsorship?"
+      // Someone who needs sponsorship DOES require work authorization support.
       // This MUST come before the general work-auth rule to match first.
       {
         patterns: [
@@ -539,7 +568,7 @@
           /require.{0,30}u\.?s\.?.{0,15}work.?auth/i,
           /need.{0,30}work.?auth/i,
         ],
-        answer: () => isAuthorized ? "no" : "yes",
+        answer: () => needsSponsorship ? "yes" : "no",
       },
       // Work authorization — "Are you authorized?" → authorized people answer YES
       // NOTE: "without sponsorship" phrasing still means authorized=YES even if we need future sponsorship
