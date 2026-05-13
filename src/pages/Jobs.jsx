@@ -249,7 +249,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     e.stopPropagation();
     setClState({ isOpen: true, job, loading: true, text: "", error: "" });
     try {
-      const coverLetterFn = httpsCallable(functions, "generateCoverLetter");
+      const coverLetterFn = httpsCallable(functions, "generateCoverLetter", { headers: { "X-Session-Token": sessionStorage.getItem("jw_session_token") || "" } });
       const res = await coverLetterFn({ jobId: job.id });
       if (res.data?.text) {
         setClState({ isOpen: true, job, loading: false, text: res.data.text, error: "" });

@@ -91,6 +91,7 @@ export default function ChatAssistant({ user }) {
       const response = await fetch('https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant', {
         method: 'POST',
         headers: {
+          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "",
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${idToken}`,
         },

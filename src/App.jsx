@@ -3,10 +3,11 @@ import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, onIdTokenChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "./firebase";
 
 import TopBar from "./components/TopBar.jsx";
+import SessionEjectedModal from "./components/SessionEjectedModal.jsx";
 
 import Login from "./pages/Login.jsx";
 import Signup from "./pages/Signup.jsx";
@@ -22,6 +23,7 @@ import Footer from "./components/Footer.jsx";
 import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
 
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
+import { useSessionGuard } from "./hooks/useSessionGuard.js";
 
 export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
@@ -33,6 +35,10 @@ export default function App() {
   const [extInstalled, setExtInstalled] = useState(false);
 
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // ── Single-session enforcement ──
+  const { ejected, ejectedDeviceInfo, handleEjectedSignOut } = useSessionGuard(user);
 
   // Detect extension — runs once on mount, retries briefly to handle timing
   useEffect(() => {
@@ -192,6 +198,16 @@ export default function App() {
             {preferences.aiScoringEnabled && <ChatAssistant user={user} />}
           </>
         )}
+
+        {/* Single-session enforcement modal — shown when ejected by another login */}
+        <SessionEjectedModal
+          open={ejected}
+          deviceInfo={ejectedDeviceInfo}
+          onSignInAgain={() => {
+            handleEjectedSignOut();
+            navigate("/login");
+          }}
+        />
       </div>
     </ToastProvider>
   );

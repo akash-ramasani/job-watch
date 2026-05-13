@@ -78,6 +78,10 @@ const CORS_ORIGINS = process.env.ALLOWED_ORIGINS
  * Verify a Firebase ID token from the Authorization header.
  * Throws with a 401-friendly error if missing or invalid.
  * Returns the decoded token (uid, email, etc.)
+ *
+ * checkRevoked=true → if the user's refresh tokens were revoked
+ * (by registerSession), this call will FAIL even if the ID token
+ * hasn't technically expired yet. This closes the ~1h revocation window.
  */
 async function verifyToken(req) {
   const authHeader = req.headers.authorization || "";
@@ -88,7 +92,45 @@ async function verifyToken(req) {
   }
   const idToken = authHeader.slice(7);
   try {
-    return await admin.auth().verifyIdToken(idToken);
+    const decoded = await admin.auth().verifyIdToken(idToken, true /* checkRevoked */);
+
+    // Enforce single-session token on API layer (Layer 3)
+    await verifySessionToken(req, decoded.uid);
+
+    return decoded;
+  } catch (e) {
+    if (e.code === "SESSION_EJECTED") {
+      throw e;
+    }
+    // Differentiate between revoked tokens and other errors
+    if (e.code === "auth/id-token-revoked") {
+      const err = new Error("Session revoked. Please log in again.");
+      err.statusCode = 401;
+      err.code = "SESSION_REVOKED";
+      throw err;
+    }
+    const err = new Error("Invalid or expired token. Please log in again.");
+    err.statusCode = 401;
+    throw err;
+  }
+}
+
+/**
+ * Same as verifyToken but WITHOUT revocation check.
+ * Used ONLY by registerSession — because that endpoint is the one that
+ * calls revokeRefreshTokens(), so the caller's token was issued before
+ * the revocation and would falsely fail the check.
+ */
+async function verifyTokenAllowRevoked(req) {
+  const authHeader = req.headers.authorization || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    const err = new Error("Missing or invalid Authorization header.");
+    err.statusCode = 401;
+    throw err;
+  }
+  const idToken = authHeader.slice(7);
+  try {
+    return await admin.auth().verifyIdToken(idToken); // No checkRevoked
   } catch {
     const err = new Error("Invalid or expired token. Please log in again.");
     err.statusCode = 401;
@@ -183,6 +225,151 @@ exports.exchangeExtensionCode = onRequest(
   }
 );
 
+/**
+ * ----------------------------
+ * SINGLE-SESSION ENFORCEMENT
+ * ----------------------------
+ *
+ * Enterprise-grade "one login at a time" security.
+ *
+ * How it works:
+ *   1. Client calls registerSession immediately after signInWithEmailAndPassword.
+ *   2. Server generates a cryptographic session token, captures IP + user-agent,
+ *      and writes { activeSession: { token, ip, ua, registeredAt } } to the user doc.
+ *   3. Server revokes ALL existing Firebase refresh tokens for the user — this
+ *      forces old sessions to fail on their next token refresh (~1h max).
+ *   4. Client stores the token in sessionStorage and opens a Firestore onSnapshot
+ *      listener on users/{uid}.
+ *   5. If activeSession.token changes (because the user logged in on another device),
+ *      every OTHER tab/device detects the mismatch and auto-signs out.
+ *   6. The NEW login always wins — the latest registerSession call ejects all others.
+ *
+ * Security layers (defense in depth):
+ *   Layer 1: Firestore realtime listener → sub-second client-side ejection
+ *   Layer 2: Refresh token revocation → old sessions can't renew auth (within 1h)
+ *   Layer 3: Session token header validation → API calls fail for stale sessions
+ *   Layer 4: Heartbeat polling → catches network-delayed ejections
+ *   Layer 5: Session audit log → full history in users/{uid}/sessionHistory
+ */
+exports.registerSession = onRequest(
+  { region: REGION, cors: CORS_ORIGINS },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      return res.status(405).json({ ok: false, error: "POST only" });
+    }
+
+    try {
+      const decoded = await verifyTokenAllowRevoked(req);
+      const uid = decoded.uid;
+
+      const crypto = require("crypto");
+      const sessionToken = crypto.randomBytes(32).toString("hex");
+
+      // Extract client IP — supports proxies (Cloudflare, Firebase Hosting, etc.)
+      const ip =
+        req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+        req.headers["x-real-ip"] ||
+        req.connection?.remoteAddress ||
+        "unknown";
+
+      const userAgent = req.headers["user-agent"] || "unknown";
+
+      // Determine device type from user agent
+      const isMobile = /mobile|android|iphone|ipad/i.test(userAgent);
+      const isExtension = /chrome-extension|moz-extension/i.test(userAgent) ||
+        decoded.source === "extension";
+
+      let deviceType = "Desktop";
+      if (isExtension) deviceType = "Extension";
+      else if (isMobile) deviceType = "Mobile";
+
+      // Parse browser name
+      let browser = "Unknown";
+      if (/edg/i.test(userAgent)) browser = "Edge";
+      else if (/chrome/i.test(userAgent)) browser = "Chrome";
+      else if (/firefox/i.test(userAgent)) browser = "Firefox";
+      else if (/safari/i.test(userAgent)) browser = "Safari";
+
+      // ── LAYER 2: Revoke all existing Firebase refresh tokens ──
+      // This forces every other device to fail on its next token refresh
+      // (Firebase tokens last ~1h, so worst case the old session dies in 1h).
+      // Combined with the Firestore realtime listener (Layer 1), ejection is
+      // near-instant in practice.
+      try {
+        await admin.auth().revokeRefreshTokens(uid);
+        logger.info(`registerSession: revoked refresh tokens for uid=${uid}`);
+      } catch (revokeErr) {
+        // Non-fatal — Layer 1 (Firestore listener) still handles immediate ejection
+        logger.warn(`registerSession: revokeRefreshTokens failed: ${revokeErr.message}`);
+      }
+
+      const sessionData = {
+        token: sessionToken,
+        ip,
+        userAgent: userAgent.slice(0, 300),
+        browser,
+        deviceType,
+        registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+        // Monotonic counter to detect stale snapshots
+        version: Date.now(),
+      };
+
+      // Atomically write the new active session — this ejects all other sessions
+      const userRef = db.collection("users").doc(uid);
+      await userRef.set({ activeSession: sessionData }, { merge: true });
+
+      // ── LAYER 5: Session audit log ──
+      // Write to sessionHistory subcollection for security audit trail
+      const historyRef = userRef.collection("sessionHistory").doc();
+      await historyRef.set({
+        action: "login",
+        sessionToken: sessionToken.slice(0, 8) + "…", // Only store prefix for audit
+        ip,
+        browser,
+        deviceType,
+        userAgent: userAgent.slice(0, 200),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`registerSession: uid=${uid} ip=${ip} device=${deviceType} browser=${browser}`);
+
+      res.json({
+        ok: true,
+        sessionToken,
+        device: { browser, deviceType, ip: ip.slice(0, 3) + "***" },
+      });
+    } catch (err) {
+      logger.error("registerSession error:", err);
+      res.status(err.statusCode || 500).json({ ok: false, error: err.message });
+    }
+  }
+);
+
+/**
+ * Validate that a request's session token matches the user's active session.
+ * Call this from any authenticated endpoint to enforce single-session on the API layer.
+ *
+ * Returns true if valid (or if no session enforcement header is present — graceful).
+ * Throws 401 if the session token is present but doesn't match.
+ */
+async function verifySessionToken(req, uid) {
+  const sessionToken = req.headers["x-session-token"];
+  if (!sessionToken) return true; // Graceful — old clients may not send it yet
+
+  const userSnap = await db.collection("users").doc(uid).get();
+  if (!userSnap.exists) return true;
+
+  const activeToken = userSnap.data()?.activeSession?.token;
+  if (!activeToken) return true; // No session enforcement configured yet
+
+  if (activeToken !== sessionToken) {
+    const err = new Error("Session expired. You have been signed out because another login was detected.");
+    err.statusCode = 401;
+    err.code = "SESSION_EJECTED";
+    throw err;
+  }
+  return true;
+}
 
 
 /**
@@ -1931,6 +2118,18 @@ exports.generateCoverLetter = onCall(
     const uid = request.auth?.uid;
     if (!uid) {
       throw new HttpsError("unauthenticated", "You must be logged in to generate a cover letter.");
+    }
+
+    // Single-session enforcement for Callable functions
+    const sessionToken = request.rawRequest?.headers?.["x-session-token"];
+    if (sessionToken) {
+      const userSnap = await db.collection("users").doc(uid).get();
+      if (userSnap.exists) {
+        const activeToken = userSnap.data()?.activeSession?.token;
+        if (activeToken && activeToken !== sessionToken) {
+          throw new HttpsError("unauthenticated", "Session expired. You have been signed out because another login was detected.");
+        }
+      }
     }
 
     const { jobId } = request.data;

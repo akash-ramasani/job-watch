@@ -4,6 +4,10 @@ import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx"; 
 
+const REGISTER_SESSION_URL =
+  import.meta.env.VITE_REGISTER_SESSION_URL ||
+  "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/registerSession";
+
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -17,7 +21,27 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
+
+      // Register session — ejects any existing session on other devices
+      try {
+        const idToken = await cred.user.getIdToken();
+        const resp = await fetch(REGISTER_SESSION_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+        });
+        const data = await resp.json();
+        if (data.ok && data.sessionToken) {
+          sessionStorage.setItem("jw_session_token", data.sessionToken);
+        }
+      } catch (sessionErr) {
+        // Non-blocking — session enforcement is best-effort on login
+        console.warn("[Login] registerSession failed:", sessionErr.message);
+      }
+
       showToast("Logged in successfully!", "success"); 
     } catch (e2) {
       setErr(e2.message || "Login failed");

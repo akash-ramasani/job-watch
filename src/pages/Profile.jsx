@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc, collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { sendEmailVerification, getIdToken } from "firebase/auth";
 import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
@@ -117,6 +117,7 @@ export default function Profile({ user, userMeta }) {
   const [skillInput, setSkillInput] = useState("");
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
   const [togglingAi, setTogglingAi] = useState(false);
+  const [sessions, setSessions] = useState([]);
 
   const dropzoneInputRef = useRef(null);
 
@@ -133,6 +134,16 @@ export default function Profile({ user, userMeta }) {
         }
       }
     });
+
+    const sessionsRef = collection(db, "users", user.uid, "sessionHistory");
+    const qSessions = query(sessionsRef, orderBy("loginAt", "desc"), limit(10));
+    const unsubSessions = onSnapshot(qSessions, (snap) => {
+      setSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => {
+      unsubSessions();
+    };
   }, [user?.uid]);
 
   async function handleToggleAiScoring() {
@@ -193,7 +204,8 @@ export default function Profile({ user, userMeta }) {
       const idToken = await getIdToken(user);
       const res = await fetch(GEN_PRONUNCIATION_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        headers: {
+          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "", "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({ name }),
       });
       const json = await res.json();
@@ -262,7 +274,8 @@ export default function Profile({ user, userMeta }) {
       // Server parses AND uploads to Storage — no client-side CORS needed
       const resp = await fetch(PARSE_RESUME_URL, {
         method: "POST",
-        headers: { Authorization: `Bearer ${idToken}` },
+        headers: {
+          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "", Authorization: `Bearer ${idToken}` },
         body: fd,
       });
 
@@ -899,6 +912,64 @@ export default function Profile({ user, userMeta }) {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* ═══ SECURITY & SESSIONS ═══ */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.3 }}>
+        <div className="section-grid">
+          <div>
+            <SectionHeader
+              label="Security"
+              title="Recent Devices"
+              description="Review the active and past devices where your account was accessed."
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Login History</p>
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-gray-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Active Now
+                </span>
+              </div>
+              <ul className="divide-y divide-gray-50">
+                {sessions.length === 0 ? (
+                  <li className="p-6 text-center text-sm text-gray-400">No session history available.</li>
+                ) : (
+                  sessions.map((session, i) => (
+                    <li key={session.id} className="p-5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${i === 0 ? "bg-emerald-50 text-emerald-600" : "bg-gray-50 text-gray-400"}`}>
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {session.deviceInfo?.browser || "Unknown Browser"} on {session.deviceInfo?.os || "Unknown OS"}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            IP: {session.ip} • {session.loginAt?.toDate ? new Date(session.loginAt.toDate()).toLocaleString() : "Recently"}
+                          </p>
+                        </div>
+                      </div>
+                      {i === 0 && (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
+                          Current
+                        </span>
+                      )}
+                    </li>
+                  ))
+                )}
+              </ul>
+            </div>
+            <p className="mt-4 text-[11px] text-gray-400 leading-relaxed italic px-2">
+              Logging into a new device will automatically and immediately revoke access for all other active devices to protect your account.
+            </p>
           </div>
         </div>
       </motion.div>

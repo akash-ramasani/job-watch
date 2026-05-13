@@ -42,6 +42,7 @@ export default function ExtensionAuth() {
         const res = await fetch(`${FUNCTIONS_BASE}/createExtensionCode`, {
           method: "POST",
           headers: {
+          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "",
             "Content-Type": "application/json",
             Authorization: `Bearer ${idToken}`,
           },

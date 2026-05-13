@@ -276,6 +276,7 @@ export default function Feeds({ user }) {
       const resp = await fetch(endpoint, { 
         method: "GET",
         headers: {
+          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "",
           "Authorization": `Bearer ${idToken}`
         }
       });
