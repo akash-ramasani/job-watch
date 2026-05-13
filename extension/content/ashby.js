@@ -292,31 +292,61 @@
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
       const required = !!(labelEl?.classList.contains("_required_101oc_92"));
 
-      // Check schema for this fieldset too
       const schema = schemaMap.get(id);
-      if (schema) {
-        const type = ASHBY_TYPE_MAP[schema.type] || schema.type?.toLowerCase() || "radio";
-        const field = { id, label, type, required };
-        if (schema.options?.length) {
-          field.options = schema.options.map(o => ({ label: o.label || o, value: o.id || o.label || o }));
-        }
-        fields.push(field);
-        continue;
-      }
 
       const radios = [...fs.querySelectorAll("input[type=radio]")];
       const checkboxes = [...fs.querySelectorAll("input[type=checkbox]")];
 
       if (radios.length) {
         fields.push({
-          id, label, type: "radio", required,
-          options: radios.map(r => ({ label: getInputLabel(r, fs), value: r.value || getInputLabel(r, fs) })),
+          id,
+          label,
+          type: "radio",
+          required,
+          options: radios.map(r => ({
+            label: getInputLabel(r, fs),
+            value: r.value || getInputLabel(r, fs)
+          })),
         });
-      } else if (checkboxes.length) {
+
+        console.log(`[JobWatch] Fieldset DOM override: "${label}" → radio`);
+        continue;
+      }
+
+      if (checkboxes.length) {
         fields.push({
-          id, label, type: "checkbox", required,
-          options: checkboxes.map(cb => ({ label: getInputLabel(cb, fs), inputId: cb.id })),
+          id,
+          label,
+          type: "checkbox",
+          required,
+          options: checkboxes.map(cb => ({
+            label: getInputLabel(cb, fs),
+            inputId: cb.id
+          })),
         });
+
+        console.log(`[JobWatch] Fieldset DOM override: "${label}" → checkbox`);
+        continue;
+      }
+
+      // Only fall back to schema if fieldset DOM did not reveal a control type
+      if (schema) {
+        const type =
+          ASHBY_TYPE_MAP[schema.type] ||
+          schema.type?.toLowerCase() ||
+          "radio";
+
+        const field = { id, label, type, required };
+
+        if (schema.options?.length) {
+          field.options = schema.options.map(o => ({
+            label: o.label || o,
+            value: o.id || o.label || o
+          }));
+        }
+
+        fields.push(field);
+        continue;
       }
     }
 
