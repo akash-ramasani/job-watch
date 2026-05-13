@@ -363,7 +363,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
-      if (onlyHighRelevant && (typeof j.relevanceScore !== "number" || j.relevanceScore < 50)) {
+      if (onlyHighRelevant && (typeof j.relevanceScore !== "number" || j.relevanceScore < 40)) {
         return false;
       }
 
@@ -466,7 +466,7 @@ export default function Jobs({ user, userMeta, preferences }) {
                 Cover Letter
               </button>
             )}
-            {job.absolute_url && (job.source === "ashby" || job.source === "ashbyhq") && (
+            {job.absolute_url && (job.source?.toLowerCase() === "ashby" || job.source?.toLowerCase() === "ashbyhq") && (
               <button
                 onClick={(e) => { e.preventDefault(); handleAutoApply(job); }}
                 className="px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest text-white bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-sm shadow-emerald-200 flex items-center gap-1.5"
