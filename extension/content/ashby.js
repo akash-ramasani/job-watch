@@ -5,6 +5,39 @@
 
 (async function () {
 
+  // ─── Extract Ashby form schema from window.__appData (MAIN world) ────────
+  // Returns a Map<fieldPath, { type, title, required, options }>
+  async function extractAshbySchema() {
+    const schemaMap = new Map();
+    try {
+      const res = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "extractSchema" });
+      const entries = res?.result || [];
+      for (const entry of entries) {
+        schemaMap.set(entry.path, entry);
+      }
+      console.log(`[JobWatch] Schema: extracted ${schemaMap.size} fields from __appData`);
+    } catch (e) {
+      console.warn("[JobWatch] Schema extraction failed (falling back to DOM):", e.message);
+    }
+    return schemaMap;
+  }
+
+  // Map Ashby schema types → internal types
+  const ASHBY_TYPE_MAP = {
+    Boolean: "yesno",
+    ValueSelect: "select",
+    MultiValueSelect: "multiselect",
+    String: "text",
+    LongText: "textarea",
+    Email: "email",
+    Phone: "tel",
+    Url: "url",
+    File: "file",
+    Location: "location",
+    Date: "date",
+    Number: "number",
+  };
+
   // ─── Wait for form ────────────────────────────────────────────────────────
   function waitForForm(timeout = 10000) {
     return new Promise((resolve, reject) => {
@@ -166,7 +199,8 @@
   }
 
   // ─── Scrape ALL fields (including fieldset checkboxes) ───────────────────
-  function scrapeFields(form) {
+  // Uses Ashby schema as PRIMARY type source, DOM as fallback.
+  function scrapeFields(form, schemaMap = new Map()) {
     const fields = [];
 
     // 1. Standard .ashby-application-form-field-entry fields
@@ -176,28 +210,53 @@
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
       const required = !!(labelEl?.classList.contains("_required_101oc_92") || entry.querySelector("[required]"));
 
-      const fileInput = entry.querySelector("input[type=file]");
-      const yesNoEl = entry.querySelector("[class*='_yesno_']");
-      const buttons = [...entry.querySelectorAll("button")];
-      const isYesNo = yesNoEl || (buttons.length === 2 && /yes/i.test(buttons[0].textContent) && /no/i.test(buttons[1].textContent));
-      
-      const combobox = entry.querySelector("input[role='combobox']");
-      const radioEl = entry.querySelector("input[type=radio]");
-      const checkboxEl = entry.querySelector("input[type=checkbox]");
-      const inputEl = entry.querySelector("input:not([type=file]):not([role=combobox]):not([type=radio]):not([type=checkbox]), textarea");
-
+      // ── Schema-first type detection ──
+      const schema = schemaMap.get(id);
       let type;
-      if (fileInput) type = "file";
-      else if (isYesNo) type = "yesno";
-      else if (combobox || id === "_systemfield_location") type = "location";
-      else if (radioEl) type = "radio";
-      else if (checkboxEl) type = "checkbox";
-      else type = inputEl?.type || "text";
+      let options = null;
+
+      if (schema) {
+        // Use Ashby's authoritative type
+        type = ASHBY_TYPE_MAP[schema.type] || schema.type?.toLowerCase() || "text";
+        if (schema.options?.length) {
+          options = schema.options.map(o => ({ label: o.label || o, value: o.id || o.label || o }));
+        }
+        // Override required from schema if available
+        if (schema.required !== undefined) {
+          // Keep DOM-detected required OR schema required (either is authoritative)
+        }
+        console.log(`[JobWatch] Schema type for "${label}": ${schema.type} → ${type}`);
+      } else {
+        // ── DOM fallback ──
+        const fileInput = entry.querySelector("input[type=file]");
+        const yesNoEl = entry.querySelector("[class*='_yesno_']");
+        const buttons = [...entry.querySelectorAll("button")];
+        const isYesNo = yesNoEl || (buttons.length === 2 && /yes/i.test(buttons[0].textContent) && /no/i.test(buttons[1].textContent));
+
+        const combobox = entry.querySelector("input[role='combobox']");
+        const radioEl = entry.querySelector("input[type=radio]");
+        const checkboxEl = entry.querySelector("input[type=checkbox]");
+        const inputEl = entry.querySelector("input:not([type=file]):not([role=combobox]):not([type=radio]):not([type=checkbox]), textarea");
+
+        if (fileInput) type = "file";
+        else if (isYesNo) type = "yesno";
+        else if (combobox || id === "_systemfield_location") type = "location";
+        else if (radioEl) type = "radio";
+        else if (checkboxEl) type = "checkbox";
+        else type = inputEl?.type || "text";
+      }
 
       const field = { id, label, type, required };
-      if (type === "radio") {
+      if (options) {
+        field.options = options;
+      } else if (type === "radio") {
         field.options = [...entry.querySelectorAll("input[type=radio]")]
           .map(r => ({ label: getInputLabel(r, entry), value: r.value || getInputLabel(r, entry) }));
+      } else if (type === "checkbox" || type === "multiselect") {
+        const cbs = [...entry.querySelectorAll("input[type=checkbox]")];
+        if (cbs.length) {
+          field.options = cbs.map(cb => ({ label: getInputLabel(cb, entry), inputId: cb.id }));
+        }
       }
       fields.push(field);
     }
@@ -212,6 +271,18 @@
       const labelEl = fs.querySelector("label.ashby-application-form-question-title");
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
       const required = !!(labelEl?.classList.contains("_required_101oc_92"));
+
+      // Check schema for this fieldset too
+      const schema = schemaMap.get(id);
+      if (schema) {
+        const type = ASHBY_TYPE_MAP[schema.type] || schema.type?.toLowerCase() || "radio";
+        const field = { id, label, type, required };
+        if (schema.options?.length) {
+          field.options = schema.options.map(o => ({ label: o.label || o, value: o.id || o.label || o }));
+        }
+        fields.push(field);
+        continue;
+      }
 
       const radios = [...fs.querySelectorAll("input[type=radio]")];
       const checkboxes = [...fs.querySelectorAll("input[type=checkbox]")];
@@ -454,7 +525,20 @@
 
     // Pattern buckets → answer
     const RULES = [
-      // Work authorization — YES (authorized) or NO (not authorized)
+      // "Require work authorization" — INVERTED semantics!
+      // "Will you require work authorization?" → authorized people answer NO
+      // This MUST come before the general work-auth rule to match first.
+      {
+        patterns: [
+          /require.{0,40}work.?auth/i,
+          /will you.{0,40}require.{0,40}work.?auth/i,
+          /now or in the future require.{0,40}work.?auth/i,
+          /require.{0,30}u\.?s\.?.{0,15}work.?auth/i,
+          /need.{0,30}work.?auth/i,
+        ],
+        answer: () => isAuthorized ? "no" : "yes",
+      },
+      // Work authorization — "Are you authorized?" → authorized people answer YES
       // NOTE: "without sponsorship" phrasing still means authorized=YES even if we need future sponsorship
       {
         patterns: [
@@ -567,17 +651,16 @@
       },
     ];
 
-    const FIELD_TYPES_HANDLED = new Set(["yesno", "radio"]);
+    const FIELD_TYPES_HANDLED = new Set(["yesno", "radio", "select"]);
     for (const field of fields) {
       if (!FIELD_TYPES_HANDLED.has(field.type)) continue;
       const lbl = field.label || "";
 
-      // For RADIO fields that ask yes/no — check if options are just Yes/No
-      // and apply the same rule engine
-      if (field.type === "radio") {
-        const opts = (field.options || []).map(o => o.label.toLowerCase().trim());
-        const isYesNoRadio = opts.includes("yes") && opts.includes("no") && opts.length <= 3;
-        if (!isYesNoRadio) continue; // not a yes/no radio, skip
+      // For RADIO and SELECT fields: only apply if options are Yes/No style
+      if (field.type === "radio" || field.type === "select") {
+        const opts = (field.options || []).map(o => (o.label || "").toLowerCase().trim());
+        const isYesNoStyle = opts.includes("yes") && opts.includes("no") && opts.length <= 3;
+        if (!isYesNoStyle) continue;
       }
 
       // Do not auto-default required yes/no fields to "no" anymore.
@@ -618,6 +701,96 @@
             if (ok) answersLog[field.id] = { label: field.label, answer: userDoc.resumeFileName || "resume.pdf", type: "file" };
           }
         }
+        continue;
+      }
+
+      // SELECT (ValueSelect) — Ashby dropdown/single-select fields
+      if (field.type === "select") {
+        const answer = mappings[field.id];
+        const lbl = (field.label || "").toLowerCase();
+
+        // Determine what to select based on label context
+        let targetAnswer = answer;
+        if (!targetAnswer) {
+          if (/how did you hear|how.*find|where.*hear|referral.*source/i.test(lbl)) targetAnswer = "LinkedIn";
+          else if (/work.?auth|authoriz/i.test(lbl)) targetAnswer = userDoc.workAuthorized || "Yes";
+          else if (/sponsorship|visa/i.test(lbl)) targetAnswer = userDoc.requiresSponsorship || "No";
+        }
+
+        if (targetAnswer && field.options?.length) {
+          // Find the best matching option
+          const target = targetAnswer.toLowerCase().trim();
+          const bestOpt = field.options.find(o => o.label.toLowerCase() === target)
+            || field.options.find(o => o.label.toLowerCase().includes(target))
+            || field.options.find(o => target.includes(o.label.toLowerCase()));
+
+          if (bestOpt) {
+            // Click the dropdown trigger to open it
+            const trigger = entry.querySelector("button, [role='combobox'], [role='listbox'], [class*='select'], [class*='Select']") 
+              || entry.querySelector("div[tabindex]");
+            if (trigger) {
+              trigger.click();
+              await new Promise(r => setTimeout(r, 300));
+
+              // Find and click the matching option in the opened dropdown
+              const allOptions = [
+                ...document.querySelectorAll("[role='option']"),
+                ...document.querySelectorAll("[role='listbox'] li"),
+                ...document.querySelectorAll("[class*='_option_'], [class*='_menuItem_']"),
+              ];
+              const optEl = allOptions.find(o => o.textContent.trim().toLowerCase().includes(bestOpt.label.toLowerCase()));
+              if (optEl) {
+                optEl.click();
+                answersLog[field.id] = { label: field.label, answer: bestOpt.label, type: "select" };
+              }
+              await new Promise(r => setTimeout(r, 200));
+            }
+          }
+        }
+        continue;
+      }
+
+      // MULTISELECT (MultiValueSelect) — Ashby multi-choice fields
+      // These render as checkboxes in DOM, so reuse checkbox logic but with schema awareness
+      if (field.type === "multiselect") {
+        const checkboxes = [...entry.querySelectorAll("input[type=checkbox]")];
+        const lbl = (field.label || "").toLowerCase();
+        const checked = [];
+
+        const isPronounField = lbl.includes("pronoun");
+        const isHowDidYouHear = /how did you hear|how.*find|where.*hear|how.*learn|where.*find|referral.*source/i.test(lbl);
+
+        if (isPronounField) {
+          const userPronoun = (userDoc.pronouns || "He/Him").toLowerCase();
+          for (const cb of checkboxes) {
+            const cbLabel = getInputLabel(cb, entry).toLowerCase();
+            const shouldCheck = cbLabel.includes(userPronoun) ||
+              (userPronoun.includes("he") && cbLabel.includes("he/him")) ||
+              (userPronoun.includes("she") && cbLabel.includes("she/her")) ||
+              (userPronoun.includes("they") && cbLabel.includes("they/them"));
+            if (shouldCheck && !cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (cb.checked) checked.push(getInputLabel(cb, entry));
+          }
+        } else if (isHowDidYouHear) {
+          for (const cb of checkboxes) {
+            const cbLabel = getInputLabel(cb, entry).toLowerCase();
+            if (cbLabel.includes("linkedin")) {
+              if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+              checked.push(getInputLabel(cb, entry));
+              break;
+            }
+          }
+        } else if (lbl.includes("consent") || lbl.includes("acknowledge") || lbl.includes("certify") || lbl.includes("privacy") || lbl.includes("agreement")) {
+          for (const cb of checkboxes) {
+            if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            checked.push(getInputLabel(cb, entry) || "acknowledged");
+          }
+        } else {
+          // Unrecognized multiselect — skip for safety
+          console.log(`[JobWatch] Multiselect skipped (unrecognized): "${field.label}"`);
+        }
+
+        if (checked.length) answersLog[field.id] = { label: field.label, answer: checked.join("; "), type: "multiselect" };
         continue;
       }
 
@@ -1040,7 +1213,10 @@
   // ─────────────────────────────────────────────────────────────────────────
   try {
     const form = await waitForForm();
-    const fields = scrapeFields(form);
+
+    // Extract Ashby's schema from MAIN world FIRST — gives us authoritative field types
+    const schemaMap = await extractAshbySchema();
+    const fields = scrapeFields(form, schemaMap);
     if (!fields.length) return;
 
     const answersLog = {}; // { fieldId: { label, answer, type } }

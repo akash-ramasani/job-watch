@@ -462,10 +462,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: true, actual: node.files[0]?.name };
         };
 
+        // Extract Ashby form schema from window.__appData
+        const extractSchema = () => {
+          const results = [];
+          try {
+            // Try __appData first (most Ashby pages)
+            const appData = window.__appData;
+            const formDef = appData?.applicationForm?.fieldEntries
+              || appData?.jobPosting?.applicationForm?.fieldEntries
+              || appData?.posting?.applicationForm?.fieldEntries
+              || [];
+
+            for (const entry of formDef) {
+              const field = entry.field || entry;
+              results.push({
+                path: field.path || entry.path || entry.fieldPath || "",
+                type: field.type || entry.type || "String",
+                title: field.title || entry.title || "",
+                required: field.isRequired ?? entry.isRequired ?? false,
+                options: (field.selectableValues || entry.selectableValues || field.options || entry.options || [])
+                  .map(o => typeof o === "string" ? { label: o, id: o } : { label: o.label || o.value || "", id: o.id || o.value || o.label || "" }),
+              });
+            }
+
+            // Also try __NEXT_DATA__ as fallback
+            if (!results.length) {
+              const nextData = JSON.parse(document.getElementById("__NEXT_DATA__")?.textContent || "{}");
+              const formFields = nextData?.props?.pageProps?.posting?.applicationForm?.fieldEntries
+                || nextData?.props?.pageProps?.posting?.formDefinition?.fields
+                || nextData?.props?.pageProps?.applicationForm?.fieldEntries
+                || [];
+              for (const entry of formFields) {
+                const field = entry.field || entry;
+                results.push({
+                  path: field.path || entry.path || "",
+                  type: field.type || entry.type || "String",
+                  title: field.title || entry.title || "",
+                  required: field.isRequired ?? entry.isRequired ?? false,
+                  options: (field.selectableValues || entry.selectableValues || field.options || [])
+                    .map(o => typeof o === "string" ? { label: o, id: o } : { label: o.label || o.value || "", id: o.id || o.value || o.label || "" }),
+                });
+              }
+            }
+          } catch (e) {
+            console.warn("[JobWatch] Schema extraction error:", e.message);
+          }
+          return results;
+        };
+
         let funcToRun = setReactFile;
         let argsToRun = [id, b64Data, fileName];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
+        if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({
           target: { tabId: sender.tab.id },
