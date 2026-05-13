@@ -117,7 +117,9 @@
 
     if (btn) {
       console.log(`[JobWatch] clickYesNo: clicking "${btn.textContent.trim()}" for target "${target}"`);
-      btn.click();
+      btn.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+      btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
       return true;
     }
     console.warn(`[JobWatch] clickYesNo: no matching button found for "${target}"`);
