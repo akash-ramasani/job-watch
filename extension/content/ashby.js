@@ -1071,26 +1071,20 @@
           answer = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
         }
 
-        console.log("[JobWatch] RADIO attempting:", {
-          id: field.id,
-          label: field.label,
-          answer
-        });
-
         if (answer) {
-          const result = await clickRadio(field.id, answer);
+          const radios = [...entry.querySelectorAll("input[type=radio]")];
+          const target = findBestRadio(radios, entry, answer);
+          if (target && !target.checked) {
+            const index = radios.indexOf(target);
+            const result = await clickRadio(field.id, index);
 
-          console.log("[JobWatch] RADIO result:", result);
+            console.log("[JobWatch] RADIO result:", result);
 
-          if (result?.ok) {
-            answersLog[field.id] = {
-              label: field.label,
-              answer: result.selectedLabel || answer,
-              type: "radio"
-            };
+            if (result?.ok) {
+              answersLog[field.id] = { label: field.label, answer: getInputLabel(target, entry), type: "radio" };
+            }
+            await new Promise(r => setTimeout(r, 200));
           }
-
-          await new Promise(r => setTimeout(r, 250));
         }
 
         continue;
