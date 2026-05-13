@@ -725,9 +725,16 @@
 
       // DATE PICKER — handles both native <input type=date> and custom calendar widgets (Ashby)
       if (field.type === "date" || field.type === "Date Picker") {
-        // Compute target date: 20 days from today
-        const targetDate = new Date();
-        targetDate.setDate(targetDate.getDate() + 20);
+        // Compute target date: availableStartDate, noticePeriod, or default to 20 days
+        let targetDate = new Date();
+        if (userDoc.availableStartDate && !isNaN(new Date(userDoc.availableStartDate))) {
+          targetDate = new Date(userDoc.availableStartDate);
+        } else if (userDoc.noticePeriod && typeof userDoc.noticePeriod === 'string' && userDoc.noticePeriod.toLowerCase().includes("week")) {
+          const weeks = parseInt(userDoc.noticePeriod) || 2;
+          targetDate.setDate(targetDate.getDate() + (weeks * 7));
+        } else {
+          targetDate.setDate(targetDate.getDate() + 20);
+        }
 
         // Check if this field has a custom calendar widget (Ashby's date picker)
         const calendarTrigger = entry.querySelector("[data-testid='date-picker'], [class*='datePicker'], [class*='DatePicker'], [class*='calendar'], button[aria-label*='calendar']")
@@ -759,7 +766,7 @@
 
             for (let attempt = 0; attempt < 24; attempt++) {
               // Detect the visible month/year header
-              const header = document.querySelector("[class*='calendar'] [class*='month'], [class*='Calendar'] [class*='Month'], [class*='datepicker'] h2, [class*='DatePicker'] h2, [aria-label*='month'], [aria-label*='May'], [aria-label*='June'], [aria-label*='July'], [aria-label*='August']")
+              const header = document.querySelector("[class*='calendar'] [class*='month'], [class*='Calendar'] [class*='Month'], [class*='datepicker'] h2, [class*='DatePicker'] h2, [aria-label*='month'], [class*='header']")
                 || document.querySelector("h2, [role='heading']");
 
               if (header) {
@@ -904,8 +911,12 @@
       } else if (field.type === "location") {
         const box = entry.querySelector("input[role='combobox']") || entry.querySelector("input");
         if (!box?.value?.trim()) missing.push(field);
-      } else if (field.type === "yesno" || field.type === "checkbox") {
-        // Difficult to verify from DOM; trust that our click registered
+      } else if (field.type === "yesno") {
+        const activeBtn = entry.querySelector("button[aria-pressed='true'], button._active_101oc_20, [class*='_active_']");
+        if (!activeBtn) missing.push(field);
+      } else if (field.type === "checkbox") {
+        const checkedBox = entry.querySelector("input[type=checkbox]:checked");
+        if (!checkedBox) missing.push(field);
       } else {
         const input = entry.querySelector("input:not([type=file]):not([type=radio]):not([type=checkbox]):not([role=combobox]), textarea");
         if (input && !input.value?.trim()) missing.push(field);
@@ -1063,7 +1074,7 @@
         });
         let msg = `⚠️ Complete manually: ${displayLabels.join(", ")}`;
         if (stillEmpty.length > 2) msg += `, +${stillEmpty.length - 2} more`;
-        showOverlay(msg, "#f59e0b");
+        showOverlay(msg, "warning");
         console.warn("[JobWatch] Still missing:", stillEmpty);
         return;
       }
@@ -1077,7 +1088,7 @@
       [...document.querySelectorAll("button")].find(b => /submit application|apply/i.test(b.textContent));
 
     if (!submitBtn) {
-      showOverlay("⚠️ Submit button not found — please submit manually.", "#f59e0b");
+      showOverlay("⚠️ Submit button not found — please submit manually.", "warning");
       return;
     }
 
@@ -1088,21 +1099,36 @@
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       showOverlay(attempt === 0 ? "🚀 JobWatch: Submitting…" : `🔄 Retrying submission (${attempt}/${MAX_RETRIES})…`);
       console.log("[JobWatch] Submitting. answersLog:", JSON.stringify(answersLog, null, 2));
-      // submitBtn.click();
-      await new Promise(r => setTimeout(r, 2200));
+      submitBtn.click();
+      
+      // Poll for success or errors over ~5 seconds
+      let formErrors = [];
+      for (let poll = 0; poll < 10; poll++) {
+        await new Promise(r => setTimeout(r, 500));
+        
+        // 1. Check for success (unmounted form, success URL, or success container)
+        const isSuccess = !document.querySelector(".ashby-application-form-container") || 
+                          window.location.href.includes("success") || 
+                          !!document.querySelector(".ashby-application-success, [class*='successContainer']");
+        
+        if (isSuccess) {
+          submitted = true;
+          break;
+        }
 
-      const formErrors = scrapeFormErrors(form);
-
-      if (!formErrors.length) {
-        // Double-check with generic error indicators
-        const hasIndicators = !!document.querySelector(
-          "[class*='_errorsContainer_'], [aria-invalid='true'], [class*='_error_135ul_78']"
-        );
-        if (!hasIndicators) { submitted = true; break; }
+        // 2. Check for validation errors
+        formErrors = scrapeFormErrors(form);
+        const hasIndicators = !!document.querySelector("[class*='_errorsContainer_'], [aria-invalid='true'], [class*='_error_']");
+        
+        if (formErrors.length > 0 || hasIndicators) {
+          break; // Stop polling, we have errors
+        }
       }
 
+      if (submitted) break;
+
       if (attempt < MAX_RETRIES && formErrors.length) {
-        showOverlay(`🤖 AI resolving ${formErrors.length} error(s)…`, "#7c3aed");
+        showOverlay(`🤖 AI resolving ${formErrors.length} error(s)…`, "ai");
         console.warn("[JobWatch] Submission errors:", formErrors);
 
         // Match error labels → fields
@@ -1129,12 +1155,12 @@
     }
 
     if (!submitted) {
-      showOverlay("⚠️ Form has errors — please fix and resubmit manually.", "#f59e0b");
+      showOverlay("⚠️ Form has errors — please fix and resubmit manually.", "warning");
       return;
     }
 
     // ── Success ───────────────────────────────────────────────────────────
-    showOverlay("✅ Application submitted!", "#10b981");
+    showOverlay("✅ Application submitted!", "success");
 
     chrome.runtime.sendMessage({
       type: "APPLICATION_DONE",
@@ -1149,7 +1175,7 @@
 
   } catch (err) {
     console.error("[JobWatch Extension]", err);
-    showOverlay(`❌ ${err.message}`, "#ef4444");
+    showOverlay(`❌ ${err.message}`, "error");
     setTimeout(removeOverlay, 6000);
   }
 
