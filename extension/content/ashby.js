@@ -572,18 +572,8 @@
         if (!isYesNoRadio) continue; // not a yes/no radio, skip
       }
 
-      // Fallback for required yesno/radio-yesno fields not matched by any rule:
-      // default to "no" — safer than leaving blank
-      if (!mappings[field.id] && field.required) {
-        let ruleMatched = false;
-        for (const rule of RULES) {
-          if (rule.patterns.some(p => p.test(lbl))) { ruleMatched = true; break; }
-        }
-        if (!ruleMatched) {
-          mappings[field.id] = "no";
-          console.log(`[JobWatch] YesNo fallback "no" for unrecognised field: "${lbl}"`);
-        }
-      }
+      // Do not auto-default required yes/no fields to "no" anymore.
+      // Unrecognized questions (e.g. compliance, strict requirements) should fall to AI or manual review.
       for (const rule of RULES) {
         if (rule.patterns.some(p => p.test(lbl))) {
           const ans = rule.answer();
@@ -612,9 +602,13 @@
 
       // FILE
       if (field.type === "file") {
-        if (resumeBase64) {
-          const ok = await setFileInput(field.id, resumeBase64, userDoc.resumeFileName || "resume.pdf");
-          if (ok) answersLog[field.id] = { label: field.label, answer: userDoc.resumeFileName || "resume.pdf", type: "file" };
+        const lbl = (field.label || "").toLowerCase();
+        // Only upload resume for explicit resume/CV fields
+        if (lbl.includes("resume") || lbl.includes("cv") || field.id === "_systemfield_resume") {
+          if (resumeBase64) {
+            const ok = await setFileInput(field.id, resumeBase64, userDoc.resumeFileName || "resume.pdf");
+            if (ok) answersLog[field.id] = { label: field.label, answer: userDoc.resumeFileName || "resume.pdf", type: "file" };
+          }
         }
         continue;
       }
@@ -651,12 +645,15 @@
               break;
             }
           }
-        } else {
-          // Legal agreements / consent / other — check all
+        } else if (lbl.includes("consent") || lbl.includes("acknowledge") || lbl.includes("certify") || lbl.includes("privacy") || lbl.includes("agreement") || lbl.includes("arbitration") || lbl.includes("background") || lbl.includes("drug test")) {
+          // Legal agreements / consent / explicitly recognized — check all
           for (const cb of checkboxes) {
             if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
             checked.push(getInputLabel(cb, entry) || "acknowledged");
           }
+        } else {
+          // Unrecognized multi-select checkbox — leave alone
+          // The AI or manual review should handle complex structured multi-selects
         }
 
         if (checked.length) answersLog[field.id] = { label: field.label, answer: checked.join("; "), type: "checkbox" };
