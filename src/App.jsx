@@ -57,6 +57,21 @@ export default function App() {
     }
   }, []);
 
+  const syncToExtension = async (u) => {
+    if (!window.__JW_EXTENSION_INSTALLED__) return;
+    if (u) {
+      try {
+        const result = await u.getIdTokenResult();
+        const expiresIn = Math.max(300, Math.floor((new Date(result.expirationTime) - Date.now()) / 1000));
+        window.postMessage({ type: "JW_AUTH", idToken: result.token, refreshToken: u.refreshToken, uid: u.uid, expiresIn }, "*");
+      } catch (e) {
+        console.warn("[JobWatch] Could not sync auth to extension:", e.message);
+      }
+    } else {
+      window.postMessage({ type: "JW_LOGOUT" }, "*");
+    }
+  };
+
   // Sync auth state to extension.
   // onIdTokenChanged fires on login, logout, AND every ~1h when Firebase
   // silently refreshes the token — so the extension always has a fresh token.
@@ -64,23 +79,19 @@ export default function App() {
     const unsub = onIdTokenChanged(auth, async (u) => {
       setUser(u);
       setLoading(false);
-
-      if (!window.__JW_EXTENSION_INSTALLED__) return;
-
-      if (u) {
-        try {
-          const result = await u.getIdTokenResult();
-          const expiresIn = Math.max(300, Math.floor((new Date(result.expirationTime) - Date.now()) / 1000));
-          window.postMessage({ type: "JW_AUTH", idToken: result.token, refreshToken: u.refreshToken, uid: u.uid, expiresIn }, "*");
-        } catch (e) {
-          console.warn("[JobWatch] Could not sync auth to extension:", e.message);
-        }
-      } else {
-        window.postMessage({ type: "JW_LOGOUT" }, "*");
-      }
+      syncToExtension(u);
     });
     return () => unsub();
   }, []);
+
+  // If the extension injects AFTER Firebase restores the session (e.g., late
+  // document_idle injection), re-sync the active user to it.
+  useEffect(() => {
+    if (extInstalled && !loading) {
+      syncToExtension(user);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extInstalled]);
 
   useEffect(() => {
     if (!user) {
