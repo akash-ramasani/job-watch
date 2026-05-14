@@ -241,10 +241,11 @@ export function useSessionGuard(user) {
         }
       },
       (error) => {
-        console.warn("[SessionGuard] snapshot error:", error.code);
-        if (error.code === "permission-denied" || error.code === "unauthenticated") {
-          ejectSession(null);
-        }
+        // DO NOT eject on permission-denied. When browsers (especially Edge/Safari)
+        // suspend background tabs, the Firestore WebSocket is paused. Waking it up
+        // can cause temporary permission errors during reconnection.
+        // If the user is genuinely unauthenticated, onIdTokenChanged will handle it.
+        console.warn("[SessionGuard] snapshot error (ignoring to prevent false logout):", error.code);
       }
     );
 
