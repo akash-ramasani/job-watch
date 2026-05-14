@@ -58,7 +58,8 @@ export function useSessionGuard(user) {
     if (registeringRef.current) return; // mid-registration — ignore
 
     ejectedRef.current = true;
-    console.warn("[SessionGuard] ⛔ EJECTED by another session");
+    console.warn("[SessionGuard] ⛔ EJECTED — deviceInfo:", JSON.stringify(deviceInfo));
+    console.trace("[SessionGuard] ejection call stack"); // shows exactly which line called ejectSession
 
     localStorage.removeItem(SESSION_KEY);
     tokenRef.current = null;
@@ -73,20 +74,31 @@ export function useSessionGuard(user) {
   }, []);
 
   // ── Check Firestore token against local token ─────────────────────────────
-  const checkToken = useCallback(async () => {
+  const checkToken = useCallback(async (source = "unknown") => {
     const u = userRef.current;
-    if (!u || ejectedRef.current || registeringRef.current) return;
+    if (!u || ejectedRef.current || registeringRef.current) {
+      console.log(`[SessionGuard] checkToken(${source}) skipped — user:${!!u} ejected:${ejectedRef.current} registering:${registeringRef.current}`);
+      return;
+    }
 
     const localToken = tokenRef.current || localStorage.getItem(SESSION_KEY);
-    if (!localToken) return; // still initialising — never eject
+    if (!localToken) {
+      console.log(`[SessionGuard] checkToken(${source}) skipped — no local token yet`);
+      return; // still initialising — never eject
+    }
+
+    console.log(`[SessionGuard] checkToken(${source}) — localToken: ${localToken.slice(0, 8)}…`);
 
     try {
       const snap = await getDoc(doc(db, "users", u.uid));
       if (!snap.exists()) return;
       const serverToken = snap.data()?.activeSession?.token;
 
+      console.log(`[SessionGuard] checkToken(${source}) — serverToken: ${serverToken ? serverToken.slice(0, 8) + "…" : "none"} match:${serverToken === localToken}`);
+
       if (serverToken && serverToken !== localToken) {
         const d = snap.data();
+        console.warn(`[SessionGuard] TOKEN MISMATCH via ${source}! Ejecting.`);
         ejectSession({
           browser:    d.activeSession?.browser    || null,
           os:         d.activeSession?.os         || null,
@@ -98,7 +110,7 @@ export function useSessionGuard(user) {
       }
     } catch (err) {
       // Network error — don't eject. Heartbeat will retry.
-      console.warn("[SessionGuard] checkToken failed:", err.message);
+      console.warn(`[SessionGuard] checkToken(${source}) failed:`, err.message);
     }
   }, [ejectSession]); // ejectSession is stable (no deps)
 
@@ -190,14 +202,20 @@ export function useSessionGuard(user) {
     snapshotUnsub.current = onSnapshot(
       doc(db, "users", user.uid),
       (snap) => {
-        if (!snap.exists() || ejectedRef.current || registeringRef.current) return;
+        if (!snap.exists() || ejectedRef.current || registeringRef.current) {
+          console.log(`[SessionGuard] snapshot skipped — exists:${snap.exists()} ejected:${ejectedRef.current} registering:${registeringRef.current}`);
+          return;
+        }
 
         const serverToken = snap.data()?.activeSession?.token;
         const localToken  = tokenRef.current || localStorage.getItem(SESSION_KEY);
 
+        console.log(`[SessionGuard] snapshot — localToken:${localToken ? localToken.slice(0,8)+"…" : "NONE"} serverToken:${serverToken ? serverToken.slice(0,8)+"…" : "NONE"} match:${serverToken === localToken}`);
+
         if (!localToken) return; // still initialising — skip
 
         if (serverToken && serverToken !== localToken) {
+          console.warn("[SessionGuard] snapshot TOKEN MISMATCH — ejecting!");
           const d = snap.data();
           ejectSession({
             browser:    d.activeSession?.browser    || null,
@@ -227,11 +245,12 @@ export function useSessionGuard(user) {
 
   // ── Heartbeat + Visibility (runs ONCE — uses refs, not closures) ──────────
   useEffect(() => {
-    heartbeatRef.current = setInterval(checkToken, HEARTBEAT_MS);
+    heartbeatRef.current = setInterval(() => checkToken("heartbeat"), HEARTBEAT_MS);
 
     const onVisibility = () => {
       if (document.visibilityState === "visible" && !ejectedRef.current) {
-        checkToken();
+        console.log("[SessionGuard] tab became visible — running checkToken");
+        checkToken("visibility");
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
