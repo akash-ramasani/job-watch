@@ -1,28 +1,25 @@
 /**
  * useSessionGuard.js — Single-session enforcement hook.
  *
- * Key design decisions:
+ * DESIGN PRINCIPLES:
+ * ─────────────────────────────────────────────────────────────────────────────
+ * 1. The session token lives in localStorage so it survives page refreshes and
+ *    is shared across all tabs in the same browser profile.
  *
- * 1. wasLoggedInRef — prevents the initial user=null render from clearing
- *    sessionStorage. On page refresh, React starts with user=null before
- *    Firebase restores the persisted auth. Without this guard, sessionStorage
- *    gets wiped on every refresh → registerSession fires every time → new
- *    token → all other tabs/devices get ejected just from a refresh.
+ * 2. We use a single onSnapshot listener (Layer 1) as the primary ejection
+ *    mechanism. The heartbeat (Layer 2) is a safety net for stale WS streams.
  *
- * 2. registeringRef — suppresses snapshot ejection during the HTTP round-trip
- *    to registerSession. The server writes the new token to Firestore BEFORE
- *    the HTTP response arrives. Without this flag, the snapshot fires and sees
- *    serverToken ≠ localToken (null) → self-ejects the new device.
+ * 3. All refs are used so closures never go stale. No function or effect
+ *    depends on `user` directly — instead we access it via userRef.current.
+ *    This means effects only run ONCE and are never torn down/rebuilt as
+ *    Firebase refreshes the ID token, eliminating listener restart races.
  *
- * 3. REGISTERING broadcast — when one tab starts re-registering (e.g. fresh
- *    login), it tells sibling tabs to temporarily suppress ejection, then
- *    SESSION_REGISTERED updates their token when done.
+ * 4. ejectSession never calls signOut(). It only shows the modal. The user
+ *    must acknowledge the modal and click the button, which calls signOut().
+ *    This prevents the modal from vanishing faster than the eye can see.
  *
- * Ejection layers:
- *   L1: Firestore onSnapshot  — sub-second, real-time
- *   L2: Heartbeat (30s)       — catches stale snapshot streams
- *   L3: Visibility API        — immediate check on tab focus
- *   L4: BroadcastChannel      — cross-tab instant sync
+ * 5. The REGISTERING guard suppresses ejection while registerSession HTTP
+ *    call is in-flight (server writes new token BEFORE HTTP response returns).
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -32,56 +29,91 @@ import { auth, db } from "../firebase";
 
 const SESSION_KEY       = "jw_session_token";
 const BROADCAST_CHANNEL = "jw_session";
-const HEARTBEAT_MS      = 30_000;
+const HEARTBEAT_MS      = 60_000; // check every 60s (was 30s — less aggressive)
 const REGISTER_URL      =
   import.meta.env.VITE_REGISTER_SESSION_URL ||
   "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/registerSession";
 
 export function useSessionGuard(user) {
-  const [ejected, setEjected]                   = useState(false);
+  const [ejected, setEjected]                     = useState(false);
   const [ejectedDeviceInfo, setEjectedDeviceInfo] = useState(null);
 
+  // All state kept in refs so closures never go stale ─────────────────────────
+  const userRef         = useRef(user);
   const tokenRef        = useRef(null);
   const registeredRef   = useRef(false);
   const registeringRef  = useRef(false);  // true while HTTP call is in-flight
   const ejectedRef      = useRef(false);
-  const wasLoggedInRef  = useRef(false);  // ← KEY: was user non-null before?
+  const wasLoggedInRef  = useRef(false);
   const channelRef      = useRef(null);
   const heartbeatRef    = useRef(null);
+  const snapshotUnsub   = useRef(null);   // keep one stable listener
 
-  // ── Eject ──────────────────────────────────────────────────────────────────
-  const ejectSession = useCallback(async (deviceInfo = null) => {
-    if (ejectedRef.current)   return;
-    if (registeringRef.current) return; // Never self-eject during registration
+  // Keep userRef in sync without causing effect reruns
+  useEffect(() => { userRef.current = user; }, [user]);
+
+  // ── Eject (show modal only — do NOT call signOut) ─────────────────────────
+  const ejectSession = useCallback((deviceInfo = null) => {
+    if (ejectedRef.current)     return; // already ejected
+    if (registeringRef.current) return; // mid-registration — ignore
 
     ejectedRef.current = true;
-    console.warn("[SessionGuard] ⛔ EJECTED");
-
-    if (deviceInfo) setEjectedDeviceInfo(deviceInfo);
-    setEjected(true);
+    console.warn("[SessionGuard] ⛔ EJECTED by another session");
 
     localStorage.removeItem(SESSION_KEY);
     tokenRef.current = null;
 
+    if (deviceInfo) setEjectedDeviceInfo(deviceInfo);
+    setEjected(true);
+
+    // Notify other tabs
     try { channelRef.current?.postMessage({ type: "EJECTED", deviceInfo }); } catch {}
-    // DO NOT call signOut(auth) here! Doing so makes user=null, which instantly
-    // hides the SessionEjectedModal before the user can read it.
-    // Sign out happens when they click the modal button.
+    // NOTE: signOut is intentionally NOT called here.
+    // The SessionEjectedModal stays visible until user clicks "Sign in again".
   }, []);
 
-  // ── Register session with server ───────────────────────────────────────────
+  // ── Check Firestore token against local token ─────────────────────────────
+  const checkToken = useCallback(async () => {
+    const u = userRef.current;
+    if (!u || ejectedRef.current || registeringRef.current) return;
+
+    const localToken = tokenRef.current || localStorage.getItem(SESSION_KEY);
+    if (!localToken) return; // still initialising — never eject
+
+    try {
+      const snap = await getDoc(doc(db, "users", u.uid));
+      if (!snap.exists()) return;
+      const serverToken = snap.data()?.activeSession?.token;
+
+      if (serverToken && serverToken !== localToken) {
+        const d = snap.data();
+        ejectSession({
+          browser:    d.activeSession?.browser    || null,
+          os:         d.activeSession?.os         || null,
+          deviceType: d.activeSession?.deviceType || null,
+          ip:         d.activeSession?.ip
+            ? d.activeSession.ip.slice(0, 6) + "***"
+            : null,
+        });
+      }
+    } catch (err) {
+      // Network error — don't eject. Heartbeat will retry.
+      console.warn("[SessionGuard] checkToken failed:", err.message);
+    }
+  }, [ejectSession]); // ejectSession is stable (no deps)
+
+  // ── Register session with server ──────────────────────────────────────────
   const registerSession = useCallback(async (firebaseUser) => {
     if (!firebaseUser)          return;
     if (registeredRef.current)  return;
     if (registeringRef.current) return;
+    if (ejectedRef.current)     return;
 
     registeringRef.current = true;
-
-    // Tell sibling tabs not to eject while we're registering
     try { channelRef.current?.postMessage({ type: "REGISTERING" }); } catch {}
 
     try {
-      const idToken = await firebaseUser.getIdToken(true);
+      const idToken = await firebaseUser.getIdToken(); // do NOT force refresh here — avoids extra network roundtrip
       const resp = await fetch(REGISTER_URL, {
         method: "POST",
         headers: {
@@ -91,18 +123,16 @@ export function useSessionGuard(user) {
       });
 
       if (!resp.ok) {
-        console.warn("[SessionGuard] registerSession failed:", resp.status);
+        console.warn("[SessionGuard] registerSession HTTP error:", resp.status);
         return;
       }
 
       const data = await resp.json();
       if (data.ok && data.sessionToken) {
-        // Store BEFORE clearing registeringRef so snapshot can't race us
-        tokenRef.current = data.sessionToken;
-        localStorage.setItem(SESSION_KEY, data.sessionToken);
+        tokenRef.current      = data.sessionToken;
         registeredRef.current = true;
+        localStorage.setItem(SESSION_KEY, data.sessionToken);
 
-        // Update all sibling tabs with the new token
         try {
           channelRef.current?.postMessage({
             type:  "SESSION_REGISTERED",
@@ -110,7 +140,7 @@ export function useSessionGuard(user) {
           });
         } catch {}
 
-        console.info("[SessionGuard] ✓ registered:",
+        console.info("[SessionGuard] ✓ session registered",
           data.device?.deviceType, data.device?.browser);
       }
     } catch (err) {
@@ -118,36 +148,11 @@ export function useSessionGuard(user) {
     } finally {
       registeringRef.current = false;
     }
-  }, []);
+  }, []); // no deps — uses no state/props
 
-  // ── Heartbeat (Layer 2) ────────────────────────────────────────────────────
-  const runHeartbeat = useCallback(async () => {
-    if (!user || ejectedRef.current || registeringRef.current) return;
-
-    const localToken = tokenRef.current || localStorage.getItem(SESSION_KEY);
-    if (!localToken) return;
-
-    try {
-      const snap = await getDoc(doc(db, "users", user.uid));
-      if (!snap.exists()) return;
-      const serverToken = snap.data()?.activeSession?.token;
-      if (serverToken && serverToken !== localToken) {
-        const d = snap.data();
-        ejectSession({
-          browser:    d.activeSession?.browser    || null,
-          deviceType: d.activeSession?.deviceType || null,
-          ip:         d.activeSession?.ip ? d.activeSession.ip.slice(0, 6) + "***" : null,
-        });
-      }
-    } catch (err) {
-      console.warn("[SessionGuard] heartbeat failed:", err.message);
-    }
-  }, [user, ejectSession]);
-
-  // ── BroadcastChannel — cross-tab coordination (Layer 4) ───────────────────
+  // ── BroadcastChannel — cross-tab sync (runs once on mount) ───────────────
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
-
     const channel = new BroadcastChannel(BROADCAST_CHANNEL);
     channelRef.current = channel;
 
@@ -155,21 +160,16 @@ export function useSessionGuard(user) {
       if (!msg) return;
 
       if (msg.type === "REGISTERING") {
-        // A sibling tab has started registering — suppress our ejection checks
-        // until we hear SESSION_REGISTERED
         registeringRef.current = true;
       }
-
       if (msg.type === "SESSION_REGISTERED" && msg.token) {
-        // Adopt the new token so our snapshot doesn't eject us
-        tokenRef.current = msg.token;
+        tokenRef.current      = msg.token;
+        registeredRef.current = true;
+        registeringRef.current = false;
         localStorage.setItem(SESSION_KEY, msg.token);
-        registeredRef.current  = true;
-        registeringRef.current = false; // clear the REGISTERING suppression
       }
-
       if (msg.type === "EJECTED") {
-        ejectSession(msg.deviceInfo);
+        ejectSession(msg.deviceInfo || null);
       }
     };
 
@@ -177,53 +177,17 @@ export function useSessionGuard(user) {
       channel.close();
       channelRef.current = null;
     };
-  }, [ejectSession]);
+  }, [ejectSession]); // ejectSession is stable
 
-  // ── User lifecycle: register or restore ───────────────────────────────────
+  // ── Firestore realtime listener — runs ONCE, never rebuilt ───────────────
+  // We keep one stable listener for the lifetime of the hook.
+  // It reads userRef.current instead of closing over `user`.
   useEffect(() => {
-    if (!user) {
-      // ── IMPORTANT: Only reset when we were PREVIOUSLY logged in ──
-      // On page refresh React starts with user=null before Firebase restores
-      // the persisted session. If we clear localStorage here unconditionally,
-      // the token is gone when the real user arrives → registerSession fires
-      // on every refresh → new session → other tabs get ejected.
-      if (!wasLoggedInRef.current) return; // Initial cold load — skip reset
-
-      // Genuine sign-out — clean up everything
-      wasLoggedInRef.current = false;
-      registeredRef.current  = false;
-      registeringRef.current = false;
-      tokenRef.current       = null;
-      ejectedRef.current     = false;
-      localStorage.removeItem(SESSION_KEY);
-      setEjected(false);
-      setEjectedDeviceInfo(null);
-
-      if (heartbeatRef.current) {
-        clearInterval(heartbeatRef.current);
-        heartbeatRef.current = null;
-      }
-      return;
-    }
-
-    wasLoggedInRef.current = true; // User is now active
-
-    const storedToken = localStorage.getItem(SESSION_KEY);
-    if (storedToken) {
-      // Page refresh — token survived in localStorage, no re-registration needed
-      tokenRef.current      = storedToken;
-      registeredRef.current = true;
-    } else {
-      // Genuine fresh login — register with server
-      registerSession(user);
-    }
-  }, [user, registerSession]);
-
-  // ── Layer 1: Firestore realtime listener ──────────────────────────────────
-  useEffect(() => {
+    // We need uid to start listening. Wait until user is available.
     if (!user) return;
+    if (snapshotUnsub.current) return; // already listening
 
-    const unsubscribe = onSnapshot(
+    snapshotUnsub.current = onSnapshot(
       doc(db, "users", user.uid),
       (snap) => {
         if (!snap.exists() || ejectedRef.current || registeringRef.current) return;
@@ -231,38 +195,43 @@ export function useSessionGuard(user) {
         const serverToken = snap.data()?.activeSession?.token;
         const localToken  = tokenRef.current || localStorage.getItem(SESSION_KEY);
 
-        if (!localToken) return; // Still initialising — skip
+        if (!localToken) return; // still initialising — skip
 
         if (serverToken && serverToken !== localToken) {
           const d = snap.data();
           ejectSession({
             browser:    d.activeSession?.browser    || null,
+            os:         d.activeSession?.os         || null,
             deviceType: d.activeSession?.deviceType || null,
-            ip:         d.activeSession?.ip ? d.activeSession.ip.slice(0, 6) + "***" : null,
+            ip:         d.activeSession?.ip
+              ? d.activeSession.ip.slice(0, 6) + "***"
+              : null,
           });
         }
       },
       (error) => {
-        // DO NOT eject on permission-denied. When browsers (especially Edge/Safari)
-        // suspend background tabs, the Firestore WebSocket is paused. Waking it up
-        // can cause temporary permission errors during reconnection.
-        // If the user is genuinely unauthenticated, onIdTokenChanged will handle it.
-        console.warn("[SessionGuard] snapshot error (ignoring to prevent false logout):", error.code);
+        // Transient errors (reconnecting after sleep/suspend) — ignore.
+        // A genuine auth failure will be caught by Firebase's own signOut.
+        console.warn("[SessionGuard] snapshot error, ignoring:", error.code);
       }
     );
 
-    return () => unsubscribe();
-  }, [user, ejectSession]);
+    return () => {
+      if (snapshotUnsub.current) {
+        snapshotUnsub.current();
+        snapshotUnsub.current = null;
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!user]); // only re-run when user goes null → non-null (login/logout)
 
-  // ── Layers 2 + 3: Heartbeat + Visibility API ─────────────────────────────
+  // ── Heartbeat + Visibility (runs ONCE — uses refs, not closures) ──────────
   useEffect(() => {
-    if (!user) return;
-
-    heartbeatRef.current = setInterval(runHeartbeat, HEARTBEAT_MS);
+    heartbeatRef.current = setInterval(checkToken, HEARTBEAT_MS);
 
     const onVisibility = () => {
       if (document.visibilityState === "visible" && !ejectedRef.current) {
-        runHeartbeat();
+        checkToken();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -272,7 +241,46 @@ export function useSessionGuard(user) {
       heartbeatRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [user, runHeartbeat]);
+  }, [checkToken]); // checkToken is stable
+
+  // ── User lifecycle: register or restore ──────────────────────────────────
+  useEffect(() => {
+    if (!user) {
+      if (!wasLoggedInRef.current) return; // Cold load — Firebase still initialising
+
+      // Genuine sign-out (user clicked logout or was ejected + confirmed modal)
+      wasLoggedInRef.current = false;
+      registeredRef.current  = false;
+      registeringRef.current = false;
+      tokenRef.current       = null;
+      ejectedRef.current     = false;
+      localStorage.removeItem(SESSION_KEY);
+      setEjected(false);
+      setEjectedDeviceInfo(null);
+
+      // Stop snapshot listener — will restart on next login
+      if (snapshotUnsub.current) {
+        snapshotUnsub.current();
+        snapshotUnsub.current = null;
+      }
+      return;
+    }
+
+    wasLoggedInRef.current = true;
+
+    const storedToken = localStorage.getItem(SESSION_KEY);
+    if (storedToken) {
+      // Token survived a page refresh — no need to re-register
+      tokenRef.current      = storedToken;
+      registeredRef.current = true;
+      console.info("[SessionGuard] ✓ restored session from localStorage");
+    } else if (!registeredRef.current && !registeringRef.current) {
+      // Fresh login — register with server
+      registerSession(user);
+    }
+  // Only re-run when the user UID changes (login/logout), not on every token refresh
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid]);
 
   // ── Modal dismiss ─────────────────────────────────────────────────────────
   const handleEjectedSignOut = useCallback(async () => {
