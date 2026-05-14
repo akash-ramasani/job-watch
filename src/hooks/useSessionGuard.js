@@ -64,7 +64,9 @@ export function useSessionGuard(user) {
     tokenRef.current = null;
 
     try { channelRef.current?.postMessage({ type: "EJECTED", deviceInfo }); } catch {}
-    try { await signOut(auth); } catch {}
+    // DO NOT call signOut(auth) here! Doing so makes user=null, which instantly
+    // hides the SessionEjectedModal before the user can read it.
+    // Sign out happens when they click the modal button.
   }, []);
 
   // ── Register session with server ───────────────────────────────────────────
