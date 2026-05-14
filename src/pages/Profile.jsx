@@ -945,6 +945,7 @@ export default function Profile({ user, userMeta }) {
                     const browser    = session.deviceInfo?.browser    || session.browser    || "Unknown Browser";
                     const os         = session.deviceInfo?.os         || session.os         || "Unknown OS";
                     const deviceType = session.deviceInfo?.deviceType || session.deviceType || "Desktop";
+                    const location   = session.deviceInfo?.location   || session.location   || null;
 
                     // Pick icon based on device type / OS
                     const isMobileDevice = deviceType === "Mobile" || /ios|android/i.test(os);
@@ -990,7 +991,7 @@ export default function Profile({ user, userMeta }) {
                               {browser} <span className="text-gray-400 font-normal">on</span> {os}
                             </p>
                             <p className="text-xs text-gray-400 mt-0.5">
-                              {session.ip} &nbsp;·&nbsp;
+                              {location ? `${location} (${session.ip})` : session.ip} &nbsp;·&nbsp;
                               {session.loginAt?.toDate
                                 ? new Date(session.loginAt.toDate()).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
                                 : "Recently"}
@@ -1003,9 +1004,13 @@ export default function Profile({ user, userMeta }) {
                               {deviceType}
                             </span>
                           )}
-                          {i === 0 && (
+                          {i === 0 ? (
                             <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
                               Current
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-red-600 ring-1 ring-inset ring-red-700/10">
+                              Revoked
                             </span>
                           )}
                         </div>

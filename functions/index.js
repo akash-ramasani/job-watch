@@ -280,6 +280,21 @@ exports.registerSession = onRequest(
       else if (/safari\/[\d.]+/i.test(userAgent))                           browser = "Safari";
       else if (/msie|trident/i.test(userAgent))                             browser = "Internet Explorer";
 
+      // ── Location detection via GeoIP ──
+      let locationStr = null;
+      if (ip && ip !== "unknown" && ip !== "127.0.0.1" && ip !== "::1") {
+        try {
+          const geoRes = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,regionName,city`);
+          const geo = await geoRes.json();
+          if (geo.status === "success") {
+            const parts = [geo.city, geo.regionName, geo.country].filter(Boolean);
+            if (parts.length > 0) locationStr = parts.join(", ");
+          }
+        } catch (e) {
+          logger.warn(`registerSession: GeoIP lookup failed for ${ip}: ${e.message}`);
+        }
+      }
+
       // ── LAYER 2: Revoke all existing Firebase refresh tokens ──
       // This forces every other device to fail on its next token refresh
       // (Firebase tokens last ~1h, so worst case the old session dies in 1h).
@@ -296,6 +311,7 @@ exports.registerSession = onRequest(
       const sessionData = {
         token: sessionToken,
         ip,
+        location: locationStr,
         userAgent: userAgent.slice(0, 300),
         browser,
         os,
@@ -309,12 +325,13 @@ exports.registerSession = onRequest(
       await userRef.set({ activeSession: sessionData }, { merge: true });
 
       // ── LAYER 5: Audit log ──
-      const deviceInfo = { browser, os, deviceType };
+      const deviceInfo = { browser, os, deviceType, location: locationStr };
       const historyRef = userRef.collection("sessionHistory").doc();
       await historyRef.set({
         action: "login",
         sessionToken: sessionToken.slice(0, 8) + "…",
         ip,
+        location: locationStr, // top level
         deviceInfo,            // nested — read by Profile.jsx
         browser,               // top-level for backwards compat
         os,
