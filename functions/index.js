@@ -79,9 +79,11 @@ const CORS_ORIGINS = process.env.ALLOWED_ORIGINS
  * Throws with a 401-friendly error if missing or invalid.
  * Returns the decoded token (uid, email, etc.)
  *
- * checkRevoked=true → if the user's refresh tokens were revoked
- * (by registerSession), this call will FAIL even if the ID token
- * hasn't technically expired yet. This closes the ~1h revocation window.
+ * NOTE: We do NOT use checkRevoked=true here. Firebase's revokeRefreshTokens
+ * invalidates ALL tokens for a user — including the new session that just
+ * called registerSession. That would block the new device's own API calls.
+ * Instead, we enforce single-session at the application layer via the
+ * X-Session-Token header (verifySessionToken), which is precise and safe.
  */
 async function verifyToken(req) {
   const authHeader = req.headers.authorization || "";
@@ -92,46 +94,14 @@ async function verifyToken(req) {
   }
   const idToken = authHeader.slice(7);
   try {
-    const decoded = await admin.auth().verifyIdToken(idToken, true /* checkRevoked */);
+    const decoded = await admin.auth().verifyIdToken(idToken);
 
-    // Enforce single-session token on API layer (Layer 3)
+    // Enforce single-session on API layer via custom session token header
     await verifySessionToken(req, decoded.uid);
 
     return decoded;
   } catch (e) {
-    if (e.code === "SESSION_EJECTED") {
-      throw e;
-    }
-    // Differentiate between revoked tokens and other errors
-    if (e.code === "auth/id-token-revoked") {
-      const err = new Error("Session revoked. Please log in again.");
-      err.statusCode = 401;
-      err.code = "SESSION_REVOKED";
-      throw err;
-    }
-    const err = new Error("Invalid or expired token. Please log in again.");
-    err.statusCode = 401;
-    throw err;
-  }
-}
-
-/**
- * Same as verifyToken but WITHOUT revocation check.
- * Used ONLY by registerSession — because that endpoint is the one that
- * calls revokeRefreshTokens(), so the caller's token was issued before
- * the revocation and would falsely fail the check.
- */
-async function verifyTokenAllowRevoked(req) {
-  const authHeader = req.headers.authorization || "";
-  if (!authHeader.startsWith("Bearer ")) {
-    const err = new Error("Missing or invalid Authorization header.");
-    err.statusCode = 401;
-    throw err;
-  }
-  const idToken = authHeader.slice(7);
-  try {
-    return await admin.auth().verifyIdToken(idToken); // No checkRevoked
-  } catch {
+    if (e.code === "SESSION_EJECTED") throw e;
     const err = new Error("Invalid or expired token. Please log in again.");
     err.statusCode = 401;
     throw err;
@@ -259,7 +229,7 @@ exports.registerSession = onRequest(
     }
 
     try {
-      const decoded = await verifyTokenAllowRevoked(req);
+      const decoded = await verifyToken(req);
       const uid = decoded.uid;
 
       const crypto = require("crypto");
@@ -332,18 +302,6 @@ exports.registerSession = onRequest(
         loginAt:   admin.firestore.FieldValue.serverTimestamp(), // used by Profile.jsx
         timestamp: admin.firestore.FieldValue.serverTimestamp(), // legacy alias
       });
-
-      // ── LAYER 2: Revoke old refresh tokens AFTER Firestore write ──
-      // Old devices are already being ejected by the snapshot. Revocation adds
-      // a hard server-side block for the next token refresh (~1h safety net).
-      // Critically: we revoke AFTER writing so the new device's own token is
-      // already stored and won't be caught by the revocation check.
-      try {
-        await admin.auth().revokeRefreshTokens(uid);
-        logger.info(`registerSession: revoked refresh tokens for uid=${uid}`);
-      } catch (revokeErr) {
-        logger.warn(`registerSession: revokeRefreshTokens failed: ${revokeErr.message}`);
-      }
 
       logger.info(`registerSession: uid=${uid} ip=${ip} device=${deviceType} browser=${browser}`);
 
