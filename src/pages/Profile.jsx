@@ -205,7 +205,7 @@ export default function Profile({ user, userMeta }) {
       const res = await fetch(GEN_PRONUNCIATION_URL, {
         method: "POST",
         headers: {
-          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "", "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+          "X-Session-Token": localStorage.getItem("jw_session_token") || "", "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
         body: JSON.stringify({ name }),
       });
       const json = await res.json();
@@ -275,7 +275,7 @@ export default function Profile({ user, userMeta }) {
       const resp = await fetch(PARSE_RESUME_URL, {
         method: "POST",
         headers: {
-          "X-Session-Token": sessionStorage.getItem("jw_session_token") || "", Authorization: `Bearer ${idToken}` },
+          "X-Session-Token": localStorage.getItem("jw_session_token") || "", Authorization: `Bearer ${idToken}` },
         body: fd,
       });
 

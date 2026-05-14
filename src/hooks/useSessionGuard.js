@@ -60,7 +60,7 @@ export function useSessionGuard(user) {
     if (deviceInfo) setEjectedDeviceInfo(deviceInfo);
     setEjected(true);
 
-    sessionStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_KEY);
     tokenRef.current = null;
 
     try { channelRef.current?.postMessage({ type: "EJECTED", deviceInfo }); } catch {}
@@ -97,7 +97,7 @@ export function useSessionGuard(user) {
       if (data.ok && data.sessionToken) {
         // Store BEFORE clearing registeringRef so snapshot can't race us
         tokenRef.current = data.sessionToken;
-        sessionStorage.setItem(SESSION_KEY, data.sessionToken);
+        localStorage.setItem(SESSION_KEY, data.sessionToken);
         registeredRef.current = true;
 
         // Update all sibling tabs with the new token
@@ -122,7 +122,7 @@ export function useSessionGuard(user) {
   const runHeartbeat = useCallback(async () => {
     if (!user || ejectedRef.current || registeringRef.current) return;
 
-    const localToken = tokenRef.current || sessionStorage.getItem(SESSION_KEY);
+    const localToken = tokenRef.current || localStorage.getItem(SESSION_KEY);
     if (!localToken) return;
 
     try {
@@ -161,7 +161,7 @@ export function useSessionGuard(user) {
       if (msg.type === "SESSION_REGISTERED" && msg.token) {
         // Adopt the new token so our snapshot doesn't eject us
         tokenRef.current = msg.token;
-        sessionStorage.setItem(SESSION_KEY, msg.token);
+        localStorage.setItem(SESSION_KEY, msg.token);
         registeredRef.current  = true;
         registeringRef.current = false; // clear the REGISTERING suppression
       }
@@ -182,7 +182,7 @@ export function useSessionGuard(user) {
     if (!user) {
       // ── IMPORTANT: Only reset when we were PREVIOUSLY logged in ──
       // On page refresh React starts with user=null before Firebase restores
-      // the persisted session. If we clear sessionStorage here unconditionally,
+      // the persisted session. If we clear localStorage here unconditionally,
       // the token is gone when the real user arrives → registerSession fires
       // on every refresh → new session → other tabs get ejected.
       if (!wasLoggedInRef.current) return; // Initial cold load — skip reset
@@ -193,7 +193,7 @@ export function useSessionGuard(user) {
       registeringRef.current = false;
       tokenRef.current       = null;
       ejectedRef.current     = false;
-      sessionStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(SESSION_KEY);
       setEjected(false);
       setEjectedDeviceInfo(null);
 
@@ -206,9 +206,9 @@ export function useSessionGuard(user) {
 
     wasLoggedInRef.current = true; // User is now active
 
-    const storedToken = sessionStorage.getItem(SESSION_KEY);
+    const storedToken = localStorage.getItem(SESSION_KEY);
     if (storedToken) {
-      // Page refresh — token survived in sessionStorage, no re-registration needed
+      // Page refresh — token survived in localStorage, no re-registration needed
       tokenRef.current      = storedToken;
       registeredRef.current = true;
     } else {
@@ -227,7 +227,7 @@ export function useSessionGuard(user) {
         if (!snap.exists() || ejectedRef.current || registeringRef.current) return;
 
         const serverToken = snap.data()?.activeSession?.token;
-        const localToken  = tokenRef.current || sessionStorage.getItem(SESSION_KEY);
+        const localToken  = tokenRef.current || localStorage.getItem(SESSION_KEY);
 
         if (!localToken) return; // Still initialising — skip
 
@@ -275,7 +275,7 @@ export function useSessionGuard(user) {
   const handleEjectedSignOut = useCallback(async () => {
     setEjected(false);
     setEjectedDeviceInfo(null);
-    sessionStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem(SESSION_KEY);
     tokenRef.current      = null;
     registeredRef.current = false;
     ejectedRef.current    = false;
