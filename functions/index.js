@@ -242,23 +242,43 @@ exports.registerSession = onRequest(
         req.connection?.remoteAddress ||
         "unknown";
 
-      const userAgent = req.headers["user-agent"] || "unknown";
+      const userAgent = req.headers["user-agent"] || "";
 
-      // Determine device type from user agent
-      const isMobile = /mobile|android|iphone|ipad/i.test(userAgent);
+      // ── Device type ──
+      const isMobile    = /mobile|android|iphone|ipad|ipod/i.test(userAgent);
+      const isTablet    = /ipad|tablet/i.test(userAgent) && !/mobile/i.test(userAgent);
       const isExtension = /chrome-extension|moz-extension/i.test(userAgent) ||
         decoded.source === "extension";
 
       let deviceType = "Desktop";
-      if (isExtension) deviceType = "Extension";
+      if (isExtension)   deviceType = "Extension";
+      else if (isTablet) deviceType = "Tablet";
       else if (isMobile) deviceType = "Mobile";
 
-      // Parse browser name
-      let browser = "Unknown";
-      if (/edg/i.test(userAgent)) browser = "Edge";
-      else if (/chrome/i.test(userAgent)) browser = "Chrome";
-      else if (/firefox/i.test(userAgent)) browser = "Firefox";
-      else if (/safari/i.test(userAgent)) browser = "Safari";
+      // ── OS detection ──
+      // Order matters — check specific versions before generic names
+      let os = "Unknown OS";
+      if (/windows nt 10\.0.*win64/i.test(userAgent))      os = "Windows 11"; // Win11 still reports NT 10
+      else if (/windows nt 10/i.test(userAgent))            os = "Windows 10";
+      else if (/windows nt 6\.3/i.test(userAgent))         os = "Windows 8.1";
+      else if (/windows/i.test(userAgent))                  os = "Windows";
+      else if (/iphone/i.test(userAgent))                   os = "iOS";
+      else if (/ipad/i.test(userAgent))                     os = "iPadOS";
+      else if (/mac os x|macintosh/i.test(userAgent))       os = "macOS";
+      else if (/android/i.test(userAgent))                  os = "Android";
+      else if (/cros/i.test(userAgent))                     os = "ChromeOS";
+      else if (/linux/i.test(userAgent))                    os = "Linux";
+
+      // ── Browser detection ──
+      // Order matters — Edge and Opera contain "Chrome" in their UA strings
+      let browser = "Unknown Browser";
+      if (/edg\//i.test(userAgent))                                          browser = "Edge";
+      else if (/opr\/|opera/i.test(userAgent))                               browser = "Opera";
+      else if (/chrome\/[\d.]+/i.test(userAgent) && !/chromium/i.test(userAgent)) browser = "Chrome";
+      else if (/chromium\/[\d.]+/i.test(userAgent))                         browser = "Chromium";
+      else if (/firefox\/[\d.]+/i.test(userAgent))                          browser = "Firefox";
+      else if (/safari\/[\d.]+/i.test(userAgent))                           browser = "Safari";
+      else if (/msie|trident/i.test(userAgent))                             browser = "Internet Explorer";
 
       // ── LAYER 2: Revoke all existing Firebase refresh tokens ──
       // This forces every other device to fail on its next token refresh
@@ -278,29 +298,30 @@ exports.registerSession = onRequest(
         ip,
         userAgent: userAgent.slice(0, 300),
         browser,
+        os,
         deviceType,
         registeredAt: admin.firestore.FieldValue.serverTimestamp(),
         version: Date.now(),
       };
 
       // ── Write new session to Firestore FIRST ──
-      // This ejects old devices via their Firestore onSnapshot listeners.
-      // We write BEFORE revoking so old devices get a clean token-mismatch signal
-      // (not a permission-denied error which would be confusing).
       const userRef = db.collection("users").doc(uid);
       await userRef.set({ activeSession: sessionData }, { merge: true });
 
       // ── LAYER 5: Audit log ──
+      const deviceInfo = { browser, os, deviceType };
       const historyRef = userRef.collection("sessionHistory").doc();
       await historyRef.set({
         action: "login",
         sessionToken: sessionToken.slice(0, 8) + "…",
         ip,
-        browser,
+        deviceInfo,            // nested — read by Profile.jsx
+        browser,               // top-level for backwards compat
+        os,
         deviceType,
         userAgent: userAgent.slice(0, 200),
-        loginAt:   admin.firestore.FieldValue.serverTimestamp(), // used by Profile.jsx
-        timestamp: admin.firestore.FieldValue.serverTimestamp(), // legacy alias
+        loginAt:   admin.firestore.FieldValue.serverTimestamp(),
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
 
       logger.info(`registerSession: uid=${uid} ip=${ip} device=${deviceType} browser=${browser}`);

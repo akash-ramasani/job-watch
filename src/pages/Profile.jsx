@@ -940,32 +940,81 @@ export default function Profile({ user, userMeta }) {
                 {sessions.length === 0 ? (
                   <li className="p-6 text-center text-sm text-gray-400">No session history available.</li>
                 ) : (
-                  sessions.map((session, i) => (
-                    <li key={session.id} className="p-5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors">
-                      <div className="flex items-center gap-4">
-                        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${i === 0 ? "bg-emerald-50 text-emerald-600" : "bg-gray-50 text-gray-400"}`}>
-                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
-                          </svg>
+                  sessions.map((session, i) => {
+                    // Read from nested deviceInfo (new) with fallback to top-level (old records)
+                    const browser    = session.deviceInfo?.browser    || session.browser    || "Unknown Browser";
+                    const os         = session.deviceInfo?.os         || session.os         || "Unknown OS";
+                    const deviceType = session.deviceInfo?.deviceType || session.deviceType || "Desktop";
+
+                    // Pick icon based on device type / OS
+                    const isMobileDevice = deviceType === "Mobile" || /ios|android/i.test(os);
+                    const isTablet       = deviceType === "Tablet"  || /ipadOS/i.test(os);
+                    const isExtension    = deviceType === "Extension";
+
+                    const iconColor = i === 0
+                      ? "bg-emerald-50 text-emerald-600"
+                      : "bg-gray-50 text-gray-400";
+
+                    const DeviceIcon = () => {
+                      if (isExtension) return (
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M14.25 6.087c0-.355.186-.676.401-.959.221-.29.349-.634.349-1.003 0-1.035-.84-1.875-1.875-1.875c-1.035 0-1.875.84-1.875 1.875 0 .369.128.713.349 1.003.215.283.401.604.401.959v0a.64.64 0 01-.657.643 48.39 48.39 0 01-4.163-.3c.186 1.613.293 3.25.315 4.907a.656.656 0 01-.658.663v0c-.355 0-.676-.186-.959-.401a1.647 1.647 0 00-1.003-.349c-1.035 0-1.875.84-1.875 1.875s.84 1.875 1.875 1.875c.369 0 .713-.128 1.003-.349.283-.215.604-.401.959-.401v0c.31 0 .555.26.532.57a48.039 48.039 0 01-.642 5.056c1.518.19 3.058.309 4.616.354a.64.64 0 00.657-.643v0c0-.355-.186-.676-.401-.959a1.647 1.647 0 01-.349-1.003c0-1.035.84-1.875 1.875-1.875s1.875.84 1.875 1.875c0 .369-.128.713-.349 1.003-.215.283-.401.604-.401.959v0c0 .31.26.555.57.532a48.073 48.073 0 005.054-.642A48.082 48.082 0 0021 12a48.082 48.082 0 00-.642-5.054 48.073 48.073 0 00-5.054-.642.641.641 0 00-.57.532v0z" />
+                        </svg>
+                      );
+                      if (isMobileDevice) return (
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3" />
+                        </svg>
+                      );
+                      if (isTablet) return (
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5h3m-6.75 2.25h10.5a2.25 2.25 0 002.25-2.25v-15a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 4.5v15a2.25 2.25 0 002.25 2.25z" />
+                        </svg>
+                      );
+                      // Desktop / default
+                      return (
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0H3" />
+                        </svg>
+                      );
+                    };
+
+                    return (
+                      <li key={session.id} className="p-5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors">
+                        <div className="flex items-center gap-4">
+                          <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl ${iconColor}`}>
+                            <DeviceIcon />
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-gray-900">
+                              {browser} <span className="text-gray-400 font-normal">on</span> {os}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {session.ip} &nbsp;·&nbsp;
+                              {session.loginAt?.toDate
+                                ? new Date(session.loginAt.toDate()).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+                                : "Recently"}
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-semibold text-gray-900">
-                            {session.deviceInfo?.browser || "Unknown Browser"} on {session.deviceInfo?.os || "Unknown OS"}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-0.5">
-                            IP: {session.ip} • {session.loginAt?.toDate ? new Date(session.loginAt.toDate()).toLocaleString() : "Recently"}
-                          </p>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {deviceType !== "Desktop" && (
+                            <span className="hidden sm:inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-gray-500">
+                              {deviceType}
+                            </span>
+                          )}
+                          {i === 0 && (
+                            <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
+                              Current
+                            </span>
+                          )}
                         </div>
-                      </div>
-                      {i === 0 && (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
-                          Current
-                        </span>
-                      )}
-                    </li>
-                  ))
+                      </li>
+                    );
+                  })
                 )}
               </ul>
+
             </div>
             <p className="mt-4 text-[11px] text-gray-400 leading-relaxed italic px-2">
               Logging into a new device will automatically and immediately revoke access for all other active devices to protect your account.
