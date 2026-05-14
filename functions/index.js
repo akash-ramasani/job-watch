@@ -295,18 +295,6 @@ exports.registerSession = onRequest(
         }
       }
 
-      // ── LAYER 2: Revoke all existing Firebase refresh tokens ──
-      // This forces every other device to fail on its next token refresh
-      // (Firebase tokens last ~1h, so worst case the old session dies in 1h).
-      // Combined with the Firestore realtime listener (Layer 1), ejection is
-      // near-instant in practice.
-      try {
-        await admin.auth().revokeRefreshTokens(uid);
-        logger.info(`registerSession: revoked refresh tokens for uid=${uid}`);
-      } catch (revokeErr) {
-        // Non-fatal — Layer 1 (Firestore listener) still handles immediate ejection
-        logger.warn(`registerSession: revokeRefreshTokens failed: ${revokeErr.message}`);
-      }
 
       const sessionData = {
         token: sessionToken,
