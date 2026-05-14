@@ -1,32 +1,27 @@
 /**
  * useSessionGuard.js — Hardened single-session enforcement hook.
  *
- * Defense-in-depth layers (client side):
+ * ── How registration works ──
+ *   1. App.jsx passes the Firebase user to this hook.
+ *   2. On first user detection (fresh login), we call registerSession which:
+ *      a. Sets registeringRef = true  (suppresses snapshot ejection)
+ *      b. POSTs to the Cloud Function → gets back a unique sessionToken
+ *      c. Stores the token in tokenRef + sessionStorage
+ *      d. Sets registeringRef = false
+ *   3. The Firestore onSnapshot watches activeSession.token.
+ *      If the server token no longer matches ours → another device logged in → eject us.
  *
- *   Layer 1: Firestore onSnapshot listener
- *     - Watches users/{uid}.activeSession.token in real-time
- *     - If the token changes and doesn't match ours → IMMEDIATE signOut()
- *     - Sub-second ejection latency over a healthy connection
+ * ── Why registeringRef matters ──
+ *   The HTTP round-trip takes ~200–600ms. During that window the Firestore snapshot
+ *   can fire (because the server just wrote the new token). Without registeringRef,
+ *   the snapshot sees serverToken ≠ localToken (null) and ejects the NEW device —
+ *   the exact bug we're fixing.
  *
- *   Layer 2: Heartbeat polling (every 30s)
- *     - Reads the user doc directly via getDoc() to catch cases where
- *       the onSnapshot listener might be stale (network reconnect, etc.)
- *     - Acts as a safety net if the realtime stream is temporarily broken
- *
- *   Layer 3: Visibility API integration
- *     - When the tab becomes visible after being backgrounded, immediately
- *       runs a heartbeat check (don't wait for the next interval)
- *     - Catches the case where the user switches back to a stale tab
- *
- *   Layer 4: BroadcastChannel multi-tab coordination
- *     - All tabs in the same origin share a channel ("jw_session")
- *     - When one tab detects ejection, it broadcasts to ALL tabs instantly
- *     - Prevents the "one tab ejected, other tab still works" loophole
- *
- *   On ejection:
- *     - Firebase signOut() is called IMMEDIATELY (no waiting for user interaction)
- *     - SessionEjectedModal is shown as informational only
- *     - User can only click "Sign in again" → goes to /login
+ * ── Defense-in-depth layers ──
+ *   Layer 1: Firestore onSnapshot  → sub-second ejection when token changes
+ *   Layer 2: Heartbeat (30s)       → catches cases where snapshot stream is stale
+ *   Layer 3: Visibility API        → re-checks immediately when tab is focused
+ *   Layer 4: BroadcastChannel      → instant cross-tab coordination
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -34,145 +29,140 @@ import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { auth, db } from "../firebase";
 
-const SESSION_KEY = "jw_session_token";
-const BROADCAST_CHANNEL = "jw_session";
-const HEARTBEAT_INTERVAL_MS = 30_000; // 30 seconds
-const REGISTER_URL =
+const SESSION_KEY        = "jw_session_token";
+const BROADCAST_CHANNEL  = "jw_session";
+const HEARTBEAT_MS       = 30_000;
+const REGISTER_URL       =
   import.meta.env.VITE_REGISTER_SESSION_URL ||
   "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/registerSession";
 
 export function useSessionGuard(user) {
-  const [ejected, setEjected] = useState(false);
+  const [ejected, setEjected]               = useState(false);
   const [ejectedDeviceInfo, setEjectedDeviceInfo] = useState(null);
-  const tokenRef = useRef(null);
-  const registeredRef = useRef(false);
-  const isFirstSnapshotRef = useRef(true);
-  const ejectedRef = useRef(false); // Prevents double-ejection
-  const channelRef = useRef(null);
-  const heartbeatRef = useRef(null);
 
-  // ── Core ejection handler — called from any layer ──
+  // ── Refs (don't trigger re-renders) ──────────────────────────────────────────
+  const tokenRef        = useRef(null);   // Our session token
+  const registeredRef   = useRef(false);  // Have we completed registration?
+  const registeringRef  = useRef(false);  // Are we mid-registration? Suppresses ejection.
+  const ejectedRef      = useRef(false);  // Prevents double-ejection
+  const channelRef      = useRef(null);
+  const heartbeatRef    = useRef(null);
+
+  // ── Eject this session ────────────────────────────────────────────────────────
   const ejectSession = useCallback(async (deviceInfo = null) => {
-    if (ejectedRef.current) return; // Already ejecting
+    if (ejectedRef.current) return;       // Already ejecting
+    if (registeringRef.current) return;   // Mid-registration — don't self-eject
+
     ejectedRef.current = true;
+    console.warn("[SessionGuard] ⛔ EJECTED — signing out.");
 
-    console.warn("[SessionGuard] ⛔ EJECTED — signing out immediately.");
-
-    // Set state for the informational modal
     if (deviceInfo) setEjectedDeviceInfo(deviceInfo);
     setEjected(true);
 
-    // Clean up local session
     sessionStorage.removeItem(SESSION_KEY);
-    tokenRef.current = null;
+    tokenRef.current   = null;
 
-    // Broadcast ejection to all other tabs
-    try {
-      channelRef.current?.postMessage({ type: "EJECTED", deviceInfo });
-    } catch { /* channel might be closed */ }
+    // Tell all other tabs to eject too
+    try { channelRef.current?.postMessage({ type: "EJECTED", deviceInfo }); } catch {}
 
-    // ── IMMEDIATE Firebase sign-out ──
-    try {
-      await signOut(auth);
-    } catch {
-      // Already signed out
-    }
+    try { await signOut(auth); } catch {}
   }, []);
 
-  // ── Register a new session after login ──
+  // ── Register a brand-new session with the server ──────────────────────────────
   const registerSession = useCallback(async (firebaseUser) => {
-    if (!firebaseUser || registeredRef.current) return;
-    registeredRef.current = true;
+    if (!firebaseUser)            return;
+    if (registeredRef.current)    return;  // Already registered (e.g. page refresh)
+    if (registeringRef.current)   return;  // Already in-flight
+
+    registeringRef.current = true;         // ← suppress snapshot ejection during HTTP call
 
     try {
-      const idToken = await firebaseUser.getIdToken(true); // Force fresh token
+      const idToken = await firebaseUser.getIdToken(true);
       const resp = await fetch(REGISTER_URL, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
+          "Content-Type":  "application/json",
+          Authorization:   `Bearer ${idToken}`,
         },
       });
 
       if (!resp.ok) {
-        console.warn("[SessionGuard] registerSession failed:", resp.status);
-        registeredRef.current = false;
+        console.warn("[SessionGuard] registerSession HTTP error:", resp.status);
+        registeringRef.current = false;
         return;
       }
 
       const data = await resp.json();
       if (data.ok && data.sessionToken) {
+        // ── Store token BEFORE clearing registeringRef ──
+        // The snapshot might fire immediately after this; having the token set
+        // ensures we won't eject ourselves on our own token write.
         tokenRef.current = data.sessionToken;
         sessionStorage.setItem(SESSION_KEY, data.sessionToken);
+        registeredRef.current = true;
 
-        // Notify other tabs of new session token
+        // Tell sibling tabs on the same browser about the new token
         try {
           channelRef.current?.postMessage({
-            type: "SESSION_REGISTERED",
+            type:  "SESSION_REGISTERED",
             token: data.sessionToken,
           });
-        } catch { /* channel might be closed */ }
+        } catch {}
 
-        console.info(
-          "[SessionGuard] ✓ Session registered:",
-          data.device?.deviceType,
-          data.device?.browser
-        );
+        console.info("[SessionGuard] ✓ Session registered:",
+          data.device?.deviceType, data.device?.browser);
       }
     } catch (err) {
       console.warn("[SessionGuard] registerSession error:", err.message);
-      registeredRef.current = false;
+    } finally {
+      // Always clear the registering guard so future snapshots work normally
+      registeringRef.current = false;
     }
   }, []);
 
-  // ── Heartbeat: verify session is still valid (Layer 2) ──
+  // ── Heartbeat check (Layer 2) ─────────────────────────────────────────────────
   const runHeartbeat = useCallback(async () => {
-    if (!user || ejectedRef.current) return;
+    if (!user || ejectedRef.current || registeringRef.current) return;
 
     const localToken = tokenRef.current || sessionStorage.getItem(SESSION_KEY);
     if (!localToken) return;
 
     try {
-      const userRef = doc(db, "users", user.uid);
-      const snap = await getDoc(userRef);
+      const snap = await getDoc(doc(db, "users", user.uid));
       if (!snap.exists()) return;
 
       const serverToken = snap.data()?.activeSession?.token;
       if (serverToken && serverToken !== localToken) {
-        const data = snap.data();
+        const d = snap.data();
         ejectSession({
-          browser: data.activeSession?.browser || null,
-          deviceType: data.activeSession?.deviceType || null,
-          ip: data.activeSession?.ip
-            ? data.activeSession.ip.slice(0, 6) + "***"
-            : null,
+          browser:    d.activeSession?.browser    || null,
+          deviceType: d.activeSession?.deviceType || null,
+          ip:         d.activeSession?.ip ? d.activeSession.ip.slice(0, 6) + "***" : null,
         });
       }
     } catch (err) {
-      // Network error — don't eject, just log. Next heartbeat will retry.
-      console.warn("[SessionGuard] Heartbeat check failed:", err.message);
+      // Network blip — don't eject. Retry on next heartbeat.
+      console.warn("[SessionGuard] Heartbeat failed:", err.message);
     }
   }, [user, ejectSession]);
 
-  // ── Setup BroadcastChannel for multi-tab coordination (Layer 4) ──
+  // ── BroadcastChannel — multi-tab coordination (Layer 4) ──────────────────────
   useEffect(() => {
     if (typeof BroadcastChannel === "undefined") return;
 
     const channel = new BroadcastChannel(BROADCAST_CHANNEL);
     channelRef.current = channel;
 
-    channel.onmessage = (event) => {
-      const { type, deviceInfo, token } = event.data || {};
-
-      if (type === "EJECTED") {
-        // Another tab detected ejection — eject this tab too
-        ejectSession(deviceInfo);
+    channel.onmessage = ({ data: msg }) => {
+      if (!msg) return;
+      if (msg.type === "EJECTED") {
+        ejectSession(msg.deviceInfo);
       }
-
-      if (type === "SESSION_REGISTERED" && token) {
-        // Another tab registered a new session — update our local token
-        tokenRef.current = token;
-        sessionStorage.setItem(SESSION_KEY, token);
+      if (msg.type === "SESSION_REGISTERED" && msg.token) {
+        // Another tab on this device registered — adopt its token so we don't
+        // get erroneously ejected when the snapshot fires here.
+        tokenRef.current = msg.token;
+        sessionStorage.setItem(SESSION_KEY, msg.token);
         registeredRef.current = true;
       }
     };
@@ -183,18 +173,17 @@ export function useSessionGuard(user) {
     };
   }, [ejectSession]);
 
-  // ── Reset state on logout ──
+  // ── User lifecycle — register or restore session ──────────────────────────────
   useEffect(() => {
     if (!user) {
-      registeredRef.current = false;
-      isFirstSnapshotRef.current = true;
-      tokenRef.current = null;
-      ejectedRef.current = false;
+      // User signed out — full reset
+      registeredRef.current  = false;
+      registeringRef.current = false;
+      tokenRef.current       = null;
+      ejectedRef.current     = false;
       sessionStorage.removeItem(SESSION_KEY);
       setEjected(false);
       setEjectedDeviceInfo(null);
-
-      // Clear heartbeat
       if (heartbeatRef.current) {
         clearInterval(heartbeatRef.current);
         heartbeatRef.current = null;
@@ -202,86 +191,61 @@ export function useSessionGuard(user) {
       return;
     }
 
-    // Try to recover token from sessionStorage (e.g. page refresh)
     const storedToken = sessionStorage.getItem(SESSION_KEY);
     if (storedToken) {
-      tokenRef.current = storedToken;
+      // Page refresh — token already in sessionStorage, no need to re-register
+      tokenRef.current      = storedToken;
       registeredRef.current = true;
     } else {
-      // Fresh login — register a new session
+      // Fresh login — register with the server
       registerSession(user);
     }
   }, [user, registerSession]);
 
-  // ── Layer 1: Firestore realtime listener ──
+  // ── Layer 1: Firestore realtime listener ──────────────────────────────────────
   useEffect(() => {
     if (!user) return;
 
-    const userRef = doc(db, "users", user.uid);
-
     const unsubscribe = onSnapshot(
-      userRef,
+      doc(db, "users", user.uid),
       (snap) => {
-        if (!snap.exists() || ejectedRef.current) return;
-        const data = snap.data();
-        const serverToken = data?.activeSession?.token;
+        // Ignore if already ejected or if we're mid-registration
+        if (!snap.exists() || ejectedRef.current || registeringRef.current) return;
 
-        // Skip the very first snapshot — it fires immediately with current data
-        // and we might not have our token yet (registerSession is async)
-        if (isFirstSnapshotRef.current) {
-          isFirstSnapshotRef.current = false;
+        const serverToken = snap.data()?.activeSession?.token;
+        const localToken  = tokenRef.current || sessionStorage.getItem(SESSION_KEY);
 
-          if (!tokenRef.current || serverToken === tokenRef.current) return;
-
-          // Token exists but doesn't match — page refresh with cleared sessionStorage
-          if (!sessionStorage.getItem(SESSION_KEY)) {
-            registeredRef.current = false;
-            registerSession(user);
-            return;
-          }
-        }
-
-        const localToken =
-          tokenRef.current || sessionStorage.getItem(SESSION_KEY);
-
-        // If we don't have a local token yet, skip (still registering)
+        // No local token yet → still registering or not yet started; skip
         if (!localToken) return;
 
-        // Server token doesn't match our local token → EJECTED
+        // Token mismatch → another device logged in → eject
         if (serverToken && serverToken !== localToken) {
+          const d = snap.data();
           ejectSession({
-            browser: data.activeSession?.browser || null,
-            deviceType: data.activeSession?.deviceType || null,
-            ip: data.activeSession?.ip
-              ? data.activeSession.ip.slice(0, 6) + "***"
-              : null,
+            browser:    d.activeSession?.browser    || null,
+            deviceType: d.activeSession?.deviceType || null,
+            ip:         d.activeSession?.ip ? d.activeSession.ip.slice(0, 6) + "***" : null,
           });
         }
       },
       (error) => {
-        // If the listener fails (e.g. permission denied after token revocation),
-        // that itself is a signal the session is invalid
-        console.warn("[SessionGuard] Firestore listener error:", error.message);
-        if (
-          error.code === "permission-denied" ||
-          error.code === "unauthenticated"
-        ) {
+        console.warn("[SessionGuard] Firestore listener error:", error.code);
+        // permission-denied after revocation is a signal the session is dead
+        if (error.code === "permission-denied" || error.code === "unauthenticated") {
           ejectSession(null);
         }
       }
     );
 
     return () => unsubscribe();
-  }, [user, registerSession, ejectSession]);
+  }, [user, ejectSession]);
 
-  // ── Layer 2 + 3: Heartbeat polling + Visibility API ──
+  // ── Layer 2 + 3: Heartbeat + Visibility API ───────────────────────────────────
   useEffect(() => {
     if (!user) return;
 
-    // Start heartbeat interval
-    heartbeatRef.current = setInterval(runHeartbeat, HEARTBEAT_INTERVAL_MS);
+    heartbeatRef.current = setInterval(runHeartbeat, HEARTBEAT_MS);
 
-    // Layer 3: Run heartbeat immediately when tab becomes visible
     const handleVisibility = () => {
       if (document.visibilityState === "visible" && !ejectedRef.current) {
         runHeartbeat();
@@ -290,28 +254,22 @@ export function useSessionGuard(user) {
     document.addEventListener("visibilitychange", handleVisibility);
 
     return () => {
-      if (heartbeatRef.current) {
-        clearInterval(heartbeatRef.current);
-        heartbeatRef.current = null;
-      }
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [user, runHeartbeat]);
 
-  // ── Dismiss handler — user acknowledges the modal ──
+  // ── Modal dismiss ─────────────────────────────────────────────────────────────
   const handleEjectedSignOut = useCallback(async () => {
     setEjected(false);
     setEjectedDeviceInfo(null);
     sessionStorage.removeItem(SESSION_KEY);
-    tokenRef.current = null;
+    tokenRef.current      = null;
     registeredRef.current = false;
-    ejectedRef.current = false;
-    try {
-      await signOut(auth);
-    } catch {
-      // Already signed out
-    }
+    ejectedRef.current    = false;
+    try { await signOut(auth); } catch {}
   }, []);
 
-  return { ejected, ejectedDeviceInfo, handleEjectedSignOut, registerSession };
+  return { ejected, ejectedDeviceInfo, handleEjectedSignOut };
 }

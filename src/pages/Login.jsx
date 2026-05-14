@@ -2,11 +2,7 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword } from "firebase/auth";
 import { auth } from "../firebase";
-import { useToast } from "../components/Toast/ToastProvider.jsx"; 
-
-const REGISTER_SESSION_URL =
-  import.meta.env.VITE_REGISTER_SESSION_URL ||
-  "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/registerSession";
+import { useToast } from "../components/Toast/ToastProvider.jsx";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -14,38 +10,21 @@ export default function Login() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const { showToast } = useToast(); 
+  const { showToast } = useToast();
 
   async function onSubmit(e) {
     e.preventDefault();
     setErr("");
     setBusy(true);
     try {
-      const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-
-      // Register session — ejects any existing session on other devices
-      try {
-        const idToken = await cred.user.getIdToken();
-        const resp = await fetch(REGISTER_SESSION_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${idToken}`,
-          },
-        });
-        const data = await resp.json();
-        if (data.ok && data.sessionToken) {
-          sessionStorage.setItem("jw_session_token", data.sessionToken);
-        }
-      } catch (sessionErr) {
-        // Non-blocking — session enforcement is best-effort on login
-        console.warn("[Login] registerSession failed:", sessionErr.message);
-      }
-
-      showToast("Logged in successfully!", "success"); 
+      // Sign in — useSessionGuard (in App.jsx) handles registerSession automatically
+      // after the user object becomes available. DO NOT call registerSession here;
+      // a duplicate call would race and eject the device we just logged in on.
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      showToast("Logged in successfully!", "success");
     } catch (e2) {
       setErr(e2.message || "Login failed");
-      showToast("Login failed. Please try again.", "error"); 
+      showToast("Login failed. Please try again.", "error");
     } finally {
       setBusy(false);
     }

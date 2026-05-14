@@ -310,26 +310,40 @@ exports.registerSession = onRequest(
         browser,
         deviceType,
         registeredAt: admin.firestore.FieldValue.serverTimestamp(),
-        // Monotonic counter to detect stale snapshots
         version: Date.now(),
       };
 
-      // Atomically write the new active session — this ejects all other sessions
+      // ── Write new session to Firestore FIRST ──
+      // This ejects old devices via their Firestore onSnapshot listeners.
+      // We write BEFORE revoking so old devices get a clean token-mismatch signal
+      // (not a permission-denied error which would be confusing).
       const userRef = db.collection("users").doc(uid);
       await userRef.set({ activeSession: sessionData }, { merge: true });
 
-      // ── LAYER 5: Session audit log ──
-      // Write to sessionHistory subcollection for security audit trail
+      // ── LAYER 5: Audit log ──
       const historyRef = userRef.collection("sessionHistory").doc();
       await historyRef.set({
         action: "login",
-        sessionToken: sessionToken.slice(0, 8) + "…", // Only store prefix for audit
+        sessionToken: sessionToken.slice(0, 8) + "…",
         ip,
         browser,
         deviceType,
         userAgent: userAgent.slice(0, 200),
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        loginAt:   admin.firestore.FieldValue.serverTimestamp(), // used by Profile.jsx
+        timestamp: admin.firestore.FieldValue.serverTimestamp(), // legacy alias
       });
+
+      // ── LAYER 2: Revoke old refresh tokens AFTER Firestore write ──
+      // Old devices are already being ejected by the snapshot. Revocation adds
+      // a hard server-side block for the next token refresh (~1h safety net).
+      // Critically: we revoke AFTER writing so the new device's own token is
+      // already stored and won't be caught by the revocation check.
+      try {
+        await admin.auth().revokeRefreshTokens(uid);
+        logger.info(`registerSession: revoked refresh tokens for uid=${uid}`);
+      } catch (revokeErr) {
+        logger.warn(`registerSession: revokeRefreshTokens failed: ${revokeErr.message}`);
+      }
 
       logger.info(`registerSession: uid=${uid} ip=${ip} device=${deviceType} browser=${browser}`);
 
@@ -344,6 +358,7 @@ exports.registerSession = onRequest(
     }
   }
 );
+
 
 /**
  * Validate that a request's session token matches the user's active session.
