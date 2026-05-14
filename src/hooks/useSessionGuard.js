@@ -67,8 +67,11 @@ export function useSessionGuard(user) {
     if (deviceInfo) setEjectedDeviceInfo(deviceInfo);
     setEjected(true);
 
-    // Notify other tabs
-    try { channelRef.current?.postMessage({ type: "EJECTED", deviceInfo }); } catch {}
+    // We do NOT broadcast EJECTED anymore.
+    // Broadcasting EJECTED causes a chain reaction where a stale background tab
+    // waking up can accidentally kill the active tab's session.
+    // Every tab independently monitors localStorage and Firestore, so they will
+    // all naturally eject themselves when they see the token disappear.
     // NOTE: signOut is intentionally NOT called here.
     // The SessionEjectedModal stays visible until user clicks "Sign in again".
   }, []);
@@ -81,7 +84,9 @@ export function useSessionGuard(user) {
       return;
     }
 
-    const localToken = tokenRef.current || localStorage.getItem(SESSION_KEY);
+    // ALWAYS prefer localStorage over memory to catch updates from sibling tabs
+    // while this tab was asleep/frozen by the browser.
+    const localToken = localStorage.getItem(SESSION_KEY) || tokenRef.current;
     if (!localToken) {
       console.log(`[SessionGuard] checkToken(${source}) skipped — no local token yet`);
       return; // still initialising — never eject
@@ -95,6 +100,12 @@ export function useSessionGuard(user) {
       const serverToken = snap.data()?.activeSession?.token;
 
       console.log(`[SessionGuard] checkToken(${source}) — serverToken: ${serverToken ? serverToken.slice(0, 8) + "…" : "none"} match:${serverToken === localToken}`);
+
+      if (serverToken && serverToken === localToken) {
+        // Quietly update memory in case a sibling tab updated localStorage while we slept
+        tokenRef.current = localToken;
+        registeredRef.current = true;
+      }
 
       if (serverToken && serverToken !== localToken) {
         const d = snap.data();
@@ -180,9 +191,9 @@ export function useSessionGuard(user) {
         registeringRef.current = false;
         localStorage.setItem(SESSION_KEY, msg.token);
       }
-      if (msg.type === "EJECTED") {
-        ejectSession(msg.deviceInfo || null);
-      }
+      // We no longer listen for EJECTED broadcasts to prevent chain reactions.
+      // If a sibling tab ejects, it clears localStorage, which this tab will
+      // detect on its next checkToken or visibility change.
     };
 
     return () => {
@@ -208,11 +219,17 @@ export function useSessionGuard(user) {
         }
 
         const serverToken = snap.data()?.activeSession?.token;
-        const localToken  = tokenRef.current || localStorage.getItem(SESSION_KEY);
+        // ALWAYS prefer localStorage over memory to catch sibling tab updates
+        const localToken  = localStorage.getItem(SESSION_KEY) || tokenRef.current;
 
         console.log(`[SessionGuard] snapshot — localToken:${localToken ? localToken.slice(0,8)+"…" : "NONE"} serverToken:${serverToken ? serverToken.slice(0,8)+"…" : "NONE"} match:${serverToken === localToken}`);
 
         if (!localToken) return; // still initialising — skip
+
+        if (serverToken && serverToken === localToken) {
+           tokenRef.current = localToken;
+           registeredRef.current = true;
+        }
 
         if (serverToken && serverToken !== localToken) {
           console.warn("[SessionGuard] snapshot TOKEN MISMATCH — ejecting!");
