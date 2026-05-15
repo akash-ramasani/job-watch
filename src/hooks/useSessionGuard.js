@@ -143,6 +143,7 @@ export function useSessionGuard(user) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${idToken}`,
         },
+        body: JSON.stringify({ screenWidth: window.innerWidth }),
       });
 
       if (!resp.ok) {

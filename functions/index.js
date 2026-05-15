@@ -244,9 +244,11 @@ exports.registerSession = onRequest(
 
       const userAgent = req.headers["user-agent"] || "";
 
+      const screenWidth = req.body?.screenWidth;
+
       // ── Device type ──
-      const isMobile    = /mobile|android|iphone|ipad|ipod/i.test(userAgent);
-      const isTablet    = /ipad|tablet/i.test(userAgent) && !/mobile/i.test(userAgent);
+      const isMobile    = /mobile|android|iphone|ipad|ipod/i.test(userAgent) || (screenWidth && screenWidth < 768);
+      const isTablet    = (/ipad|tablet/i.test(userAgent) && !/mobile/i.test(userAgent)) || (screenWidth && screenWidth >= 768 && screenWidth < 1024);
       const isExtension = /chrome-extension|moz-extension/i.test(userAgent) ||
         decoded.source === "extension";
 
