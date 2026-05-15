@@ -41,6 +41,9 @@ export default function PhoneInput({ value, onChange, disabled }) {
       </div>
       <input
         type="tel"
+        name="tel"
+        autoComplete="tel"
+        inputMode="numeric"
         placeholder="(555) 555-5555"
         disabled={disabled}
         value={displayValue}
