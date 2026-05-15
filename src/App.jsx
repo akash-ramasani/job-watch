@@ -115,7 +115,7 @@ export default function App() {
   }, [user]);
 
   const content = useMemo(() => {
-    if (loading || !user || userMeta === undefined) {
+    if (loading) {
       return (
         <div className="flex h-screen items-center justify-center bg-white">
           <div className="text-sm font-medium text-gray-400 animate-pulse tracking-widest uppercase">
