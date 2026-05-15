@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
 import { auth } from "../firebase";
@@ -36,6 +36,12 @@ export default function Login() {
       setBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (loginMethod === "phone" && !window.recaptchaVerifier && document.getElementById('login-recaptcha-container')) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'login-recaptcha-container', { size: 'invisible' });
+    }
+  }, [loginMethod]);
 
   async function onSendOTP(e) {
     e.preventDefault();

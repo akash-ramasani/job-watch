@@ -260,6 +260,14 @@ export default function Profile({ user, userMeta }) {
     } catch { showToast("Failed to enable notifications", "error"); }
   }
 
+  useEffect(() => {
+    if (!user?.phoneNumber && !window.recaptchaVerifier && document.getElementById('link-recaptcha-container')) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'link-recaptcha-container', {
+        size: 'invisible'
+      });
+    }
+  }, [user?.phoneNumber]);
+
   async function handleSendLinkOTP() {
     if (!linkPhoneTo) { showToast("Enter a phone number (e.g. +15555555555)", "error"); return; }
     setLinkingBusy(true);
