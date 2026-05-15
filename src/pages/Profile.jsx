@@ -136,7 +136,7 @@ export default function Profile({ user, userMeta }) {
     });
 
     const sessionsRef = collection(db, "users", user.uid, "sessionHistory");
-    const qSessions = query(sessionsRef, orderBy("loginAt", "desc"), limit(10));
+    const qSessions = query(sessionsRef, orderBy("loginAt", "desc"), limit(5));
     const unsubSessions = onSnapshot(qSessions, (snap) => {
       setSessions(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
