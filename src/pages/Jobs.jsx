@@ -389,20 +389,13 @@ export default function Jobs({ user, userMeta, preferences }) {
     };
 
     const tier = getTierColor(score);
-    const displayScore = score > 10 ? Math.round(score / 10) : score;
+    const displayScore = score;
 
     return (
       <li key={job.id} className="group relative px-6 py-5 hover:bg-gray-50/50 transition-colors">
         <div className="flex items-center gap-6">
           
-          {/* 1. Logo Section */}
-          <div className="flex-shrink-0">
-            <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm">
-              {job.companyName?.substring(0, 4) || "FLEX"}
-            </div>
-          </div>
-
-          {/* 2. Company & Location */}
+          {/* 1. Company & Location */}
           <div className="flex-shrink-0 w-32 min-w-0">
             <p className="text-xs font-bold text-indigo-600 uppercase tracking-tight truncate">
               {job.companyName || "Unknown"}
