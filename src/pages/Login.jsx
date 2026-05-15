@@ -39,34 +39,44 @@ export default function Login() {
     }
   }
 
-  useEffect(() => {
-    if (!window.recaptchaVerifier && document.getElementById('login-recaptcha-container')) {
-      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'login-recaptcha-container', { size: 'invisible' });
-    }
-    
-    return () => {
+  function destroyRecaptcha() {
+    try {
       if (window.recaptchaVerifier) {
         window.recaptchaVerifier.clear();
         window.recaptchaVerifier = null;
       }
-    };
+    } catch (_) {}
+    // Also remove any leftover reCAPTCHA iframes injected into body
+    document.querySelectorAll("iframe[src*='recaptcha']").forEach(el => el.closest("div[style]")?.remove());
+  }
+
+  useEffect(() => {
+    return () => destroyRecaptcha();
   }, []);
 
   async function onSendOTP(e) {
     e.preventDefault();
     setErr("");
     setBusy(true);
+
+    // Always start with a clean slate
+    destroyRecaptcha();
+
     try {
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'login-recaptcha-container', { size: 'invisible' });
-      }
-      const confirmation = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
+      const verifier = new RecaptchaVerifier(auth, "login-recaptcha-container", {
+        size: "invisible",
+        callback: () => {},
+      });
+      window.recaptchaVerifier = verifier;
+
+      const confirmation = await signInWithPhoneNumber(auth, phone, verifier);
       setConfirmationResult(confirmation);
       showToast("OTP sent via SMS!", "success");
     } catch (error) {
-      setErr(error.message || "Failed to send OTP");
+      destroyRecaptcha();
+      const msg = error.message || "Failed to send OTP";
+      setErr(msg);
       showToast("Failed to send OTP", "error");
-      if (window.recaptchaVerifier) { window.recaptchaVerifier.clear(); window.recaptchaVerifier = null; }
     } finally {
       setBusy(false);
     }
@@ -84,6 +94,7 @@ export default function Login() {
         throw new Error("This phone number is not linked to any account.");
       }
       
+      destroyRecaptcha();
       showToast("Logged in successfully!", "success");
     } catch (error) {
       setErr(error.message === "This phone number is not linked to any account." ? error.message : "Invalid or expired OTP");
