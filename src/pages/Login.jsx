@@ -40,10 +40,17 @@ export default function Login() {
   }
 
   useEffect(() => {
-    if (loginMethod === "phone" && !window.recaptchaVerifier && document.getElementById('login-recaptcha-container')) {
+    if (!window.recaptchaVerifier && document.getElementById('login-recaptcha-container')) {
       window.recaptchaVerifier = new RecaptchaVerifier(auth, 'login-recaptcha-container', { size: 'invisible' });
     }
-  }, [loginMethod]);
+    
+    return () => {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear();
+        window.recaptchaVerifier = null;
+      }
+    };
+  }, []);
 
   async function onSendOTP(e) {
     e.preventDefault();
@@ -139,7 +146,7 @@ export default function Login() {
                   </div>
                   {err && <div className="text-red-500 text-sm">{err}</div>}
                   <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Sending Code..." : "Send Verification Code"}</button>
-                  <div id="login-recaptcha-container"></div>
+
                 </form>
               ) : (
                 <form onSubmit={onVerifyOTP} className="space-y-6">
@@ -161,6 +168,7 @@ export default function Login() {
         <img className="absolute inset-0 size-full object-cover" src="https://images.unsplash.com/photo-1496917756835-20cb06e75b4e?auto=format&fit=crop&w=1908&q=80" alt="Workspace" />
         <div className="absolute inset-y-0 left-0 w-32 bg-gradient-to-r from-white to-transparent" />
       </div>
+      <div id="login-recaptcha-container"></div>
     </div>
   );
 }

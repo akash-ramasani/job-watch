@@ -263,20 +263,24 @@ export default function Profile({ user, userMeta }) {
   }
 
   useEffect(() => {
-    if (!user?.phoneNumber && !window.recaptchaVerifier && document.getElementById('link-recaptcha-container')) {
+    if (!window.recaptchaVerifier && document.getElementById('link-recaptcha-container')) {
       window.recaptchaVerifier = new RecaptchaVerifier(auth, 'link-recaptcha-container', {
         size: 'invisible'
       });
     }
-  }, [user?.phoneNumber]);
+
+    return () => {
+      if (window.recaptchaVerifier) {
+        window.recaptchaVerifier.clear();
+        window.recaptchaVerifier = null;
+      }
+    };
+  }, []);
 
   async function handleSendLinkOTP() {
     if (!linkPhoneTo) { showToast("Enter a phone number (e.g. +15555555555)", "error"); return; }
     setLinkingBusy(true);
     try {
-      if (!window.recaptchaVerifier) {
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'link-recaptcha-container', { size: 'invisible' });
-      }
       const confirmation = await linkWithPhoneNumber(user, linkPhoneTo, window.recaptchaVerifier);
       setLinkConfirmation(confirmation);
       showToast("OTP sent via SMS!", "success");
@@ -1037,7 +1041,7 @@ export default function Profile({ user, userMeta }) {
                           </div>
                         </div>
                       )}
-                      <div id="link-recaptcha-container"></div>
+
                     </div>
                   )}
                 </div>
@@ -1139,6 +1143,7 @@ export default function Profile({ user, userMeta }) {
           </div>
         </div>
       </motion.div>
+      <div id="link-recaptcha-container"></div>
     </div>
   );
 }
