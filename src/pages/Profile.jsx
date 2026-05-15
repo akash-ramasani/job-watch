@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc, collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { sendEmailVerification, getIdToken, linkWithPhoneNumber, RecaptchaVerifier, unlink } from "firebase/auth";
-import { db, messaging } from "../firebase";
+import { db, messaging, auth } from "../firebase";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
