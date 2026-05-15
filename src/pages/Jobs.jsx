@@ -381,93 +381,135 @@ export default function Jobs({ user, userMeta, preferences }) {
     const score = job.relevanceScore;
     const hasScore = typeof score === "number";
 
-    // Tier determines the score chip color only — no background floods
-    const tier =
-      score >= 80 ? { dot: "bg-indigo-500", label: "Strong Match", textCls: "text-indigo-600" }
-        : score >= 60 ? { dot: "bg-indigo-400", label: "Good Match", textCls: "text-indigo-500" }
-          : score >= 40 ? { dot: "bg-gray-400", label: "Partial Match", textCls: "text-gray-500" }
-            : { dot: "bg-gray-300", label: "Weak Match", textCls: "text-gray-400" };
+    // Tier colors matching screenshot (Green for high, Yellow for mid, Gray/Red for low)
+    const getTierColor = (s) => {
+      if (s >= 80 || s >= 8) return { circle: "border-emerald-500 text-emerald-600", dot: "bg-emerald-500", label: "Strong Match" };
+      if (s >= 50 || s >= 5) return { circle: "border-amber-400 text-amber-500", dot: "bg-amber-400", label: "Weak Match" };
+      return { circle: "border-gray-300 text-gray-400", dot: "bg-gray-300", label: "No Match" };
+    };
 
-    const scoreBadge = (hasScore && preferences?.aiScoringEnabled && userMeta?.aiAccess !== false) ? (
-      <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
-        {/* Score chip */}
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[10px] font-bold font-mono text-gray-700 transition-colors group-hover/score:bg-indigo-50 group-hover/score:ring-indigo-200 group-hover/score:text-indigo-700">
-          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${tier.dot}`} />
-          {score}
-        </span>
-        {/* Label */}
-        <span className={`text-[10px] font-bold uppercase tracking-widest ${tier.textCls}`}>
-          {tier.label}
-        </span>
-
-        {/* AI reason tooltip — shows on hover */}
-        {job.scoreReason && (
-          <span className="pointer-events-none absolute bottom-full left-0 mb-2 z-50 w-56 opacity-0 group-hover/score:opacity-100 transition-opacity duration-150">
-            <span className="block rounded-lg bg-gray-900 px-3 py-2 text-[11px] leading-relaxed text-white shadow-xl ring-1 ring-white/10">
-              <span className="block text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">AI Analysis</span>
-              {job.scoreReason}
-            </span>
-            {/* Arrow */}
-            <span className="block w-2 h-2 bg-gray-900 rotate-45 ml-3 -mt-1" />
-          </span>
-        )}
-      </span>
-    ) : null;
+    const tier = getTierColor(score);
+    const displayScore = score > 10 ? Math.round(score / 10) : score;
 
     return (
-      <li
-        key={job.id}
-        className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500"
-      >
-        <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
-
-        <div className="flex items-center justify-between gap-4">
-          <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
-                {job.companyName || "Unknown"}
-              </span>
-              <span className="text-gray-300">|</span>
-              <span className="text-xs text-gray-500 font-medium truncate">
-                {job.locationName || "Remote"}
-                {job.isRemote && <span className="ml-1 text-indigo-400 font-bold">(Remote)</span>}
-              </span>
+      <li key={job.id} className="group relative px-6 py-5 hover:bg-gray-50/50 transition-colors">
+        <div className="flex items-center gap-6">
+          
+          {/* 1. Logo Section */}
+          <div className="flex-shrink-0">
+            <div className="w-12 h-12 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-bold text-xs uppercase shadow-sm">
+              {job.companyName?.substring(0, 4) || "FLEX"}
             </div>
+          </div>
 
-            <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
+          {/* 2. Company & Location */}
+          <div className="flex-shrink-0 w-32 min-w-0">
+            <p className="text-xs font-bold text-indigo-600 uppercase tracking-tight truncate">
+              {job.companyName || "Unknown"}
+            </p>
+            <div className="flex items-center gap-1 mt-1 text-[11px] text-gray-400 font-medium truncate">
+              <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              {job.locationName || "Remote"}
+            </div>
+          </div>
+
+          {/* Vertical Separator */}
+          <div className="h-10 w-[1px] bg-gray-100 flex-shrink-0" />
+
+          {/* 3. Title & Discovered */}
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-bold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
               {job.title}
             </h3>
-
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-visible">
-              <span className="text-xs text-gray-400">Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
-              {scoreBadge}
+            <div className="flex items-center gap-1.5 mt-1 text-[11px] text-gray-400 font-medium">
+              <span>Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
             </div>
-          </a>
+          </div>
 
-          <div className="flex items-center gap-4 flex-shrink-0 z-10">
+          {/* Vertical Separator */}
+          <div className="h-10 w-[1px] bg-gray-100 flex-shrink-0" />
+
+          {/* 4. Match Score */}
+          <div className="flex-shrink-0 w-24 text-center">
+            <div className="flex flex-col items-center">
+              <span className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-300 mb-1">Match</span>
+              <div className="relative flex items-center justify-center">
+                {(hasScore && preferences?.aiScoringEnabled && userMeta?.aiAccess !== false) ? (
+                  <>
+                    <div className={`w-8 h-8 rounded-full border-2 flex items-center justify-center font-bold text-sm ${tier.circle}`}>
+                      {displayScore}
+                    </div>
+                    {/* Tooltip implementation remains similar but styled for new layout */}
+                    <div className="absolute top-0 left-0 w-full h-full cursor-help group/score">
+                       {job.scoreReason && (
+                        <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 w-56 opacity-0 group-hover/score:opacity-100 transition-opacity duration-150">
+                          <div className="rounded-lg bg-gray-900 px-3 py-2 text-[10px] leading-relaxed text-white shadow-xl ring-1 ring-white/10">
+                            <span className="block text-[8px] font-black uppercase tracking-widest text-gray-400 mb-1 text-center">AI Analysis</span>
+                            {job.scoreReason}
+                          </div>
+                          <div className="w-2 h-2 bg-gray-900 rotate-45 mx-auto -mt-1" />
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-8 h-8 rounded-full border-2 border-gray-100 flex items-center justify-center text-gray-200">
+                    <span className="text-[10px]">?</span>
+                  </div>
+                )}
+              </div>
+              <span className={`mt-1 text-[8px] font-black uppercase tracking-widest ${tier.circle.split(' ')[1]}`}>
+                {tier.label}
+              </span>
+            </div>
+          </div>
+
+          {/* Vertical Separator */}
+          <div className="h-10 w-[1px] bg-gray-100 flex-shrink-0" />
+
+          {/* 5. Updated Time */}
+          <div className="flex-shrink-0 w-20">
+            <p className="text-[9px] font-black uppercase tracking-[0.1em] text-gray-300">Updated</p>
+            <p className="text-sm font-bold text-gray-800 mt-0.5">{updatedShort}</p>
+          </div>
+
+          {/* 6. Actions */}
+          <div className="flex items-center gap-4 flex-shrink-0">
             {preferences?.aiScoringEnabled && userMeta?.aiAccess !== false && (
               <button
                 onClick={(e) => handleGenerateCoverLetter(e, job)}
-                className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-[11px] font-bold text-indigo-600 bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-100 transition-all active:scale-95"
               >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
                 Cover Letter
               </button>
             )}
+            
             {job.absolute_url && userMeta?.aiAccess !== false && (job.source?.toLowerCase() === "ashby" || job.source?.toLowerCase() === "ashbyhq") && (
               <button
                 onClick={(e) => { e.preventDefault(); handleAutoApply(job); }}
-                className="px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest text-white bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-sm shadow-emerald-200 flex items-center gap-1.5"
+                className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center hover:bg-emerald-600 active:scale-95 transition-all shadow-sm shadow-emerald-100"
+                title="Auto Apply"
               >
-                <span>⚡</span> Auto Apply
+                <span className="text-sm">⚡</span>
               </button>
             )}
-            <div className="hidden sm:flex flex-col items-end min-w-[70px]">
-              <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
-                Updated
-              </span>
-              <span className="text-sm font-bold text-gray-900">{updatedShort}</span>
+
+            <div className="text-gray-300 group-hover:text-indigo-400 transition-colors">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
             </div>
           </div>
+
         </div>
       </li>
     );
