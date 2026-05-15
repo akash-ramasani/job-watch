@@ -1115,11 +1115,7 @@ export default function Profile({ user, userMeta }) {
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          {deviceType !== "Desktop" && (
-                            <span className="hidden sm:inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-gray-500">
-                              {deviceType}
-                            </span>
-                          )}
+
                           {i === 0 ? (
                             <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
                               Current
