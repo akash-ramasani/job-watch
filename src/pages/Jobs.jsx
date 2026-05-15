@@ -102,8 +102,6 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [companySearch, setCompanySearch] = useState("");
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
-  const [onlyHighRelevant, setOnlyHighRelevant] = useState(false);
-  const [onlyAutoApply, setOnlyAutoApply] = useState(false);
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
 
   // Cover Letter State
@@ -356,22 +354,11 @@ export default function Jobs({ user, userMeta, preferences }) {
     if (!term) return companies;
     return companies.filter((c) => (c.companyName || "").toLowerCase().includes(term));
   }, [companies, companySearch]);
-
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
 
     const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
-
-      if (onlyHighRelevant && (typeof j.relevanceScore !== "number" || j.relevanceScore < 40)) {
-        return false;
-      }
-
-      if (onlyAutoApply) {
-        const src = j.source?.toLowerCase();
-        if (src !== "ashby" && src !== "ashbyhq") return false;
-        if (!j.absolute_url || j.absolute_url === "#") return false;
-      }
 
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
@@ -387,7 +374,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     });
 
     return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter, onlyHighRelevant, onlyAutoApply]);
+  }, [jobs, titleSearch, stateFilter]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -401,7 +388,7 @@ export default function Jobs({ user, userMeta, preferences }) {
           : score >= 40 ? { dot: "bg-gray-400", label: "Partial Match", textCls: "text-gray-500" }
             : { dot: "bg-gray-300", label: "Weak Match", textCls: "text-gray-400" };
 
-    const scoreBadge = (hasScore && preferences?.aiScoringEnabled) ? (
+    const scoreBadge = (hasScore && preferences?.aiScoringEnabled && userMeta?.aiAccess !== false) ? (
       <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
         {/* Score chip */}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[10px] font-bold font-mono text-gray-700 transition-colors group-hover/score:bg-indigo-50 group-hover/score:ring-indigo-200 group-hover/score:text-indigo-700">
@@ -458,7 +445,7 @@ export default function Jobs({ user, userMeta, preferences }) {
           </a>
 
           <div className="flex items-center gap-4 flex-shrink-0 z-10">
-            {preferences?.aiScoringEnabled && (
+            {preferences?.aiScoringEnabled && userMeta?.aiAccess !== false && (
               <button
                 onClick={(e) => handleGenerateCoverLetter(e, job)}
                 className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
@@ -466,7 +453,7 @@ export default function Jobs({ user, userMeta, preferences }) {
                 Cover Letter
               </button>
             )}
-            {job.absolute_url && (job.source?.toLowerCase() === "ashby" || job.source?.toLowerCase() === "ashbyhq") && (
+            {job.absolute_url && userMeta?.aiAccess !== false && (job.source?.toLowerCase() === "ashby" || job.source?.toLowerCase() === "ashbyhq") && (
               <button
                 onClick={(e) => { e.preventDefault(); handleAutoApply(job); }}
                 className="px-3 py-2 rounded-lg text-[11px] font-black uppercase tracking-widest text-white bg-emerald-500 hover:bg-emerald-600 active:scale-95 transition-all shadow-sm shadow-emerald-200 flex items-center gap-1.5"
@@ -558,30 +545,6 @@ export default function Jobs({ user, userMeta, preferences }) {
           </div>
 
           <div className="flex items-center gap-2 mt-2 sm:mt-0 w-full sm:w-auto">
-              {preferences?.aiScoringEnabled && (
-                <button
-                  onClick={() => setOnlyHighRelevant(!onlyHighRelevant)}
-                  className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyHighRelevant
-                    ? "bg-indigo-50 border-indigo-200 text-indigo-700 shadow-inner"
-                    : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-                    }`}
-                >
-                  <span className={`w-2 h-2 rounded-full mr-2 ${onlyHighRelevant ? "bg-indigo-500" : "bg-gray-300"}`} />
-                  Top Matches
-                </button>
-              )}
-
-              <button
-                onClick={() => setOnlyAutoApply(!onlyAutoApply)}
-                className={`flex-1 sm:flex-none h-11 px-4 flex items-center justify-center rounded-xl border transition-all text-xs font-bold ${onlyAutoApply
-                  ? "bg-emerald-50 border-emerald-200 text-emerald-700 shadow-inner"
-                  : "bg-white border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-700"
-                  }`}
-              >
-                <span className={`w-2 h-2 rounded-full mr-2 ${onlyAutoApply ? "bg-emerald-500" : "bg-gray-300"}`} />
-                Auto Apply
-              </button>
-
             <button
               onClick={() => setIsFilterExpanded(!isFilterExpanded)}
               className={`h-11 w-11 flex-shrink-0 flex items-center justify-center rounded-xl border transition-all ${isFilterExpanded

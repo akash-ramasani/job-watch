@@ -34,7 +34,10 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
               <div className="hidden md:flex items-center gap-1">
                 <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
                 {user.uid === ADMIN_UID && (
-                  <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
+                  <>
+                    <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
+                    <NavButton active={location.pathname === "/users"} to="/users">Users</NavButton>
+                  </>
                 )}
                 <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
                 <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
@@ -98,7 +101,10 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
             <div className="space-y-1 px-4 py-4">
               <MobileNavButton active={location.pathname === "/"} to="/" onClick={() => setIsMenuOpen(false)}>Dashboard</MobileNavButton>
               {user.uid === ADMIN_UID && (
-                <MobileNavButton active={location.pathname === "/feeds"} to="/feeds" onClick={() => setIsMenuOpen(false)}>Feeds</MobileNavButton>
+                <>
+                  <MobileNavButton active={location.pathname === "/feeds"} to="/feeds" onClick={() => setIsMenuOpen(false)}>Feeds</MobileNavButton>
+                  <MobileNavButton active={location.pathname === "/users"} to="/users" onClick={() => setIsMenuOpen(false)}>Users</MobileNavButton>
+                </>
               )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
               <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>

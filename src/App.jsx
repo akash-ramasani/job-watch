@@ -18,6 +18,7 @@ import Jobs from "./pages/Jobs.jsx";
 import Feeds from "./pages/Feeds.jsx";
 import Profile from "./pages/Profile.jsx";
 import FetchHistory from "./pages/FetchHistory.jsx";
+import AdminUsers from "./pages/AdminUsers.jsx";
 import ExtensionAuth from "./pages/ExtensionAuth.jsx";
 import Footer from "./components/Footer.jsx";
 import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
@@ -151,6 +152,16 @@ export default function App() {
             )
           }
         />
+        <Route
+          path="/users"
+          element={
+            user.uid === ADMIN_UID ? (
+              <AdminUsers user={user} />
+            ) : (
+              <Navigate to="/" replace />
+            )
+          }
+        />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} preferences={preferences} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
         <Route path="/history" element={<FetchHistory user={user} />} />
@@ -206,7 +217,7 @@ export default function App() {
               </div>
             </main>
             <Footer />
-            {preferences.aiScoringEnabled && <ChatAssistant user={user} />}
+            {preferences.aiScoringEnabled && userMeta?.aiAccess !== false && <ChatAssistant user={user} />}
           </>
         )}
 

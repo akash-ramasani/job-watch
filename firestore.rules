@@ -6,7 +6,7 @@ service cloud.firestore {
     // 1. User Metadata Rules
     // Allows users to read/write only their own profile information
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if request.auth != null && (request.auth.uid == userId || request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
       
       // 2. Nested Collections (feeds, companies, fetchRuns)
       // Standard rules for sub-collections inside a user document
@@ -28,6 +28,10 @@ service cloud.firestore {
     match /interestedUsers/{docId} {
       allow create: if true;
       allow read: if request.auth != null && (request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
+    }
+
+    match /invites/{inviteId} {
+      allow read, write: if request.auth != null;
     }
 
     
