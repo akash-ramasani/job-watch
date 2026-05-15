@@ -19,6 +19,23 @@ import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 
+// Map Imports
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
+
+// Fix for default marker icons in Vite/React
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerIconRetina from "leaflet/dist/images/marker-icon-2x.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: markerIcon,
+  iconRetinaUrl: markerIconRetina,
+  shadowUrl: markerShadow,
+});
+
 const PAGE_SIZE = 50;
 
 
@@ -103,6 +120,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+  const [viewMode, setViewMode] = useState("list"); // 'list' or 'map'
 
   // Cover Letter State
   const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
@@ -527,8 +545,34 @@ export default function Jobs({ user, userMeta, preferences }) {
           </p>
         </div>
 
-        <div className="flex justify-center w-full md:w-auto overflow-hidden">
-          <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-0.5">
+        <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="inline-flex p-1 bg-gray-100 rounded-xl gap-0.5">
+            <button
+              onClick={() => setViewMode("list")}
+              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center gap-2 ${
+                viewMode === "list" ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+              List
+            </button>
+            <button
+              onClick={() => setViewMode("map")}
+              className={`px-4 py-1.5 text-[11px] font-bold rounded-lg transition-all flex items-center gap-2 ${
+                viewMode === "map" ? "bg-white text-indigo-600 shadow-sm" : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              Map
+            </button>
+          </div>
+
+          <div className="inline-flex p-1 bg-gray-100 rounded-xl overflow-x-auto no-scrollbar scroll-smooth gap-0.5 flex-1 md:flex-none">
             {["all", "24h", "12h", "6h", "1h"].map((id) => (
               <button
                 key={id}
@@ -769,6 +813,59 @@ export default function Jobs({ user, userMeta, preferences }) {
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>{renderSkeleton()}</React.Fragment>
             ))}
+          </div>
+        ) : viewMode === "map" ? (
+          <div className="flex-grow h-[600px] relative">
+            <MapContainer
+              center={[37.0902, -95.7129]} // Center of US
+              zoom={4}
+              style={{ height: "100%", width: "100%" }}
+              className="z-0"
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              />
+              {filteredJobs
+                .filter((j) => j.coordinates && j.coordinates.lat && j.coordinates.lng)
+                .map((job) => (
+                  <Marker key={job.id} position={[job.coordinates.lat, job.coordinates.lng]}>
+                    <Popup className="job-map-popup">
+                      <div className="p-1 max-w-[200px]">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-1">
+                          {job.companyName}
+                        </p>
+                        <h4 className="text-xs font-bold text-gray-900 leading-tight mb-2">
+                          {job.title}
+                        </h4>
+                        <div className="flex items-center justify-between gap-2">
+                           <span className="text-[10px] font-bold text-gray-400">
+                             {job.relevanceScore}% Match
+                           </span>
+                           <a 
+                             href={job.absolute_url} 
+                             target="_blank" 
+                             rel="noreferrer"
+                             className="text-[10px] font-black uppercase text-indigo-600 hover:underline"
+                           >
+                             View Job
+                           </a>
+                        </div>
+                      </div>
+                    </Popup>
+                  </Marker>
+                ))}
+            </MapContainer>
+            {filteredJobs.filter(j => j.coordinates).length === 0 && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-[2px]">
+                <div className="bg-white p-6 rounded-2xl shadow-xl text-center border border-gray-100 max-w-xs">
+                   <p className="text-sm font-bold text-gray-900">No Geocoded Jobs</p>
+                   <p className="text-xs text-gray-500 mt-2">
+                     None of the current results have coordinates yet. They will appear here as they are geocoded.
+                   </p>
+                </div>
+              </div>
+            )}
           </div>
         ) : filteredJobs.length === 0 ? (
           <div className="flex-grow flex flex-col items-center justify-center py-32 text-center bg-gray-50/10">

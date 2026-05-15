@@ -764,6 +764,26 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           )
         );
 
+        // Geocode new jobs (rate-limited: 1 req/sec to respect Nominatim TOS)
+        const geoLimiter = pLimit(1);
+        await Promise.all(
+          recentOnly.map((job) =>
+            geoLimiter(async () => {
+              if (job.geocoded) return; // already has coordinates
+              const coords = await geocodeLocation(job.locationName);
+              if (coords) {
+                job.coordinates = coords;
+                job.geocoded = true;
+                job.geocodedAt = now;
+              } else {
+                job.geocoded = false; // mark as attempted
+              }
+              // Nominatim requires max 1 req/sec
+              await new Promise((r) => setTimeout(r, 1100));
+            })
+          )
+        );
+
         for (const job of recentOnly) {
           const jobRef = db.collection("users").doc(userId).collection("jobs").doc(job.jobDocId);
 
@@ -960,6 +980,61 @@ async function safeReadText(resp) {
     return "";
   }
 }
+
+// ── Geocoding (Nominatim / OpenStreetMap) ─────────────────────────────────────
+// Cache in-memory within a function instance to avoid re-geocoding the same
+// location string during a single sync run.
+const _geoCache = new Map();
+
+async function geocodeLocation(locationName) {
+  if (!locationName) return null;
+
+  // Normalize: strip "Remote", "US", generic noise
+  const cleaned = locationName
+    .replace(/remote/gi, "")
+    .replace(/\bUS\b/g, "")
+    .replace(/;/g, ",")
+    .trim()
+    .replace(/^,|,$/, "").trim();
+
+  if (!cleaned || cleaned.length < 3) return null;
+
+  const key = cleaned.toLowerCase();
+  if (_geoCache.has(key)) return _geoCache.get(key);
+
+  try {
+    const encoded = encodeURIComponent(`${cleaned}, United States`);
+    const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=us`;
+    const resp = await fetch(url, {
+      headers: {
+        "User-Agent": "JobWatch/1.0 (job-search platform; contact@jobwatch.app)",
+        "Accept": "application/json",
+      },
+    });
+
+    if (!resp.ok) {
+      logger.warn(`Geocode failed for "${cleaned}": HTTP ${resp.status}`);
+      _geoCache.set(key, null);
+      return null;
+    }
+
+    const data = await resp.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      _geoCache.set(key, null);
+      return null;
+    }
+
+    const { lat, lon } = data[0];
+    const coords = { lat: parseFloat(lat), lng: parseFloat(lon) };
+    _geoCache.set(key, coords);
+    return coords;
+  } catch (e) {
+    logger.warn(`Geocode error for "${cleaned}": ${e.message}`);
+    _geoCache.set(key, null);
+    return null;
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * ----------------------------
@@ -2660,3 +2735,77 @@ exports.getAdminUsersList = onCall({ region: REGION, enforceAppCheck: false }, a
     throw new HttpsError("internal", "Failed to fetch users list.");
   }
 });
+
+// ── Geocode Backfill ─────────────────────────────────────────────────────────
+// Hit this endpoint once to geocode all existing jobs missing coordinates.
+// Example: GET /geocodeBackfill?userId=ADMIN_UID&secret=YOUR_SECRET
+exports.geocodeBackfill = onRequest(
+  { region: REGION, timeoutSeconds: 540, memory: "512MiB" },
+  async (req, res) => {
+    const secret = process.env.BACKFILL_SECRET || "jobwatch-geo-backfill";
+    if (req.query.secret !== secret) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const userId = req.query.userId;
+    if (!userId) {
+      res.status(400).json({ error: "userId required" });
+      return;
+    }
+
+    try {
+      const jobsCol = db.collection("users").doc(userId).collection("jobs");
+
+      // Fetch jobs without coordinates (geocoded field missing or false)
+      const snap = await jobsCol.where("geocoded", "!=", true).limit(500).get();
+      logger.info(`Geocode backfill: ${snap.size} jobs to process`);
+
+      let updated = 0;
+      let skipped = 0;
+
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data();
+        const locationName = data.locationName;
+
+        if (!locationName || locationName.toLowerCase().includes("remote")) {
+          await docSnap.ref.set({ geocoded: false }, { merge: true });
+          skipped++;
+          continue;
+        }
+
+        const coords = await geocodeLocation(locationName);
+        if (coords) {
+          await docSnap.ref.set(
+            {
+              coordinates: coords,
+              geocoded: true,
+              geocodedAt: admin.firestore.Timestamp.now(),
+            },
+            { merge: true }
+          );
+          updated++;
+        } else {
+          await docSnap.ref.set({ geocoded: false }, { merge: true });
+          skipped++;
+        }
+
+        // 1.1s delay to respect Nominatim's 1 req/sec limit
+        await new Promise((r) => setTimeout(r, 1100));
+      }
+
+      res.json({
+        ok: true,
+        processed: snap.size,
+        updated,
+        skipped,
+        message: snap.size === 500
+          ? "Hit 500 limit — run again to continue backfill"
+          : "Backfill complete",
+      });
+    } catch (err) {
+      logger.error("geocodeBackfill error", err);
+      res.status(500).json({ error: err.message });
+    }
+  }
+);
