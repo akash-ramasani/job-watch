@@ -23,21 +23,46 @@ export default function Signup() {
     setBusy(true);
     try {
       // Validate invite code BEFORE creating auth user
-      const inviteRef = doc(db, "invites", inviteCode.trim());
+      const inviteRef = doc(db, "invites", inviteCode.trim().toUpperCase());
       const inviteSnap = await getDoc(inviteRef);
-      
-      if (!inviteSnap.exists() || inviteSnap.data().used) {
-        throw new Error("Invalid or expired invite code.");
+
+      if (!inviteSnap.exists()) {
+        throw new Error("Invalid invite code.");
+      }
+
+      const inviteData = inviteSnap.data();
+
+      if (inviteData.used) {
+        throw new Error("This invite code has already been used.");
+      }
+
+      // Check 12-hour expiry
+      if (inviteData.expiresAt) {
+        const expiresAt = inviteData.expiresAt.toDate ? inviteData.expiresAt.toDate() : new Date(inviteData.expiresAt);
+        if (new Date() > expiresAt) {
+          throw new Error("This invite code has expired (valid for 12 hours).");
+        }
+      }
+
+      // Check email matches
+      if (inviteData.email && inviteData.email.toLowerCase() !== email.trim().toLowerCase()) {
+        throw new Error("This invite code is linked to a different email address.");
       }
 
       const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
 
       // Mark invite as used
-      await setDoc(inviteRef, { 
-        used: true, 
-        usedBy: cred.user.uid, 
-        usedAt: serverTimestamp() 
+      await setDoc(inviteRef, {
+        used: true,
+        usedBy: cred.user.uid,
+        usedAt: serverTimestamp()
       }, { merge: true });
+
+      // Calculate trial end date
+      const trialDays = inviteData.trialDays || 0;
+      const trialEndsAt = trialDays > 0
+        ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000)
+        : null;
 
       await setDoc(doc(db, "users", cred.user.uid), {
         email: cred.user.email,
@@ -46,7 +71,9 @@ export default function Signup() {
         fullName: `${firstName.trim()} ${lastName.trim()}`,
         createdAt: serverTimestamp(),
         lastFetchAt: null,
-        aiAccess: true // Enabled by default
+        aiAccess: false, // Disabled by default — admin enables after trial
+        trialDays,
+        trialEndsAt,
       }, { merge: true });
 
       showToast("Account created successfully!", "success");
