@@ -59,8 +59,7 @@ export default function SessionEjectedModal({ open, deviceInfo, onSignInAgain })
             className="relative z-10 w-full max-w-md mx-4"
           >
             <div className="rounded-2xl bg-white shadow-2xl ring-1 ring-gray-200/60 overflow-hidden">
-              {/* Header accent bar — red gradient for severity */}
-              <div className="h-1.5 w-full bg-gradient-to-r from-red-500 via-orange-500 to-amber-400" />
+
 
               <div className="px-8 pt-8 pb-6 text-center">
                 {/* Pulsing security shield */}
