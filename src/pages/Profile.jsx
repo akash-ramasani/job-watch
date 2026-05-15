@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc, collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
-import { sendEmailVerification, getIdToken } from "firebase/auth";
+import { sendEmailVerification, getIdToken, linkWithPhoneNumber, RecaptchaVerifier, unlink } from "firebase/auth";
 import { db, messaging } from "../firebase";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
@@ -118,6 +118,12 @@ export default function Profile({ user, userMeta }) {
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
   const [togglingAi, setTogglingAi] = useState(false);
   const [sessions, setSessions] = useState([]);
+  
+  // Phone Auth Linking
+  const [linkPhoneTo, setLinkPhoneTo] = useState("");
+  const [linkOtp, setLinkOtp] = useState("");
+  const [linkConfirmation, setLinkConfirmation] = useState(null);
+  const [linkingBusy, setLinkingBusy] = useState(false);
 
   const dropzoneInputRef = useRef(null);
 
@@ -252,6 +258,56 @@ export default function Profile({ user, userMeta }) {
         }
       }
     } catch { showToast("Failed to enable notifications", "error"); }
+  }
+
+  async function handleSendLinkOTP() {
+    if (!linkPhoneTo) { showToast("Enter a phone number (e.g. +15555555555)", "error"); return; }
+    setLinkingBusy(true);
+    try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'link-recaptcha-container', { size: 'invisible' });
+      }
+      const confirmation = await linkWithPhoneNumber(user, linkPhoneTo, window.recaptchaVerifier);
+      setLinkConfirmation(confirmation);
+      showToast("OTP sent via SMS!", "success");
+    } catch (e) {
+      console.error(e);
+      showToast(e.message || "Failed to send OTP", "error");
+      if (window.recaptchaVerifier) { window.recaptchaVerifier.clear(); window.recaptchaVerifier = null; }
+    } finally {
+      setLinkingBusy(false);
+    }
+  }
+
+  async function handleVerifyLinkOTP() {
+    if (!linkOtp || !linkConfirmation) return;
+    setLinkingBusy(true);
+    try {
+      await linkConfirmation.confirm(linkOtp);
+      showToast("Phone number successfully linked!", "success");
+      setLinkConfirmation(null);
+      setLinkPhoneTo("");
+      setLinkOtp("");
+    } catch (e) {
+      console.error(e);
+      showToast("Invalid or expired OTP", "error");
+    } finally {
+      setLinkingBusy(false);
+    }
+  }
+
+  async function handleUnlinkPhone() {
+    if (!confirm("Are you sure you want to remove your phone number? You will no longer be able to sign in via SMS.")) return;
+    setLinkingBusy(true);
+    try {
+      await unlink(user, "phone");
+      showToast("Phone number unlinked.", "success");
+    } catch (e) {
+      console.error(e);
+      showToast(e.message || "Failed to unlink phone", "error");
+    } finally {
+      setLinkingBusy(false);
+    }
   }
 
   async function handleVerify() {
@@ -922,12 +978,80 @@ export default function Profile({ user, userMeta }) {
           <div>
             <SectionHeader
               label="Security"
-              title="Recent Devices"
-              description="Review the active and past devices where your account was accessed."
+              title="Security & Authentication"
+              description="Manage your sign-in methods and review recent active devices."
             />
           </div>
 
-          <div className="md:col-span-2">
+          <div className="md:col-span-2 space-y-6">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-50">
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Sign-in Methods</p>
+              </div>
+              <div className="p-6 space-y-6">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Email Address</p>
+                  <p className="text-sm text-gray-500 mt-1">{user?.email}</p>
+                </div>
+                <div className="border-t border-gray-50 pt-6">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Phone Number</p>
+                      {user?.phoneNumber ? (
+                        <p className="text-sm text-gray-500 mt-1">
+                          {user.phoneNumber}
+                          <span className="ml-3 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600">Linked</span>
+                        </p>
+                      ) : (
+                        <p className="text-sm text-gray-500 mt-1 max-w-sm">
+                          Add a phone number to sign in seamlessly using SMS OTPs instead of a password.
+                        </p>
+                      )}
+                    </div>
+                    {user?.phoneNumber && (
+                      <button type="button" disabled={linkingBusy} onClick={handleUnlinkPhone} className="btn-secondary text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200">
+                        Remove
+                      </button>
+                    )}
+                  </div>
+
+                  {!user?.phoneNumber && (
+                    <div className="mt-4">
+                      {!linkConfirmation ? (
+                        <div className="flex gap-3">
+                          <input
+                            type="tel"
+                            placeholder="+1 555-555-5555"
+                            value={linkPhoneTo}
+                            onChange={(e) => setLinkPhoneTo(e.target.value)}
+                            className="input-standard max-w-xs"
+                          />
+                          <button type="button" disabled={linkingBusy} onClick={handleSendLinkOTP} className="btn-secondary whitespace-nowrap">
+                            {linkingBusy ? "Sending..." : "Send OTP"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex gap-3">
+                          <input
+                            type="text"
+                            placeholder="6-digit code"
+                            value={linkOtp}
+                            onChange={(e) => setLinkOtp(e.target.value)}
+                            className="input-standard max-w-xs"
+                          />
+                          <button type="button" disabled={linkingBusy} onClick={handleVerifyLinkOTP} className="btn-primary whitespace-nowrap">
+                            {linkingBusy ? "Verifying..." : "Verify & Link"}
+                          </button>
+                          <button type="button" disabled={linkingBusy} onClick={() => setLinkConfirmation(null)} className="text-sm text-gray-500 hover:text-gray-700 ml-2">Cancel</button>
+                        </div>
+                      )}
+                      <div id="link-recaptcha-container"></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
                 <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Login History</p>

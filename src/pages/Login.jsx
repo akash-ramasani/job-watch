@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { signInWithEmailAndPassword } from "firebase/auth";
+import { signInWithEmailAndPassword, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 
@@ -11,6 +11,13 @@ export default function Login() {
   const [err, setErr] = useState("");
 
   const { showToast } = useToast();
+
+  const [loginMethod, setLoginMethod] = useState("email"); // "email" or "phone"
+  
+  // Phone Auth State
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [confirmationResult, setConfirmationResult] = useState(null);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -25,6 +32,41 @@ export default function Login() {
     } catch (e2) {
       setErr(e2.message || "Login failed");
       showToast("Login failed. Please try again.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSendOTP(e) {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      if (!window.recaptchaVerifier) {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, 'login-recaptcha-container', { size: 'invisible' });
+      }
+      const confirmation = await signInWithPhoneNumber(auth, phone, window.recaptchaVerifier);
+      setConfirmationResult(confirmation);
+      showToast("OTP sent via SMS!", "success");
+    } catch (error) {
+      setErr(error.message || "Failed to send OTP");
+      showToast("Failed to send OTP", "error");
+      if (window.recaptchaVerifier) { window.recaptchaVerifier.clear(); window.recaptchaVerifier = null; }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onVerifyOTP(e) {
+    e.preventDefault();
+    setErr("");
+    setBusy(true);
+    try {
+      await confirmationResult.confirm(otp);
+      showToast("Logged in successfully!", "success");
+    } catch (error) {
+      setErr("Invalid or expired OTP");
+      showToast("Invalid OTP. Please try again.", "error");
     } finally {
       setBusy(false);
     }
@@ -45,25 +87,60 @@ export default function Login() {
             New here? <Link to="/signup" className="font-semibold text-indigo-600 hover:text-indigo-500">Create account</Link>
           </p>
 
-          <form onSubmit={onSubmit} className="mt-10 space-y-6">
-            <div>
-              <label className="block text-sm font-medium text-gray-900">Email address</label>
-              <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className="input-standard mt-2" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-900">Password</label>
-              <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input-standard mt-2" />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex gap-2">
-                <input id="remember" type="checkbox" className="size-4 rounded border-gray-300 text-indigo-600" />
-                <label htmlFor="remember" className="text-sm text-gray-900">Remember me</label>
+          <div className="mt-8 flex rounded-lg p-1 bg-gray-100/80">
+            <button type="button" onClick={() => { setLoginMethod("email"); setErr(""); }} className={`flex-1 rounded-md py-2 text-sm font-semibold transition-all ${loginMethod === "email" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>Email</button>
+            <button type="button" onClick={() => { setLoginMethod("phone"); setErr(""); }} className={`flex-1 rounded-md py-2 text-sm font-semibold transition-all ${loginMethod === "phone" ? "bg-white text-gray-900 shadow-sm" : "text-gray-500 hover:text-gray-900"}`}>Phone Number</button>
+          </div>
+
+          {loginMethod === "email" && (
+            <form onSubmit={onSubmit} className="mt-8 space-y-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-900">Email address</label>
+                <input type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className="input-standard mt-2" />
               </div>
-              <Link to="/forgot-password" className="text-sm font-semibold text-indigo-600">Forgot password?</Link>
+              <div>
+                <label className="block text-sm font-medium text-gray-900">Password</label>
+                <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input-standard mt-2" />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex gap-2">
+                  <input id="remember" type="checkbox" className="size-4 rounded border-gray-300 text-indigo-600" />
+                  <label htmlFor="remember" className="text-sm text-gray-900">Remember me</label>
+                </div>
+                <Link to="/forgot-password" className="text-sm font-semibold text-indigo-600">Forgot password?</Link>
+              </div>
+              {err && <div className="text-red-500 text-sm">{err}</div>}
+              <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Signing in..." : "Sign in"}</button>
+            </form>
+          )}
+
+          {loginMethod === "phone" && (
+            <div className="mt-8 space-y-6">
+              {!confirmationResult ? (
+                <form onSubmit={onSendOTP} className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900">Phone number</label>
+                    <input type="tel" required placeholder="+1 555-555-5555" value={phone} onChange={(e) => setPhone(e.target.value)} className="input-standard mt-2" />
+                    <p className="mt-2 text-xs text-gray-500">Must include country code. We'll send you an SMS with a verification code.</p>
+                  </div>
+                  {err && <div className="text-red-500 text-sm">{err}</div>}
+                  <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Sending Code..." : "Send Verification Code"}</button>
+                  <div id="login-recaptcha-container"></div>
+                </form>
+              ) : (
+                <form onSubmit={onVerifyOTP} className="space-y-6">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-900">Verification Code</label>
+                    <input type="text" required placeholder="6-digit code" value={otp} onChange={(e) => setOtp(e.target.value)} className="input-standard mt-2 text-center text-2xl tracking-[0.5em] font-mono" maxLength={6} />
+                    <p className="mt-2 text-xs text-gray-500">Enter the code sent to {phone}.</p>
+                  </div>
+                  {err && <div className="text-red-500 text-sm">{err}</div>}
+                  <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Verifying..." : "Verify & Sign In"}</button>
+                  <button type="button" disabled={busy} onClick={() => setConfirmationResult(null)} className="w-full text-sm font-semibold text-gray-500 hover:text-gray-700 py-2">Use a different number</button>
+                </form>
+              )}
             </div>
-            {err && <div className="text-red-500 text-sm">{err}</div>}
-            <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Signing in..." : "Sign in"}</button>
-          </form>
+          )}
         </div>
       </div>
       <div className="relative hidden w-0 flex-1 lg:block">
