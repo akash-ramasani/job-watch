@@ -28,8 +28,8 @@ export default function PhoneInput({ value, onChange, disabled }) {
   };
 
   return (
-    <div className={`flex rounded-lg border border-gray-300 shadow-sm focus-within:ring-2 focus-within:ring-indigo-600 focus-within:border-indigo-600 overflow-hidden bg-white transition-all ${disabled ? "opacity-75 bg-gray-50 cursor-not-allowed" : ""}`}>
-      <div className="flex items-center gap-2 px-3 border-r border-gray-300 bg-gray-50/50">
+    <div className={`flex rounded-lg border border-gray-200 bg-white shadow-sm transition-all focus-within:border-indigo-500 focus-within:outline-none focus-within:ring-4 focus-within:ring-indigo-500/10 overflow-hidden ${disabled ? "opacity-75 bg-gray-50 cursor-not-allowed" : ""}`}>
+      <div className="flex items-center gap-2 px-3 border-r border-gray-200 bg-gray-50/50">
         {/* US Flag SVG */}
         <svg viewBox="0 0 36 24" className="w-6 h-4 rounded-sm shadow-sm" preserveAspectRatio="none">
           <path fill="#bd3d44" d="M0 0h36v24H0z"/>
@@ -45,7 +45,7 @@ export default function PhoneInput({ value, onChange, disabled }) {
         disabled={disabled}
         value={displayValue}
         onChange={handleChange}
-        className={`flex-1 min-w-0 block w-full px-3 py-2 sm:text-sm border-0 focus:ring-0 ${disabled ? "bg-gray-50 text-gray-500 cursor-not-allowed" : "text-gray-900"}`}
+        className={`flex-1 min-w-0 block w-full px-3 py-2 sm:text-sm border-0 focus:ring-0 focus:outline-none bg-transparent ${disabled ? "text-gray-500 cursor-not-allowed" : "text-gray-900"}`}
       />
     </div>
   );
