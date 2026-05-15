@@ -61,9 +61,13 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [accountType, setAccountType] = useState("trial");
-  const [trialDays, setTrialDays] = useState(7);
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
+
+  // Update default days when type changes
+  useEffect(() => {
+    setTrialDays(accountType === "trial" ? 7 : 30);
+  }, [accountType]);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -179,19 +183,10 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
               className="input-standard"
             />
             <p className="mt-1.5 text-xs text-gray-400">
-              {accountType === "trial" 
-                ? "Account auto-deactivates after this many days. AI features are disabled." 
-                : "Account starts its timer on sign-up and auto-deactivates after these days."}
+              Account starts its timer on sign-up and auto-deactivates after these days.
+              {accountType === "trial" && " AI features are disabled during trial."}
             </p>
           </div>
-
-          {accountType === "paid" && (
-            <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
-              <p className="text-xs text-amber-700 font-medium">
-                Account will be <strong>locked on sign-up</strong> and must be manually activated by you from this panel.
-              </p>
-            </div>
-          )}
 
           <div className="pt-2 flex items-center gap-3">
             <button type="button" onClick={onClose} className="btn-secondary flex-1">Cancel</button>

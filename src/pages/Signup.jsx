@@ -65,8 +65,8 @@ export default function Signup() {
         ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000)
         : null;
 
-      // trial → active right away; paid → pending until admin activates
-      const accountStatus = accountType === "paid" ? "pending" : "trial";
+      // trial → trial status; paid → active status (both are active right away)
+      const accountStatus = accountType === "paid" ? "active" : "trial";
 
       await setDoc(doc(db, "users", cred.user.uid), {
         email: cred.user.email,
