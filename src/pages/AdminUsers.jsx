@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { collection, getDocs, doc, setDoc, updateDoc } from "firebase/firestore";
-import { db } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 
@@ -19,15 +20,14 @@ export default function AdminUsers({ user }) {
   async function fetchData() {
     setLoading(true);
     try {
-      // Fetch Users
-      const usersSnap = await getDocs(collection(db, "users"));
-      const usersData = [];
-      usersSnap.forEach(doc => {
-        usersData.push({ id: doc.id, ...doc.data() });
-      });
-      setUsersList(usersData.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)));
+      // Fetch Users using admin function
+      const getAdminUsersList = httpsCallable(functions, "getAdminUsersList");
+      const { data } = await getAdminUsersList();
+      if (data && data.users) {
+        setUsersList(data.users);
+      }
 
-      // Fetch Invites
+      // Fetch Invites from Firestore
       const invitesSnap = await getDocs(collection(db, "invites"));
       const invitesData = [];
       invitesSnap.forEach(doc => {
@@ -45,7 +45,6 @@ export default function AdminUsers({ user }) {
   async function generateInvite() {
     setGenerating(true);
     try {
-      // Generate random 8-character string
       const code = Math.random().toString(36).substring(2, 10).toUpperCase();
       await setDoc(doc(db, "invites", code), {
         used: false,
@@ -53,7 +52,7 @@ export default function AdminUsers({ user }) {
         createdBy: user.uid
       });
       showToast("Invite code generated: " + code, "success");
-      fetchData(); // Refresh list
+      fetchData();
     } catch (err) {
       showToast("Failed to generate invite", "error");
     } finally {
@@ -63,8 +62,7 @@ export default function AdminUsers({ user }) {
 
   async function toggleAiAccess(targetUserId, currentAccess) {
     try {
-      // If aiAccess is undefined, assume it was true and we want to set it to false
-      const newStatus = currentAccess === undefined ? false : !currentAccess;
+      const newStatus = !currentAccess;
       await updateDoc(doc(db, "users", targetUserId), {
         aiAccess: newStatus
       });
@@ -87,7 +85,7 @@ export default function AdminUsers({ user }) {
         <div>
           <h1 className="text-2xl font-bold leading-6 text-gray-900">User Management</h1>
           <p className="mt-2 text-sm text-gray-500">
-            A list of all users in your account including their name, title, email and role.
+            A list of all users in your account including their name, email, and active status.
           </p>
         </div>
         <div className="mt-4 sm:ml-16 sm:mt-0 sm:flex-none">
@@ -95,7 +93,7 @@ export default function AdminUsers({ user }) {
             type="button"
             onClick={generateInvite}
             disabled={generating}
-            className="block rounded-md bg-indigo-600 px-3 py-2 text-center text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:opacity-50"
+            className="block rounded-lg bg-indigo-600 px-4 py-2.5 text-center text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 transition-all active:scale-95 disabled:opacity-50"
           >
             {generating ? "Generating..." : "Generate Invite Code"}
           </button>
@@ -105,77 +103,89 @@ export default function AdminUsers({ user }) {
       {loading ? (
         <div className="text-center py-20 text-gray-500">Loading admin panel...</div>
       ) : (
-        <div className="space-y-16">
+        <div className="space-y-12">
           
-          {/* Active Invites Table */}
+          {/* Active Invites List */}
           <section>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Pending Invites</h2>
-            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
-              <table className="min-w-full divide-y divide-gray-300">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Code</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Status</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Used By</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Created At</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {invitesList.length === 0 ? (
-                    <tr><td colSpan={4} className="py-4 text-center text-gray-500 text-sm">No invites generated</td></tr>
-                  ) : invitesList.map((invite) => (
-                    <tr key={invite.id}>
-                      <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-mono font-bold text-gray-900 sm:pl-6">{invite.id}</td>
-                      <td className="whitespace-nowrap px-3 py-4 text-sm">
-                        {invite.used ? (
-                          <span className="inline-flex items-center rounded-md bg-gray-50 px-2 py-1 text-xs font-medium text-gray-600 ring-1 ring-inset ring-gray-500/10">Used</span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-md bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">Active</span>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">{invite.usedBy || "—"}</td>
-                      <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                        {invite.createdAt?.toDate ? new Date(invite.createdAt.toDate()).toLocaleDateString() : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden mb-8">
+              <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Pending Invites</p>
+              </div>
+              <ul className="divide-y divide-gray-50">
+                {invitesList.length === 0 ? (
+                  <li className="p-6 text-center text-sm text-gray-400">No invites generated</li>
+                ) : invitesList.map((invite) => (
+                  <li key={invite.id} className="p-5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors">
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 6v.75m0 3v.75m0 3v.75m0 3V18m-9-5.25h5.25M7.5 15h3M3.375 5.25c-.621 0-1.125.504-1.125 1.125v3.026a2.999 2.999 0 010 5.198v3.026c0 .621.504 1.125 1.125 1.125h17.25c.621 0 1.125-.504 1.125-1.125v-3.026a2.999 2.999 0 010-5.198V6.375c0-.621-.504-1.125-1.125-1.125H3.375z" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold font-mono tracking-wider text-gray-900">{invite.id}</p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          {invite.createdAt?.toDate ? new Date(invite.createdAt.toDate()).toLocaleDateString() : "—"}
+                          {invite.usedBy ? ` · Used by ${invite.usedBy}` : ""}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {invite.used ? (
+                        <span className="inline-flex items-center rounded-full bg-gray-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-gray-500 ring-1 ring-inset ring-gray-500/10">
+                          Used
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600 ring-1 ring-inset ring-emerald-700/10">
+                          Active
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
           </section>
 
-          {/* Users Table */}
+          {/* Users List */}
           <section>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Registered Users</h2>
-            <div className="overflow-hidden shadow ring-1 ring-black ring-opacity-5 sm:rounded-lg">
-              <table className="min-w-full divide-y divide-gray-300">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 sm:pl-6">Name</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Email / Phone</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">Last Active</th>
-                    <th className="px-3 py-3.5 text-left text-sm font-semibold text-gray-900">AI Features</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200 bg-white">
-                  {usersList.map((u) => {
-                    // Treat undefined as true for backwards compatibility
-                    const hasAccess = u.aiAccess !== false;
-                    
-                    return (
-                      <tr key={u.id}>
-                        <td className="whitespace-nowrap py-4 pl-4 pr-3 text-sm sm:pl-6">
-                          <div className="font-medium text-gray-900">{u.fullName || "—"}</div>
-                          <div className="text-gray-500 font-mono text-xs mt-1">{u.id}</div>
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          <div>{u.email || "—"}</div>
-                          {u.phone && <div className="text-xs text-gray-400 mt-1">{u.phone}</div>}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm text-gray-500">
-                          {u.lastFetchAt?.toDate ? new Date(u.lastFetchAt.toDate()).toLocaleString() : "Never"}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-4 text-sm">
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Registered Users</p>
+              </div>
+              <ul className="divide-y divide-gray-50">
+                {usersList.length === 0 ? (
+                  <li className="p-6 text-center text-sm text-gray-400">No users found</li>
+                ) : usersList.map((u) => {
+                  const hasAccess = u.aiAccess !== false;
+                  
+                  return (
+                    <li key={u.id} className="p-5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-400">
+                          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+                          </svg>
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">
+                            {u.fullName || "Unnamed User"}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            {u.email || "No Email Provided"}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-6 flex-shrink-0">
+                        <div className="hidden sm:block text-right">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Last Active</p>
+                          <p className="text-xs text-gray-900 font-medium mt-0.5">
+                            {u.lastFetchAt ? new Date(u.lastFetchAt).toLocaleString() : "Never"}
+                          </p>
+                        </div>
+                        
+                        <div className="flex flex-col items-end gap-1.5 w-24">
                           <button
                             onClick={() => toggleAiAccess(u.id, u.aiAccess)}
                             className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-600 focus:ring-offset-2 ${hasAccess ? 'bg-indigo-600' : 'bg-gray-200'}`}
@@ -188,15 +198,15 @@ export default function AdminUsers({ user }) {
                               className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${hasAccess ? 'translate-x-5' : 'translate-x-0'}`}
                             />
                           </button>
-                          <span className={`ml-3 text-xs font-semibold ${hasAccess ? 'text-indigo-600' : 'text-gray-500'}`}>
-                            {hasAccess ? "Enabled" : "Disabled"}
+                          <span className={`text-[9px] font-black uppercase tracking-widest ${hasAccess ? 'text-indigo-600' : 'text-gray-400'}`}>
+                            {hasAccess ? "AI Enabled" : "AI Disabled"}
                           </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           </section>
 

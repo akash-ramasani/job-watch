@@ -2612,3 +2612,51 @@ exports.generateNamePronunciation = onRequest(
     }
   }
 );
+
+exports.getAdminUsersList = onCall({ region: REGION, enforceAppCheck: false }, async (request) => {
+  if (!request.auth || request.auth.uid !== "7Tojjo8l5PZIYctPmdwncf7PC133") {
+    throw new HttpsError("permission-denied", "Only the admin can fetch the users list.");
+  }
+
+  try {
+    let pageToken;
+    const authUsers = new Map();
+    do {
+      const listUsersResult = await admin.auth().listUsers(1000, pageToken);
+      listUsersResult.users.forEach((userRecord) => {
+        authUsers.set(userRecord.uid, {
+          email: userRecord.email || null,
+          displayName: userRecord.displayName || null,
+          creationTime: userRecord.metadata.creationTime,
+          lastSignInTime: userRecord.metadata.lastSignInTime
+        });
+      });
+      pageToken = listUsersResult.pageToken;
+    } while (pageToken);
+
+    const usersSnap = await db.collection("users").get();
+    const firestoreUsers = new Map();
+    usersSnap.docs.forEach(doc => {
+      firestoreUsers.set(doc.id, doc.data());
+    });
+
+    const merged = [];
+    authUsers.forEach((authData, uid) => {
+      const fsData = firestoreUsers.get(uid) || {};
+      merged.push({
+        id: uid,
+        email: authData.email || fsData.email || null,
+        fullName: authData.displayName || fsData.fullName || null,
+        aiAccess: fsData.aiAccess !== false, // default true
+        lastFetchAt: fsData.lastFetchAt ? fsData.lastFetchAt.toMillis() : null,
+        createdAt: fsData.createdAt ? fsData.createdAt.toMillis() : new Date(authData.creationTime).getTime(),
+        lastSignInTime: authData.lastSignInTime ? new Date(authData.lastSignInTime).getTime() : null,
+      });
+    });
+
+    return { users: merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) };
+  } catch (err) {
+    logger.error("getAdminUsersList error", err);
+    throw new HttpsError("internal", "Failed to fetch users list.");
+  }
+});
