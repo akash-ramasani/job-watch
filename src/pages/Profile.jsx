@@ -7,6 +7,7 @@ import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
 import Select from "../components/Select.jsx";
 import OtpInput from "../components/OtpInput.jsx";
+import PhoneInput from "../components/PhoneInput.jsx";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -1014,13 +1015,9 @@ export default function Profile({ user, userMeta }) {
                     <div className="mt-4">
                       {!linkConfirmation ? (
                         <div className="flex gap-3">
-                          <input
-                            type="tel"
-                            placeholder="+1 555-555-5555"
-                            value={linkPhoneTo}
-                            onChange={(e) => setLinkPhoneTo(e.target.value)}
-                            className="input-standard max-w-xs"
-                          />
+                          <div className="w-full max-w-xs">
+                            <PhoneInput value={linkPhoneTo} onChange={setLinkPhoneTo} disabled={linkingBusy} />
+                          </div>
                           <button type="button" disabled={linkingBusy} onClick={handleSendLinkOTP} className="btn-secondary whitespace-nowrap">
                             {linkingBusy ? "Sending..." : "Send OTP"}
                           </button>

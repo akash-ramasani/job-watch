@@ -4,6 +4,7 @@ import { signInWithEmailAndPassword, signInWithPhoneNumber, RecaptchaVerifier } 
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import OtpInput from "../components/OtpInput.jsx";
+import PhoneInput from "../components/PhoneInput.jsx";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -69,11 +70,17 @@ export default function Login() {
     setErr("");
     setBusy(true);
     try {
-      await confirmationResult.confirm(otp);
+      const cred = await confirmationResult.confirm(otp);
+      
+      if (!cred.user.email) {
+        await cred.user.delete();
+        throw new Error("This phone number is not linked to any account.");
+      }
+      
       showToast("Logged in successfully!", "success");
     } catch (error) {
-      setErr("Invalid or expired OTP");
-      showToast("Invalid OTP. Please try again.", "error");
+      setErr(error.message === "This phone number is not linked to any account." ? error.message : "Invalid or expired OTP");
+      showToast(error.message === "This phone number is not linked to any account." ? error.message : "Invalid OTP. Please try again.", "error");
     } finally {
       setBusy(false);
     }
@@ -126,8 +133,8 @@ export default function Login() {
               {!confirmationResult ? (
                 <form onSubmit={onSendOTP} className="space-y-6">
                   <div>
-                    <label className="block text-sm font-medium text-gray-900">Phone number</label>
-                    <input type="tel" required placeholder="+1 555-555-5555" value={phone} onChange={(e) => setPhone(e.target.value)} className="input-standard mt-2" />
+                    <label className="block text-sm font-medium text-gray-900 mb-2">Phone number</label>
+                    <PhoneInput value={phone} onChange={setPhone} disabled={busy} />
                     <p className="mt-2 text-xs text-gray-500">Must include country code. We'll send you an SMS with a verification code.</p>
                   </div>
                   {err && <div className="text-red-500 text-sm">{err}</div>}
