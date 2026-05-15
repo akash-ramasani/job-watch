@@ -6,6 +6,7 @@ import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { motion } from "framer-motion";
 import Select from "../components/Select.jsx";
+import OtpInput from "../components/OtpInput.jsx";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -179,7 +180,7 @@ export default function Profile({ user, userMeta }) {
         city: userMeta.city || "",
         region: userMeta.region || "",
         postalCode: userMeta.postalCode || "",
-        phone: formatPhone(userMeta.phone || ""),
+        phone: user?.phoneNumber ? formatPhone(user.phoneNumber) : formatPhone(userMeta.phone || ""),
         linkedin: toLinkedInSlug(userMeta.linkedin || ""),
         github: toGithubSlug(userMeta.github || ""),
         portfolio: userMeta.portfolio || "",
@@ -200,7 +201,7 @@ export default function Profile({ user, userMeta }) {
         eeoDisability: userMeta.eeoDisability || "No, I don't have a disability",
       });
     }
-  }, [userMeta]);
+  }, [userMeta, user?.phoneNumber]);
 
   async function handleGeneratePronunciation() {
     const name = `${formData.firstName} ${formData.lastName}`.trim();
@@ -296,23 +297,14 @@ export default function Profile({ user, userMeta }) {
       setLinkConfirmation(null);
       setLinkPhoneTo("");
       setLinkOtp("");
+      
+      // Auto-save the linked phone to Firestore userMeta
+      if (user?.uid) {
+        await setDoc(doc(db, "users", user.uid), { phone: linkPhoneTo }, { merge: true });
+      }
     } catch (e) {
       console.error(e);
       showToast("Invalid or expired OTP", "error");
-    } finally {
-      setLinkingBusy(false);
-    }
-  }
-
-  async function handleUnlinkPhone() {
-    if (!confirm("Are you sure you want to remove your phone number? You will no longer be able to sign in via SMS.")) return;
-    setLinkingBusy(true);
-    try {
-      await unlink(user, "phone");
-      showToast("Phone number unlinked.", "success");
-    } catch (e) {
-      console.error(e);
-      showToast(e.message || "Failed to unlink phone", "error");
     } finally {
       setLinkingBusy(false);
     }
@@ -455,7 +447,7 @@ export default function Profile({ user, userMeta }) {
               </div>
               <div>
                 <label htmlFor="phone" className="caps-label block mb-2">Phone Number</label>
-                <input id="phone" name="phone" type="tel" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: formatPhone(e.target.value) })} autoComplete="tel" className="input-standard" placeholder="+1 (555) 000-0000" />
+                <input id="phone" name="phone" type="tel" disabled={!!user?.phoneNumber} value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: formatPhone(e.target.value) })} autoComplete="tel" className="input-standard" placeholder="+1 (555) 000-0000" />
               </div>
             </div>
 
@@ -1007,7 +999,7 @@ export default function Profile({ user, userMeta }) {
                       <p className="text-sm font-semibold text-gray-900">Phone Number</p>
                       {user?.phoneNumber ? (
                         <p className="text-sm text-gray-500 mt-1">
-                          {user.phoneNumber}
+                          {formatPhone(user.phoneNumber)}
                           <span className="ml-3 inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-emerald-600">Linked</span>
                         </p>
                       ) : (
@@ -1016,11 +1008,6 @@ export default function Profile({ user, userMeta }) {
                         </p>
                       )}
                     </div>
-                    {user?.phoneNumber && (
-                      <button type="button" disabled={linkingBusy} onClick={handleUnlinkPhone} className="btn-secondary text-red-600 hover:bg-red-50 hover:text-red-700 hover:border-red-200">
-                        Remove
-                      </button>
-                    )}
                   </div>
 
                   {!user?.phoneNumber && (
@@ -1039,18 +1026,18 @@ export default function Profile({ user, userMeta }) {
                           </button>
                         </div>
                       ) : (
-                        <div className="flex gap-3">
-                          <input
-                            type="text"
-                            placeholder="6-digit code"
-                            value={linkOtp}
-                            onChange={(e) => setLinkOtp(e.target.value)}
-                            className="input-standard max-w-xs"
-                          />
-                          <button type="button" disabled={linkingBusy} onClick={handleVerifyLinkOTP} className="btn-primary whitespace-nowrap">
-                            {linkingBusy ? "Verifying..." : "Verify & Link"}
-                          </button>
-                          <button type="button" disabled={linkingBusy} onClick={() => setLinkConfirmation(null)} className="text-sm text-gray-500 hover:text-gray-700 ml-2">Cancel</button>
+                        <div className="flex flex-col gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-900 mb-4">Verification Code</label>
+                            <OtpInput value={linkOtp} onChange={setLinkOtp} disabled={linkingBusy} />
+                            <p className="mt-4 text-xs text-gray-500 text-center">Enter the code sent to {linkPhoneTo}.</p>
+                          </div>
+                          <div className="flex justify-center gap-3">
+                            <button type="button" disabled={linkingBusy} onClick={handleVerifyLinkOTP} className="btn-primary">
+                              {linkingBusy ? "Verifying..." : "Verify & Link"}
+                            </button>
+                            <button type="button" disabled={linkingBusy} onClick={() => setLinkConfirmation(null)} className="text-sm font-semibold text-gray-500 hover:text-gray-700">Cancel</button>
+                          </div>
                         </div>
                       )}
                       <div id="link-recaptcha-container"></div>

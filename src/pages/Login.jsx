@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
 import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import OtpInput from "../components/OtpInput.jsx";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -136,9 +137,9 @@ export default function Login() {
               ) : (
                 <form onSubmit={onVerifyOTP} className="space-y-6">
                   <div>
-                    <label className="block text-sm font-medium text-gray-900">Verification Code</label>
-                    <input type="text" required placeholder="6-digit code" value={otp} onChange={(e) => setOtp(e.target.value)} className="input-standard mt-2 text-center text-2xl tracking-[0.5em] font-mono" maxLength={6} />
-                    <p className="mt-2 text-xs text-gray-500">Enter the code sent to {phone}.</p>
+                    <label className="block text-sm font-medium text-gray-900 mb-4 text-center">Verification Code</label>
+                    <OtpInput value={otp} onChange={setOtp} disabled={busy} />
+                    <p className="mt-4 text-xs text-gray-500 text-center">Enter the code sent to {phone}.</p>
                   </div>
                   {err && <div className="text-red-500 text-sm">{err}</div>}
                   <button type="submit" disabled={busy} className="btn-primary py-2.5">{busy ? "Verifying..." : "Verify & Sign In"}</button>
