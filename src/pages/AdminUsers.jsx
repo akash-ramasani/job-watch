@@ -61,6 +61,7 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [accountType, setAccountType] = useState("trial");
+  const [trialDays, setTrialDays] = useState(7);
   const [busy, setBusy] = useState(false);
   const { showToast } = useToast();
 
