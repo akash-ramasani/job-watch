@@ -181,7 +181,7 @@ export default function AdminUsers({ user }) {
                         <div className="hidden sm:block text-right">
                           <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Last Active</p>
                           <p className="text-xs text-gray-900 font-medium mt-0.5">
-                            {u.lastFetchAt ? new Date(u.lastFetchAt).toLocaleString() : "Never"}
+                            {u.lastSignInTime ? new Date(u.lastSignInTime).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : "Never"}
                           </p>
                         </div>
                         
