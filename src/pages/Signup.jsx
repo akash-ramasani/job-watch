@@ -58,11 +58,15 @@ export default function Signup() {
         usedAt: serverTimestamp()
       }, { merge: true });
 
-      // Calculate trial end date
+      // Determine account status based on invite type
+      const accountType = inviteData.accountType || "trial";
       const trialDays = inviteData.trialDays || 0;
-      const trialEndsAt = trialDays > 0
+      const trialEndsAt = accountType === "trial" && trialDays > 0
         ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000)
         : null;
+
+      // trial → active right away; paid → pending until admin activates
+      const accountStatus = accountType === "paid" ? "pending" : "trial";
 
       await setDoc(doc(db, "users", cred.user.uid), {
         email: cred.user.email,
@@ -71,7 +75,9 @@ export default function Signup() {
         fullName: `${firstName.trim()} ${lastName.trim()}`,
         createdAt: serverTimestamp(),
         lastFetchAt: null,
-        aiAccess: false, // Disabled by default — admin enables after trial
+        aiAccess: false,     // AI always off until admin enables it
+        accountStatus,
+        accountType,
         trialDays,
         trialEndsAt,
       }, { merge: true });

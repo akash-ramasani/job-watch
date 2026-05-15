@@ -1,7 +1,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged, onIdTokenChanged, signOut } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "./firebase";
@@ -115,7 +115,7 @@ export default function App() {
   }, [user]);
 
   const content = useMemo(() => {
-    if (loading) {
+    if (loading || !user || userMeta === undefined) {
       return (
         <div className="flex h-screen items-center justify-center bg-white">
           <div className="text-sm font-medium text-gray-400 animate-pulse tracking-widest uppercase">
@@ -123,6 +123,70 @@ export default function App() {
           </div>
         </div>
       );
+    }
+
+    // ── Account status gate (skip for admin) ──
+    if (user && user.uid !== ADMIN_UID && userMeta) {
+      const status = userMeta.accountStatus;
+
+      // Auto-deactivate expired trials
+      if (status === "trial" && userMeta.trialEndsAt) {
+        const trialEnd = userMeta.trialEndsAt?.toDate
+          ? userMeta.trialEndsAt.toDate()
+          : new Date(userMeta.trialEndsAt);
+        if (new Date() > trialEnd) {
+          // Fire-and-forget: update Firestore and show deactivated screen
+          updateDoc(doc(db, "users", user.uid), { accountStatus: "deactivated", aiAccess: false }).catch(() => {});
+          return (
+            <div className="flex h-screen items-center justify-center bg-white px-4">
+              <div className="text-center max-w-sm">
+                <div className="mx-auto mb-6 h-16 w-16 rounded-2xl bg-red-50 flex items-center justify-center">
+                  <svg className="h-8 w-8 text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h2 className="text-xl font-bold text-gray-900">Trial Expired</h2>
+                <p className="mt-2 text-sm text-gray-500">Your free trial has ended. Please contact us to continue using JobWatch.</p>
+                <button onClick={() => signOut(auth)} className="mt-6 btn-secondary text-sm">Sign Out</button>
+              </div>
+            </div>
+          );
+        }
+      }
+
+      if (status === "pending") {
+        return (
+          <div className="flex h-screen items-center justify-center bg-white px-4">
+            <div className="text-center max-w-sm">
+              <div className="mx-auto mb-6 h-16 w-16 rounded-2xl bg-amber-50 flex items-center justify-center">
+                <svg className="h-8 w-8 text-amber-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-gray-900">Account Pending Activation</h2>
+              <p className="mt-2 text-sm text-gray-500">Your account is being reviewed. You'll get access as soon as it's activated.</p>
+              <button onClick={() => signOut(auth)} className="mt-6 btn-secondary text-sm">Sign Out</button>
+            </div>
+          </div>
+        );
+      }
+
+      if (status === "deactivated") {
+        return (
+          <div className="flex h-screen items-center justify-center bg-white px-4">
+            <div className="text-center max-w-sm">
+              <div className="mx-auto mb-6 h-16 w-16 rounded-2xl bg-gray-100 flex items-center justify-center">
+                <svg className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+              </div>
+              <h2 className="text-xl font-bold text-gray-900">Account Deactivated</h2>
+              <p className="mt-2 text-sm text-gray-500">Your account has been deactivated. Please contact us if you believe this is a mistake.</p>
+              <button onClick={() => signOut(auth)} className="mt-6 btn-secondary text-sm">Sign Out</button>
+            </div>
+          </div>
+        );
+      }
     }
 
     if (!user) {
