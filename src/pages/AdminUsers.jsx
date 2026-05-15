@@ -78,7 +78,7 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
         fullName: fullName.trim(),
         email: email.trim().toLowerCase(),
         accountType,
-        trialDays: accountType === "trial" ? Number(trialDays) : 0,
+        trialDays: Number(trialDays),
         expiresAt,
         createdAt: new Date(),
         createdBy: adminUid,
@@ -167,21 +167,23 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
             </div>
           </div>
 
-          {/* Trial Days — only shown for trial */}
-          {accountType === "trial" && (
-            <div>
-              <label className="block text-sm font-medium text-gray-900 mb-2">Trial Days</label>
-              <input
-                type="number" min={1} max={365} required
-                value={trialDays}
-                onChange={e => setTrialDays(e.target.value)}
-                className="input-standard"
-              />
-              <p className="mt-1.5 text-xs text-gray-400">
-                Account auto-deactivates after this many days. AI features are always disabled during trial.
-              </p>
-            </div>
-          )}
+          {/* Trial/Access Days */}
+          <div>
+            <label className="block text-sm font-medium text-gray-900 mb-2">
+              {accountType === "trial" ? "Trial Duration" : "Access Duration"} (Days)
+            </label>
+            <input
+              type="number" min={1} max={365} required
+              value={trialDays}
+              onChange={e => setTrialDays(e.target.value)}
+              className="input-standard"
+            />
+            <p className="mt-1.5 text-xs text-gray-400">
+              {accountType === "trial" 
+                ? "Account auto-deactivates after this many days. AI features are disabled." 
+                : "Account starts its timer on sign-up and auto-deactivates after these days."}
+            </p>
+          </div>
 
           {accountType === "paid" && (
             <div className="rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">

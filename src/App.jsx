@@ -129,14 +129,17 @@ export default function App() {
     if (user && user.uid !== ADMIN_UID && userMeta) {
       const status = userMeta.accountStatus;
 
-      // Auto-deactivate expired trials
-      if (status === "trial" && userMeta.trialEndsAt) {
+      // Auto-deactivate expired accounts (Trial or Paid)
+      if (userMeta.trialEndsAt && (status === "trial" || status === "active" || status === "pending")) {
         const trialEnd = userMeta.trialEndsAt?.toDate
           ? userMeta.trialEndsAt.toDate()
           : new Date(userMeta.trialEndsAt);
+        
         if (new Date() > trialEnd) {
           // Fire-and-forget: update Firestore and show deactivated screen
           updateDoc(doc(db, "users", user.uid), { accountStatus: "deactivated", aiAccess: false }).catch(() => {});
+          
+          const isTrial = userMeta.accountType === "trial";
           return (
             <div className="flex h-screen items-center justify-center bg-white px-4">
               <div className="text-center max-w-sm">
@@ -145,8 +148,14 @@ export default function App() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <h2 className="text-xl font-bold text-gray-900">Trial Expired</h2>
-                <p className="mt-2 text-sm text-gray-500">Your free trial has ended. Please contact us to continue using JobWatch.</p>
+                <h2 className="text-xl font-bold text-gray-900">
+                  {isTrial ? "Trial Expired" : "Access Expired"}
+                </h2>
+                <p className="mt-2 text-sm text-gray-500">
+                  {isTrial 
+                    ? "Your free trial has ended. Please contact us to continue using JobWatch."
+                    : "Your access period has ended. Please contact us to renew your account."}
+                </p>
                 <button onClick={() => signOut(auth)} className="mt-6 btn-secondary text-sm">Sign Out</button>
               </div>
             </div>

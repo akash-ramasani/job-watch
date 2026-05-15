@@ -61,7 +61,7 @@ export default function Signup() {
       // Determine account status based on invite type
       const accountType = inviteData.accountType || "trial";
       const trialDays = inviteData.trialDays || 0;
-      const trialEndsAt = accountType === "trial" && trialDays > 0
+      const trialEndsAt = trialDays > 0
         ? new Date(Date.now() + trialDays * 24 * 60 * 60 * 1000)
         : null;
 
