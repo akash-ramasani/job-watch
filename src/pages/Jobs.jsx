@@ -103,6 +103,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [stateFilter, setStateFilter] = useState("");
   const [timeframe, setTimeframe] = useState("1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+  const [locationTypeFilter, setLocationTypeFilter] = useState(""); // "", "remote", "onsite"
 
   // Cover Letter State
   const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
@@ -360,6 +361,12 @@ export default function Jobs({ user, userMeta, preferences }) {
     const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
+      if (locationTypeFilter === "remote") {
+        if (j.mapLocation) return false;
+      } else if (locationTypeFilter === "onsite") {
+        if (!j.mapLocation) return false;
+      }
+
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
           if (!j.stateCodes.includes(stateFilter)) return false;
@@ -374,7 +381,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     });
 
     return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter]);
+  }, [jobs, titleSearch, stateFilter, locationTypeFilter]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -601,6 +608,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               setTitleSearch("");
               setCompanySearch("");
               setStateFilter("");
+              setLocationTypeFilter("");
               setTimeframe("1h");
               setOnlyHighRelevant(false);
               setOnlyAutoApply(false);
@@ -623,6 +631,36 @@ export default function Jobs({ user, userMeta, preferences }) {
             className="overflow-hidden mb-8"
           >
             <div className="space-y-8 py-4 px-1">
+
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 px-1">
+                  <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">
+                    Location Type
+                  </label>
+                </div>
+                <div className="inline-flex p-1 bg-gray-50 rounded-xl gap-1">
+                  {[
+                    { value: "", label: "All Jobs" },
+                    { value: "remote", label: "🌐 Remote" },
+                    { value: "onsite", label: "📍 On-site" },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      onClick={() => setLocationTypeFilter(opt.value)}
+                      className={`px-5 py-2.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${locationTypeFilter === opt.value
+                        ? opt.value === "remote"
+                          ? "bg-emerald-600 text-white shadow-md shadow-emerald-100"
+                          : opt.value === "onsite"
+                            ? "bg-indigo-600 text-white shadow-md shadow-indigo-100"
+                            : "bg-white text-indigo-600 shadow-sm ring-1 ring-gray-200"
+                        : "text-gray-500 hover:text-gray-700"
+                        }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <div className="space-y-4">
                 <div className="flex items-center gap-2 px-1">

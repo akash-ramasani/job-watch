@@ -702,9 +702,15 @@ function lookupCity(cityRaw, stateRaw) {
   if (CITY_COORDS[cityLower]) {
     const coords = CITY_COORDS[cityLower];
     const canonicalName = CITY_CANONICAL[cityLower] || toTitleCase(cityLower);
+    
+    // If stateRaw is itself a known city, this is likely a multi-city list
+    // (e.g., "San Francisco, New York, ...") - use city's default state
+    const stateRawLower = stateRaw ? stateRaw.trim().toLowerCase() : null;
+    const stateIsAlsoCity = stateRawLower && CITY_COORDS[stateRawLower];
+    
     return {
       city: canonicalName,
-      state: stateAbbr || coords.state,
+      state: (stateAbbr && !stateIsAlsoCity) ? stateAbbr : coords.state,
       lat: coords.lat,
       lng: coords.lng,
     };
