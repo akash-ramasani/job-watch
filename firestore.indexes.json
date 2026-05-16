@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "mapLocation.city", "order": "ASCENDING" },
+        { "fieldPath": "sourceUpdatedTs", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
