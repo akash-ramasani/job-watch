@@ -1,53 +1,37 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, query, where, orderBy } from "firebase/firestore";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { db } from "../firebase";
 import { ADMIN_UID } from "../App.jsx";
+import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import "leaflet/dist/leaflet.css";
 
 /**
  * JobMap — Displays all jobs grouped by city on a minimal US map.
- * Cities appear as circles sized by job count. Click to see jobs.
+ * Reads 1 aggregation doc for clusters. Queries jobs only on city click.
  */
 export default function JobMap({ user }) {
   const [clusters, setClusters] = useState([]);
-  const [allJobs, setAllJobs] = useState([]);
+  const [totalJobs, setTotalJobs] = useState(0);
   const [loading, setLoading] = useState(true);
   const [selectedCity, setSelectedCity] = useState(null);
+  const [cityJobs, setCityJobs] = useState([]);
+  const [cityLoading, setCityLoading] = useState(false);
 
-  // Fetch all jobs and group by mapLocation on mount
+  const { getMapClusters } = useDataCache();
+
+  // Fetch aggregation doc (1 read, cached 5 min)
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
       try {
-        const jobsRef = collection(db, "users", ADMIN_UID, "jobs");
-        const snap = await getDocs(jobsRef);
-
-        const jobs = [];
-        const cityMap = {};
-
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          const loc = data.mapLocation;
-
-          jobs.push({ id: d.id, ...data });
-
-          if (!loc || !loc.city) return;
-          const key = `${loc.city}, ${loc.state}`;
-          if (!cityMap[key]) {
-            cityMap[key] = {
-              city: loc.city,
-              state: loc.state,
-              lat: loc.lat,
-              lng: loc.lng,
-              count: 0,
-            };
-          }
-          cityMap[key].count++;
+        const data = await getMapClusters();
+        const clusterList = Object.entries(data.clusters || {}).map(([key, val]) => {
+          const [city, state] = key.split("|");
+          return { city, state, ...val };
         });
-
-        setAllJobs(jobs);
-        setClusters(Object.values(cityMap).sort((a, b) => b.count - a.count));
+        setClusters(clusterList.sort((a, b) => b.count - a.count));
+        setTotalJobs(data.totalJobs || 0);
       } catch (err) {
         console.error("Failed to fetch map data:", err);
       } finally {
@@ -55,21 +39,29 @@ export default function JobMap({ user }) {
       }
     }
     fetchData();
-  }, []);
+  }, [getMapClusters]);
 
-  // Filter jobs for selected city (client-side)
-  const cityJobs = useMemo(() => {
-    if (!selectedCity) return [];
-    return allJobs.filter(
-      (j) => j.mapLocation?.city === selectedCity.city && j.mapLocation?.state === selectedCity.state
-    );
-  }, [selectedCity, allJobs]);
-
-  function handleCityClick(cluster) {
+  // On city click, query jobs for that city
+  async function handleCityClick(cluster) {
     setSelectedCity(cluster);
+    setCityLoading(true);
+    try {
+      const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
+      const q = query(
+        jobsCol,
+        where("mapLocation.city", "==", cluster.city),
+        orderBy("sourceUpdatedTs", "desc")
+      );
+      const snap = await getDocs(q);
+      setCityJobs(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+    } catch (err) {
+      console.error("Failed to fetch city jobs:", err);
+      setCityJobs([]);
+    } finally {
+      setCityLoading(false);
+    }
   }
 
-  // Calculate radius based on count (log scale)
   function getRadius(count) {
     const min = 6;
     const max = 40;
@@ -77,16 +69,13 @@ export default function JobMap({ user }) {
     return Math.min(max, min + Math.log2(count) * 5);
   }
 
-  // Color by count
   function getColor(count) {
-    if (count >= 100) return "#1d4ed8"; // blue-700
-    if (count >= 50) return "#2563eb"; // blue-600
-    if (count >= 20) return "#3b82f6"; // blue-500
-    if (count >= 10) return "#60a5fa"; // blue-400
-    return "#93c5fd"; // blue-300
+    if (count >= 100) return "#1d4ed8";
+    if (count >= 50) return "#2563eb";
+    if (count >= 20) return "#3b82f6";
+    if (count >= 10) return "#60a5fa";
+    return "#93c5fd";
   }
-
-  const totalJobs = useMemo(() => clusters.reduce((s, c) => s + c.count, 0), [clusters]);
 
   if (loading) {
     return (
@@ -108,7 +97,7 @@ export default function JobMap({ user }) {
         </div>
         {selectedCity && (
           <button
-            onClick={() => setSelectedCity(null)}
+            onClick={() => { setSelectedCity(null); setCityJobs([]); }}
             className="text-sm text-blue-600 hover:text-blue-700 font-medium"
           >
             ← Back to map
@@ -126,12 +115,10 @@ export default function JobMap({ user }) {
             scrollWheelZoom={true}
             zoomControl={true}
           >
-            {/* Minimal tile layer - CartoDB Positron (no roads/highways, very clean) */}
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png"
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>'
             />
-            {/* Labels layer on top (just city/state names, no road names) */}
             <TileLayer
               url="https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png"
               attribution=""
@@ -149,9 +136,7 @@ export default function JobMap({ user }) {
                   weight: 1.5,
                   opacity: 0.8,
                 }}
-                eventHandlers={{
-                  click: () => handleCityClick(cluster),
-                }}
+                eventHandlers={{ click: () => handleCityClick(cluster) }}
               >
                 <Popup>
                   <div className="text-center min-w-[120px]">
@@ -170,14 +155,10 @@ export default function JobMap({ user }) {
           </MapContainer>
         </div>
       ) : (
-        /* City Jobs List */
-        <CityJobsList
-          city={selectedCity}
-          jobs={cityJobs}
-        />
+        <CityJobsList city={selectedCity} jobs={cityJobs} loading={cityLoading} />
       )}
 
-      {/* City Legend / Stats (shown below map) */}
+      {/* Top cities legend */}
       {!selectedCity && (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 mt-4">
           {clusters.slice(0, 20).map((c) => (
@@ -202,16 +183,19 @@ export default function JobMap({ user }) {
   );
 }
 
-/**
- * City Jobs List — shows all jobs at a selected city
- */
-function CityJobsList({ city, jobs }) {
+function CityJobsList({ city, jobs, loading }) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48">
+        <div className="text-sm text-gray-400 animate-pulse">Loading jobs...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="bg-blue-50 rounded-lg px-4 py-3">
-        <h2 className="text-lg font-semibold text-gray-900">
-          {city.city}, {city.state}
-        </h2>
+        <h2 className="text-lg font-semibold text-gray-900">{city.city}, {city.state}</h2>
         <p className="text-sm text-gray-600">{jobs.length} job{jobs.length !== 1 ? "s" : ""}</p>
       </div>
 
@@ -232,7 +216,7 @@ function CityJobsList({ city, jobs }) {
                   <div className="text-xs text-gray-400 mt-0.5 truncate">{job.locationName}</div>
                 )}
               </div>
-              {job.relevanceScore != null && (
+              {job.relevanceScore != null && job.relevanceScore >= 0 && (
                 <span className={`flex-shrink-0 text-xs font-medium px-2 py-0.5 rounded-full ${
                   job.relevanceScore >= 80 ? "bg-green-100 text-green-700" :
                   job.relevanceScore >= 60 ? "bg-yellow-100 text-yellow-700" :

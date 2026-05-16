@@ -1660,6 +1660,40 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   await Promise.all(scoringTasks);
   logger.info(`scoreNewJobsForUser: done — scored ${unscoredJobs.length}/${uniqueNewJobs.length} jobs for userId=${userId}`);
+
+  // Write scoring status aggregation (frontend listens via onSnapshot)
+  try {
+    const scoredResults = [];
+    for (const snap of snapshots) {
+      if (!snap.exists) continue;
+      const d = snap.data();
+      if (typeof d.relevanceScore === "number" && d.relevanceScore >= 0 && d.scoredAt) {
+        scoredResults.push({ id: snap.id, score: d.relevanceScore, reason: d.scoreReason || "" });
+      }
+    }
+    // Re-read the jobs we just scored to get their final scores
+    const justScoredRefs = unscoredJobs.map((j) => jobsCol.doc(j.jobDocId));
+    const justScoredSnaps = [];
+    for (let i = 0; i < justScoredRefs.length; i += CHUNK) {
+      const batch = await db.getAll(...justScoredRefs.slice(i, i + CHUNK));
+      justScoredSnaps.push(...batch);
+    }
+    const recentScores = justScoredSnaps
+      .filter((s) => s.exists && typeof s.data().relevanceScore === "number")
+      .map((s) => ({ id: s.id, score: s.data().relevanceScore, reason: s.data().scoreReason || "" }))
+      .slice(0, 50);
+
+    if (recentScores.length > 0) {
+      await db.collection("users").doc(userId).collection("aggregations").doc("scoringStatus").set({
+        recentScores,
+        pendingCount: 0,
+        scoringInProgress: false,
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+    }
+  } catch (err) {
+    logger.warn(`scoringStatus aggregation write failed: ${err?.message}`);
+  }
 }
 
 /**
@@ -2665,3 +2699,33 @@ exports.getAdminUsersList = onCall({ region: REGION, enforceAppCheck: false }, a
     throw new HttpsError("internal", "Failed to fetch users list.");
   }
 });
+
+/**
+ * =====================================================================================
+ * DAILY AGGREGATION RECONCILIATION
+ * Runs at 3am PT daily. Reads all jobs, rebuilds mapClusters + companyStats.
+ * =====================================================================================
+ */
+const { rebuildAggregations } = require("./lib/aggregations.cjs");
+
+exports.dailyAggregationReconciliation = onSchedule(
+  {
+    region: REGION,
+    schedule: "every day 03:00",
+    timeZone: "America/Los_Angeles",
+    timeoutSeconds: 300,
+    memory: "512MiB",
+  },
+  async () => {
+    const userIds = await listUserIdsToProcess();
+
+    for (const userId of userIds) {
+      try {
+        const result = await rebuildAggregations(userId);
+        logger.info(`Aggregation rebuilt for ${userId}: ${result.totalJobs} jobs, ${result.cities} cities, ${result.companies} companies`);
+      } catch (err) {
+        logger.error(`Aggregation rebuild failed for ${userId}: ${err?.message || err}`);
+      }
+    }
+  }
+);

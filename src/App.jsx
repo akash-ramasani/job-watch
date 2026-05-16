@@ -25,6 +25,7 @@ import Footer from "./components/Footer.jsx";
 import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
 
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
+import { DataCacheProvider } from "./contexts/DataCacheContext.jsx";
 import { useSessionGuard } from "./hooks/useSessionGuard.js";
 
 export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
@@ -246,6 +247,7 @@ export default function App() {
   }, [loading, user, userMeta, location]);
 
   return (
+    <DataCacheProvider>
     <ToastProvider>
       <div className="flex flex-col min-h-screen bg-white">
         {user && (
@@ -307,5 +309,6 @@ export default function App() {
         />
       </div>
     </ToastProvider>
+    </DataCacheProvider>
   );
 }

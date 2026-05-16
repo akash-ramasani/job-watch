@@ -261,10 +261,8 @@ export function useSessionGuard(user) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [!!user]); // only re-run when user goes null → non-null (login/logout)
 
-  // ── Heartbeat + Visibility (runs ONCE — uses refs, not closures) ──────────
+  // ── Visibility check (reads once when tab regains focus, NOT periodic) ──────────
   useEffect(() => {
-    heartbeatRef.current = setInterval(() => checkToken("heartbeat"), HEARTBEAT_MS);
-
     const onVisibility = () => {
       if (document.visibilityState === "visible" && !ejectedRef.current) {
         console.log("[SessionGuard] tab became visible — running checkToken");
@@ -274,8 +272,6 @@ export function useSessionGuard(user) {
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      clearInterval(heartbeatRef.current);
-      heartbeatRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [checkToken]); // checkToken is stable

@@ -10,7 +10,8 @@ import {
   where,
   Timestamp,
   doc,
-  getDoc
+  getDoc,
+  onSnapshot
 } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { jsPDF } from "jspdf";
@@ -18,6 +19,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
+import { useDataCache } from "../contexts/DataCacheContext.jsx";
 
 const PAGE_SIZE = 50;
 
@@ -91,6 +93,7 @@ function extractStateCodesFromLocationTokens(tokensOrString) {
 
 export default function Jobs({ user, userMeta, preferences }) {
   const { showToast } = useToast();
+  const { getCompanyStats } = useDataCache();
 
   const [companies, setCompanies] = useState([]);
   const [selectedKeys, setSelectedKeys] = useState([]);
@@ -112,17 +115,17 @@ export default function Jobs({ user, userMeta, preferences }) {
     let cancelled = false;
     (async () => {
       try {
-        const companiesRef = collection(db, "users", ADMIN_UID, "companies");
-        const qCompanies = query(companiesRef, orderBy("companyName", "asc"), limit(1000));
-        const snap = await getDocs(qCompanies);
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const stats = await getCompanyStats();
+        const list = Object.entries(stats.companies || {})
+          .map(([key, val]) => ({ id: key, companyKey: key, companyName: val.name, jobCount: val.count }))
+          .sort((a, b) => a.companyName.localeCompare(b.companyName));
         if (!cancelled) setCompanies(list);
       } catch (e) {
         console.error("Load companies error:", e);
       }
     })();
     return () => { cancelled = true; };
-  }, [user.uid]);
+  }, [user.uid, getCompanyStats]);
 
   const fetchAllJobs = useCallback(
     async () => {
@@ -206,42 +209,30 @@ export default function Jobs({ user, userMeta, preferences }) {
     fetchAllJobs();
   }, [selectedKeys, timeframe]);
 
-  // Live polling: automatically fetch relevance scores for unscored jobs every 15s
+  // Live score updates via onSnapshot on scoringStatus aggregation doc (1 listener, not polling)
   useEffect(() => {
-    const unscoredJobs = jobs.filter((j) => typeof j.relevanceScore !== "number");
-    if (unscoredJobs.length === 0) return;
+    if (jobs.length === 0) return;
+    const statusRef = doc(db, "users", ADMIN_UID, "aggregations", "scoringStatus");
+    const unsub = onSnapshot(statusRef, (snap) => {
+      if (!snap.exists()) return;
+      const { recentScores } = snap.data();
+      if (!Array.isArray(recentScores) || recentScores.length === 0) return;
 
-    const intervalId = setInterval(async () => {
-      try {
-        const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
-        const updates = [];
-
-        // Check up to 10 unscored jobs per tick
-        for (const job of unscoredJobs.slice(0, 10)) {
-          const snap = await getDoc(doc(jobsCol, job.id));
-          if (snap.exists()) {
-            const data = snap.data();
-            if (typeof data.relevanceScore === "number") {
-              updates.push({ id: job.id, relevanceScore: data.relevanceScore, scoreReason: data.scoreReason });
-            }
+      setJobs((prev) => {
+        let changed = false;
+        const updated = prev.map((j) => {
+          const match = recentScores.find((s) => s.id === j.id);
+          if (match && j.relevanceScore !== match.score) {
+            changed = true;
+            return { ...j, relevanceScore: match.score, scoreReason: match.reason };
           }
-        }
-
-        if (updates.length > 0) {
-          setJobs((prev) =>
-            prev.map((j) => {
-              const matched = updates.find((u) => u.id === j.id);
-              return matched ? { ...j, ...matched } : j;
-            })
-          );
-        }
-      } catch (err) {
-        console.error("Polling error:", err);
-      }
-    }, 15000);
-
-    return () => clearInterval(intervalId);
-  }, [jobs]);
+          return j;
+        });
+        return changed ? updated : prev;
+      });
+    });
+    return () => unsub();
+  }, [jobs.length > 0]);
 
   const handleGenerateCoverLetter = async (e, job) => {
     e.preventDefault();
