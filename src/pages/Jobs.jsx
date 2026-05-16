@@ -362,9 +362,9 @@ export default function Jobs({ user, userMeta, preferences }) {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
       if (locationTypeFilter === "remote") {
-        if (j.mapLocation) return false;
+        if (j.mapLocation?.pinType === "city") return false;
       } else if (locationTypeFilter === "onsite") {
-        if (!j.mapLocation) return false;
+        if (j.mapLocation?.pinType !== "city") return false;
       }
 
       if (stateFilter) {

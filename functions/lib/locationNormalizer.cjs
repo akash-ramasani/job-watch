@@ -423,11 +423,22 @@ const STATE_TO_ABBR = {
 
 const STATE_ABBRS = new Set(Object.values(STATE_TO_ABBR));
 
-// Abbreviation → state code (for "NY or SF" style parsing)
-const ABBR_TO_STATE = {};
-for (const [name, code] of Object.entries(STATE_TO_ABBR)) {
-  ABBR_TO_STATE[code] = code;
-}
+// Biggest city per state (for state-only location fallback)
+const STATE_BIGGEST_CITY = {
+  "AL": "birmingham", "AK": "anchorage", "AZ": "phoenix", "AR": "fort smith",
+  "CA": "los angeles", "CO": "denver", "CT": "hartford", "DE": "wilmington",
+  "FL": "miami", "GA": "atlanta", "HI": "honolulu", "ID": "boise",
+  "IL": "chicago", "IN": "indianapolis", "IA": "des moines", "KS": "wichita",
+  "KY": "louisville", "LA": "new orleans", "ME": "bangor", "MD": "baltimore",
+  "MA": "boston", "MI": "detroit", "MN": "minneapolis", "MS": "mchenry",
+  "MO": "kansas city", "MT": "billings", "NE": "omaha", "NV": "las vegas",
+  "NH": "hudson", "NJ": "newark", "NM": "albuquerque", "NY": "new york",
+  "NC": "charlotte", "ND": "fargo", "OH": "columbus", "OK": "oklahoma city",
+  "OR": "portland", "PA": "philadelphia", "RI": "providence", "SC": "charleston",
+  "SD": "sioux falls", "TN": "nashville", "TX": "houston", "UT": "salt lake city",
+  "VT": "burlington", "VA": "richmond", "WA": "seattle", "WV": "charleston",
+  "WI": "milwaukee", "WY": "cheyenne", "DC": "washington",
+};
 
 // ──────────────────────────────────────────────────────
 // Patterns that indicate "Remote / Other"
@@ -436,10 +447,25 @@ const REMOTE_ONLY_RE = /^(remote|united states|anywhere in the united states|us|
 
 const REMOTE_INDICATOR_RE = /\bremote\b/i;
 
-// State-only patterns (no specific city → Other)
+// State-only patterns (no specific city)
 const STATE_ONLY_RE = new RegExp(
   "^(" + Object.keys(STATE_TO_ABBR).join("|") + ")\\s*,?\\s*(united states( of america)?|usa|us)?\\s*$", "i"
 );
+
+// Default fallback for remote/vague locations
+const SF_COORDS = CITY_COORDS["san francisco"];
+const REMOTE_FALLBACK = { city: "San Francisco", state: "CA", lat: SF_COORDS.lat, lng: SF_COORDS.lng, pinType: "remote" };
+
+/**
+ * Returns a map location for a state-only location string.
+ */
+function stateOnlyFallback(stateAbbr) {
+  const cityKey = STATE_BIGGEST_CITY[stateAbbr];
+  if (!cityKey || !CITY_COORDS[cityKey]) return { ...REMOTE_FALLBACK, pinType: "state" };
+  const coords = CITY_COORDS[cityKey];
+  const canonicalName = CITY_CANONICAL[cityKey] || toTitleCase(cityKey);
+  return { city: canonicalName, state: stateAbbr, lat: coords.lat, lng: coords.lng, pinType: "state" };
+}
 
 // ──────────────────────────────────────────────────────
 // Main normalization function
@@ -448,36 +474,40 @@ const STATE_ONLY_RE = new RegExp(
 /**
  * Normalizes a raw locationName string to a map location object.
  * @param {string|null} locationName - Raw location from the job document
- * @returns {{ city: string, state: string, lat: number, lng: number } | null}
- *   Returns null if the location is remote-only, vague, or unresolvable.
+ * @returns {{ city: string, state: string, lat: number, lng: number, pinType: string } | null}
+ *   pinType: "city" = exact city match, "remote" = remote/vague → SF, "state" = state-only → biggest city
+ *   Returns null ONLY for international locations.
  */
 function normalizeToMapLocation(locationName) {
-  if (!locationName || typeof locationName !== "string") return null;
+  if (!locationName || typeof locationName !== "string") return { ...REMOTE_FALLBACK };
 
   const trimmed = locationName.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return { ...REMOTE_FALLBACK };
 
-  // Check if it's purely remote/vague
-  if (REMOTE_ONLY_RE.test(trimmed)) return null;
-  if (/^united states\s*$/i.test(trimmed)) return null;
-  if (/^us\s*$/i.test(trimmed)) return null;
+  // Remote/vague/country-only → San Francisco with pinType: "remote"
+  if (REMOTE_ONLY_RE.test(trimmed)) return { ...REMOTE_FALLBACK };
+  if (/^united states\s*$/i.test(trimmed)) return { ...REMOTE_FALLBACK };
+  if (/^us\s*$/i.test(trimmed)) return { ...REMOTE_FALLBACK };
 
-  // State-only (no city): "California, United States", "Ohio, United States", etc.
+  // State-only (no city) → biggest city in that state with pinType: "state"
   // BUT exclude state names that are also known cities (New York, Washington)
   if (STATE_ONLY_RE.test(trimmed)) {
     const stateNameMatch = trimmed.match(/^([a-z\s]+)/i);
     if (stateNameMatch) {
       const possibleCity = stateNameMatch[1].trim().toLowerCase();
-      if (!CITY_COORDS[possibleCity]) return null;
+      if (!CITY_COORDS[possibleCity]) {
+        const stateAbbr = STATE_TO_ABBR[possibleCity];
+        return stateAbbr ? stateOnlyFallback(stateAbbr) : { ...REMOTE_FALLBACK };
+      }
     } else {
-      return null;
+      return { ...REMOTE_FALLBACK };
     }
   }
 
-  // International patterns → null
+  // International patterns → null (not US jobs)
   if (/^(uk|india|canada|europe)\s*[\/ ]/i.test(trimmed)) return null;
   if (/^[A-Z]{2}-(pune|bengaluru|bangalore|london|paris|berlin|mumbai|hyderabad|chennai)/i.test(trimmed)) return null;
-  if (/^(east|west|north|south)\s+(texas|coast|region)/i.test(trimmed)) return null;
+  if (/^(east|west|north|south)\s+(texas|coast|region)/i.test(trimmed)) return { ...REMOTE_FALLBACK };
 
   // Clean the string
   let cleaned = trimmed;
@@ -572,7 +602,7 @@ function normalizeToMapLocation(locationName) {
     }
   }
 
-  return bestCity;
+  return bestCity || { ...REMOTE_FALLBACK };
 }
 
 /**
@@ -713,6 +743,7 @@ function lookupCity(cityRaw, stateRaw) {
       state: (stateAbbr && !stateIsAlsoCity) ? stateAbbr : coords.state,
       lat: coords.lat,
       lng: coords.lng,
+      pinType: "city",
     };
   }
   
@@ -730,6 +761,7 @@ function lookupCity(cityRaw, stateRaw) {
       state: stateAbbr || coords.state,
       lat: coords.lat,
       lng: coords.lng,
+      pinType: "city",
     };
   }
 
@@ -743,6 +775,7 @@ function lookupCity(cityRaw, stateRaw) {
       state: stateAbbr || coords.state,
       lat: coords.lat,
       lng: coords.lng,
+      pinType: "city",
     };
   }
   
@@ -756,13 +789,14 @@ function lookupCity(cityRaw, stateRaw) {
       state: stateAbbr || coords.state,
       lat: coords.lat,
       lng: coords.lng,
+      pinType: "city",
     };
   }
 
   // San Francisco Bay Area special case
   if (cityLower.includes("san francisco") || cityLower === "sf") {
     const coords = CITY_COORDS["san francisco"];
-    return { city: "San Francisco", state: "CA", lat: coords.lat, lng: coords.lng };
+    return { city: "San Francisco", state: "CA", lat: coords.lat, lng: coords.lng, pinType: "city" };
   }
 
   return null;
