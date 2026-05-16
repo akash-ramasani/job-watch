@@ -40,6 +40,7 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                   </>
                 )}
                 <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
+                <NavButton active={location.pathname === "/map"} to="/map">Map</NavButton>
                 <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
                 <NavButton active={location.pathname === "/profile"} to="/profile">Profile</NavButton>
               </div>
@@ -107,6 +108,7 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/map"} to="/map" onClick={() => setIsMenuOpen(false)}>Map</MobileNavButton>
               <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
               <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Profile</MobileNavButton>
               <button

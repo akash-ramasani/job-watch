@@ -42,6 +42,8 @@ const Anthropic = require("@anthropic-ai/sdk");
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
 
+const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
+
 
 
 if (!admin.apps.length) admin.initializeApp();
@@ -1014,6 +1016,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedIso,
       meta,
       fullDescription, // Save directly into Firestore
+      mapLocation: normalizeToMapLocation(locationName),
     };
   }
 
@@ -1076,6 +1079,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedIso,
       meta,
       fullDescription,
+      mapLocation: normalizeToMapLocation(combinedLocation || primaryLoc || null),
     };
   }
 
@@ -1150,6 +1154,7 @@ function normalizeJobMinimal(rawJob, ctx) {
       sourceUpdatedTs,
       sourceUpdatedIso,
       meta,
+      mapLocation: normalizeToMapLocation(locationName),
     };
   }
 

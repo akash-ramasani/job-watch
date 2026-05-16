@@ -1,0 +1,460 @@
+/**
+ * functions/lib/locationNormalizer.cjs
+ * 
+ * Normalizes raw locationName strings from any source (greenhouse, ashby, eightfold)
+ * into a canonical { city, state, lat, lng } object for map display.
+ * 
+ * Returns null for remote-only / vague / unresolvable locations.
+ */
+
+// ──────────────────────────────────────────────────────
+// US City Coordinates Lookup (top cities by job volume)
+// ──────────────────────────────────────────────────────
+const CITY_COORDS = {
+  "san francisco": { state: "CA", lat: 37.7749, lng: -122.4194 },
+  "new york": { state: "NY", lat: 40.7128, lng: -74.0060 },
+  "new york city": { state: "NY", lat: 40.7128, lng: -74.0060 },
+  "nyc": { state: "NY", lat: 40.7128, lng: -74.0060 },
+  "manhattan": { state: "NY", lat: 40.7831, lng: -73.9712 },
+  "brooklyn": { state: "NY", lat: 40.6782, lng: -73.9442 },
+  "seattle": { state: "WA", lat: 47.6062, lng: -122.3321 },
+  "austin": { state: "TX", lat: 30.2672, lng: -97.7431 },
+  "chicago": { state: "IL", lat: 41.8781, lng: -87.6298 },
+  "boston": { state: "MA", lat: 42.3601, lng: -71.0589 },
+  "los angeles": { state: "CA", lat: 34.0522, lng: -118.2437 },
+  "denver": { state: "CO", lat: 39.7392, lng: -104.9903 },
+  "atlanta": { state: "GA", lat: 33.7490, lng: -84.3880 },
+  "miami": { state: "FL", lat: 25.7617, lng: -80.1918 },
+  "dallas": { state: "TX", lat: 32.7767, lng: -96.7970 },
+  "houston": { state: "TX", lat: 29.7604, lng: -95.3698 },
+  "san jose": { state: "CA", lat: 37.3382, lng: -121.8863 },
+  "san diego": { state: "CA", lat: 32.7157, lng: -117.1611 },
+  "phoenix": { state: "AZ", lat: 33.4484, lng: -112.0740 },
+  "portland": { state: "OR", lat: 45.5155, lng: -122.6789 },
+  "nashville": { state: "TN", lat: 36.1627, lng: -86.7816 },
+  "washington": { state: "DC", lat: 38.9072, lng: -77.0369 },
+  "washington dc": { state: "DC", lat: 38.9072, lng: -77.0369 },
+  "washington d.c.": { state: "DC", lat: 38.9072, lng: -77.0369 },
+  "dc": { state: "DC", lat: 38.9072, lng: -77.0369 },
+  "costa mesa": { state: "CA", lat: 33.6412, lng: -117.9187 },
+  "irvine": { state: "CA", lat: 33.6846, lng: -117.8265 },
+  "palo alto": { state: "CA", lat: 37.4419, lng: -122.1430 },
+  "mountain view": { state: "CA", lat: 37.3861, lng: -122.0839 },
+  "sunnyvale": { state: "CA", lat: 37.3688, lng: -122.0363 },
+  "santa clara": { state: "CA", lat: 37.3541, lng: -121.9552 },
+  "redmond": { state: "WA", lat: 47.6740, lng: -122.1215 },
+  "bellevue": { state: "WA", lat: 47.6101, lng: -122.2015 },
+  "reston": { state: "VA", lat: 38.9586, lng: -77.3570 },
+  "san mateo": { state: "CA", lat: 37.5630, lng: -122.3255 },
+  "santa ana": { state: "CA", lat: 33.7455, lng: -117.8677 },
+  "long beach": { state: "CA", lat: 33.7701, lng: -118.1937 },
+  "memphis": { state: "TN", lat: 35.1495, lng: -90.0490 },
+  "salt lake city": { state: "UT", lat: 40.7608, lng: -111.8910 },
+  "minneapolis": { state: "MN", lat: 44.9778, lng: -93.2650 },
+  "philadelphia": { state: "PA", lat: 39.9526, lng: -75.1652 },
+  "pittsburgh": { state: "PA", lat: 40.4406, lng: -79.9959 },
+  "raleigh": { state: "NC", lat: 35.7796, lng: -78.6382 },
+  "charlotte": { state: "NC", lat: 35.2271, lng: -80.8431 },
+  "orlando": { state: "FL", lat: 28.5383, lng: -81.3792 },
+  "tampa": { state: "FL", lat: 27.9506, lng: -82.4572 },
+  "indianapolis": { state: "IN", lat: 39.7684, lng: -86.1581 },
+  "columbus": { state: "OH", lat: 39.9612, lng: -82.9988 },
+  "san antonio": { state: "TX", lat: 29.4241, lng: -98.4936 },
+  "sacramento": { state: "CA", lat: 38.5816, lng: -121.4944 },
+  "richmond": { state: "VA", lat: 37.5407, lng: -77.4360 },
+  "plano": { state: "TX", lat: 33.0198, lng: -96.6989 },
+  "detroit": { state: "MI", lat: 42.3314, lng: -83.0458 },
+  "kansas city": { state: "MO", lat: 39.0997, lng: -94.5786 },
+  "oklahoma city": { state: "OK", lat: 35.4676, lng: -97.5164 },
+  "las vegas": { state: "NV", lat: 36.1699, lng: -115.1398 },
+  "milwaukee": { state: "WI", lat: 43.0389, lng: -87.9065 },
+  "omaha": { state: "NE", lat: 41.2565, lng: -95.9345 },
+  "tucson": { state: "AZ", lat: 32.2226, lng: -110.9747 },
+  "el paso": { state: "TX", lat: 31.7619, lng: -106.4850 },
+  "boise": { state: "ID", lat: 43.6150, lng: -116.2023 },
+  "des moines": { state: "IA", lat: 41.5868, lng: -93.6250 },
+  "louisville": { state: "KY", lat: 38.2527, lng: -85.7585 },
+  "provo": { state: "UT", lat: 40.2338, lng: -111.6585 },
+  "huntsville": { state: "AL", lat: 34.7304, lng: -86.5861 },
+  "lexington": { state: "MA", lat: 42.4473, lng: -71.2245 },
+  "quincy": { state: "MA", lat: 42.2529, lng: -71.0023 },
+  "waltham": { state: "MA", lat: 42.3765, lng: -71.2356 },
+  "cambridge": { state: "MA", lat: 42.3736, lng: -71.1097 },
+  "somerville": { state: "MA", lat: 42.3876, lng: -71.0995 },
+  "woburn": { state: "MA", lat: 42.4793, lng: -71.1523 },
+  "cary": { state: "NC", lat: 35.7915, lng: -78.7811 },
+  "morrisville": { state: "NC", lat: 35.8235, lng: -78.8256 },
+  "durham": { state: "NC", lat: 35.9940, lng: -78.8986 },
+  "newark": { state: "NJ", lat: 40.7357, lng: -74.1724 },
+  "hoboken": { state: "NJ", lat: 40.7440, lng: -74.0324 },
+  "livingston": { state: "NJ", lat: 40.7921, lng: -74.3150 },
+  "stamford": { state: "CT", lat: 41.0534, lng: -73.5387 },
+  "boulder": { state: "CO", lat: 40.0150, lng: -105.2705 },
+  "broomfield": { state: "CO", lat: 39.9205, lng: -105.0867 },
+  "fort collins": { state: "CO", lat: 40.5853, lng: -105.0844 },
+  "tempe": { state: "AZ", lat: 33.4255, lng: -111.9400 },
+  "scottsdale": { state: "AZ", lat: 33.4942, lng: -111.9261 },
+  "arlington": { state: "VA", lat: 38.8799, lng: -77.1068 },
+  "tysons": { state: "VA", lat: 38.9187, lng: -77.2311 },
+  "herndon": { state: "VA", lat: 38.9696, lng: -77.3861 },
+  "mclean": { state: "VA", lat: 38.9339, lng: -77.1773 },
+  "bay area": { state: "CA", lat: 37.5585, lng: -122.2711 },
+  "south san francisco": { state: "CA", lat: 37.6547, lng: -122.4077 },
+  "menlo park": { state: "CA", lat: 37.4530, lng: -122.1817 },
+  "foster city": { state: "CA", lat: 37.5585, lng: -122.2711 },
+  "fremont": { state: "CA", lat: 37.5485, lng: -121.9886 },
+  "oakland": { state: "CA", lat: 37.8044, lng: -122.2712 },
+  "el segundo": { state: "CA", lat: 33.9192, lng: -118.4165 },
+  "culver city": { state: "CA", lat: 34.0211, lng: -118.3965 },
+  "santa monica": { state: "CA", lat: 34.0195, lng: -118.4912 },
+  "burbank": { state: "CA", lat: 34.1808, lng: -118.3090 },
+  "pasadena": { state: "CA", lat: 34.1478, lng: -118.1445 },
+  "arvada": { state: "CO", lat: 39.8028, lng: -105.0875 },
+  "new orleans": { state: "LA", lat: 29.9511, lng: -90.0715 },
+  "los gatos": { state: "CA", lat: 37.2358, lng: -121.9624 },
+  "ashville": { state: "OH", lat: 39.7176, lng: -82.9527 },
+  "mchenry": { state: "MS", lat: 30.7413, lng: -89.1548 },
+  "bastrop": { state: "TX", lat: 30.1105, lng: -97.3153 },
+  "hudson": { state: "NH", lat: 42.7648, lng: -71.4398 },
+  "quonset": { state: "RI", lat: 41.5870, lng: -71.4128 },
+  "pensacola": { state: "FL", lat: 30.4213, lng: -87.2169 },
+  "jacksonville": { state: "FL", lat: 30.3322, lng: -81.6557 },
+  "fort worth": { state: "TX", lat: 32.7555, lng: -97.3308 },
+  "tulsa": { state: "OK", lat: 36.1540, lng: -95.9928 },
+  "wichita": { state: "KS", lat: 37.6872, lng: -97.3301 },
+  "st. louis": { state: "MO", lat: 38.6270, lng: -90.1994 },
+  "saint louis": { state: "MO", lat: 38.6270, lng: -90.1994 },
+  "maple grove": { state: "MN", lat: 45.0725, lng: -93.4558 },
+  "st. paul": { state: "MN", lat: 44.9537, lng: -93.0900 },
+  "spokane": { state: "WA", lat: 47.6588, lng: -117.4260 },
+  "tacoma": { state: "WA", lat: 47.2529, lng: -122.4443 },
+  "kirkland": { state: "WA", lat: 47.6815, lng: -122.2087 },
+  "west palm beach": { state: "FL", lat: 26.7153, lng: -80.0534 },
+  "sarasota": { state: "FL", lat: 27.3364, lng: -82.5307 },
+  "naples": { state: "FL", lat: 26.1420, lng: -81.7948 },
+  "new haven": { state: "CT", lat: 41.3083, lng: -72.9279 },
+  "providence": { state: "RI", lat: 41.8240, lng: -71.4128 },
+  "madison": { state: "WI", lat: 43.0731, lng: -89.4012 },
+  "ann arbor": { state: "MI", lat: 42.2808, lng: -83.7430 },
+  "grand rapids": { state: "MI", lat: 42.9634, lng: -85.6681 },
+  "norfolk": { state: "VA", lat: 36.8508, lng: -76.2859 },
+  "virginia beach": { state: "VA", lat: 36.8529, lng: -75.9780 },
+  "overland park": { state: "KS", lat: 38.9822, lng: -94.6708 },
+  "st. george": { state: "UT", lat: 37.0965, lng: -113.5684 },
+  "draper": { state: "UT", lat: 40.5247, lng: -111.8638 },
+  "lehi": { state: "UT", lat: 40.3916, lng: -111.8508 },
+  "san ramon": { state: "CA", lat: 37.7799, lng: -121.9780 },
+  "pleasanton": { state: "CA", lat: 37.6624, lng: -121.8747 },
+  "dublin": { state: "CA", lat: 37.7022, lng: -121.9358 },
+  "livermore": { state: "CA", lat: 37.6819, lng: -121.7680 },
+  "burlingame": { state: "CA", lat: 37.5841, lng: -122.3660 },
+  "redwood city": { state: "CA", lat: 37.4852, lng: -122.2364 },
+  "hawthorne": { state: "CA", lat: 33.9164, lng: -118.3526 },
+  "mesa": { state: "AZ", lat: 33.4152, lng: -111.8315 },
+  "red bank": { state: "NJ", lat: 40.3471, lng: -74.0643 },
+  "norwalk": { state: "CT", lat: 41.1177, lng: -73.4082 },
+  "victorville": { state: "CA", lat: 34.5362, lng: -117.2928 },
+  "san clemente": { state: "CA", lat: 33.4270, lng: -117.6120 },
+  "patuxent river": { state: "MD", lat: 38.2857, lng: -76.4280 },
+  "east palo alto": { state: "CA", lat: 37.4689, lng: -122.1411 },
+  "colorado springs": { state: "CO", lat: 38.8339, lng: -104.8214 },
+  "cincinnati": { state: "OH", lat: 39.1031, lng: -84.5120 },
+  "rochester": { state: "NY", lat: 43.1566, lng: -77.6088 },
+  "cleveland": { state: "OH", lat: 41.4993, lng: -81.6944 },
+  "birmingham": { state: "AL", lat: 33.5207, lng: -86.8025 },
+  "brentwood": { state: "TN", lat: 36.0331, lng: -86.7828 },
+  "reno": { state: "NV", lat: 39.5296, lng: -119.8138 },
+  "gaithersburg": { state: "MD", lat: 39.1434, lng: -77.2014 },
+  "silver spring": { state: "MD", lat: 38.9907, lng: -77.0261 },
+  "columbia": { state: "MD", lat: 39.2037, lng: -76.8610 },
+  "jersey city": { state: "NJ", lat: 40.7178, lng: -74.0431 },
+  "garland": { state: "TX", lat: 32.9126, lng: -96.6389 },
+  "carrollton": { state: "TX", lat: 32.9537, lng: -96.8903 },
+  "westlake": { state: "TX", lat: 32.9915, lng: -97.1964 },
+  "north bend": { state: "WA", lat: 47.4957, lng: -121.7868 },
+  "rockford": { state: "IL", lat: 42.2711, lng: -89.0940 },
+  "morrow": { state: "GA", lat: 33.5832, lng: -84.3385 },
+  "decatur": { state: "GA", lat: 33.7748, lng: -84.2963 },
+  "millcreek": { state: "UT", lat: 40.6869, lng: -111.8755 },
+  "lake charles": { state: "LA", lat: 30.2266, lng: -93.2174 },
+  "baltimore": { state: "MD", lat: 39.2904, lng: -76.6122 },
+  "dallas-fort worth": { state: "TX", lat: 32.8998, lng: -97.0403 },
+  "new brunswick": { state: "NJ", lat: 40.4862, lng: -74.4518 },
+  "springfield": { state: "MA", lat: 42.1015, lng: -72.5898 },
+  "charleston": { state: "SC", lat: 32.7765, lng: -79.9311 },
+  "greenville": { state: "SC", lat: 34.8526, lng: -82.3940 },
+  "savannah": { state: "GA", lat: 32.0809, lng: -81.0912 },
+  "chattanooga": { state: "TN", lat: 35.0456, lng: -85.3097 },
+  "knoxville": { state: "TN", lat: 35.9606, lng: -83.9207 },
+  "honolulu": { state: "HI", lat: 21.3069, lng: -157.8583 },
+  "albany": { state: "NY", lat: 42.6526, lng: -73.7562 },
+  "buffalo": { state: "NY", lat: 42.8864, lng: -78.8784 },
+  "syracuse": { state: "NY", lat: 43.0481, lng: -76.1474 },
+  "long island city": { state: "NY", lat: 40.7447, lng: -73.9485 },
+  "white plains": { state: "NY", lat: 41.0340, lng: -73.7629 },
+  "burlington": { state: "MA", lat: 42.5048, lng: -71.1956 },
+  "durham": { state: "NC", lat: 35.9940, lng: -78.8986 },
+  "boydton": { state: "VA", lat: 36.6677, lng: -78.3875 },
+};
+
+// Canonical display names for cities that have multiple lookup keys
+const CITY_CANONICAL = {
+  "new york city": "New York",
+  "nyc": "New York",
+  "manhattan": "New York",
+  "brooklyn": "New York",
+  "long island city": "New York",
+  "washington dc": "Washington",
+  "washington d.c.": "Washington",
+  "dc": "Washington",
+  "bay area": "San Francisco",
+  "south san francisco": "San Francisco",
+  "saint louis": "St. Louis",
+  "st. paul": "St. Paul",
+  "dallas-fort worth": "Dallas",
+};
+
+// State name → abbreviation mapping
+const STATE_TO_ABBR = {
+  "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+  "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+  "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+  "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+  "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+  "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+  "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+  "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+  "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+  "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+};
+
+const STATE_ABBRS = new Set(Object.values(STATE_TO_ABBR));
+
+// ──────────────────────────────────────────────────────
+// Patterns that indicate "Remote / Other"
+// ──────────────────────────────────────────────────────
+const REMOTE_ONLY_RE = /^(remote|united states|anywhere in the united states|us|usa|u\.s\.|us remote|remote us|remote usa|remote - usa|us-remote|remote \(usa\)|united states - remote|remote - us: all locations|remote - us: select locations|remote in united states|remote in the us|remote in the usa|in-office|multiple locations|united states, multiple locations, multiple locations)$/i;
+
+const REMOTE_INDICATOR_RE = /\bremote\b/i;
+
+// ──────────────────────────────────────────────────────
+// Main normalization function
+// ──────────────────────────────────────────────────────
+
+/**
+ * Normalizes a raw locationName string to a map location object.
+ * @param {string|null} locationName - Raw location from the job document
+ * @returns {{ city: string, state: string, lat: number, lng: number } | null}
+ *   Returns null if the location is remote-only, vague, or unresolvable.
+ */
+function normalizeToMapLocation(locationName) {
+  if (!locationName || typeof locationName !== "string") return null;
+
+  const trimmed = locationName.trim();
+  if (!trimmed) return null;
+
+  // Check if it's purely remote/vague
+  if (REMOTE_ONLY_RE.test(trimmed)) return null;
+  if (/^united states\s*$/i.test(trimmed)) return null;
+
+  // Clean the string
+  let cleaned = trimmed;
+
+  // Remove known prefixes (ORDER MATTERS - more specific first)
+  cleaned = cleaned.replace(/^\*HQ\s*-\s*/i, "");
+  cleaned = cleaned.replace(/^US-[A-Z]{2}-/i, ""); // "US-CA-Menlo Park" (before generic US- strip)
+  cleaned = cleaned.replace(/^US\s*-\s*/i, ""); // "US - San Francisco"
+  cleaned = cleaned.replace(/^US\s*>\s*[^>]+\s*>\s*/i, "");
+  cleaned = cleaned.replace(/^Onsite\s*-\s*/i, "");
+  cleaned = cleaned.replace(/^[A-Za-z]+\s+HQ\s*-\s*/i, ""); // "Betterment HQ - New York City"
+
+  // Remove known suffixes
+  cleaned = cleaned.replace(/\s*-\s*HQ$/i, "");
+  cleaned = cleaned.replace(/\s*-\s*US$/i, "");
+  cleaned = cleaned.replace(/\s*\(Hybrid\).*$/i, "");
+  cleaned = cleaned.replace(/\s*\(HQ\)$/i, "");
+  cleaned = cleaned.replace(/\s*\(Remote\).*$/i, "");
+  cleaned = cleaned.replace(/\s*\(In office.*\)$/i, "");
+  cleaned = cleaned.replace(/\s+(Office|Warehouse|Campus|HQ|Headquarters)$/i, ""); // "Burlington, MA Office"
+  cleaned = cleaned.replace(/\s+office$/i, ""); // "Durham office"
+
+  // For multi-location strings, split on ; | / and bullet •
+  // But be careful not to split "Livingston, NJ / New York, NY" incorrectly
+  const segments = splitMultiLocation(cleaned);
+  
+  let bestCity = null;
+  for (const segment of segments) {
+    const seg = segment.trim();
+    if (!seg) continue;
+    if (/^(united states|US|USA|U\.S\.)$/i.test(seg)) continue;
+    if (/^united states\s*-\s*remote$/i.test(seg)) continue;
+    
+    // Skip segments that are ONLY remote indicators
+    if (/^remote(\s|$)/i.test(seg) || /^(remote)$/i.test(seg)) {
+      // But check if there's a city after "Remote - "
+      const afterRemote = seg.replace(/^remote\s*[-–—:]\s*/i, "").trim();
+      if (afterRemote && afterRemote.length > 2 && !/^(us|usa|united states)/i.test(afterRemote)) {
+        const result = extractCityFromSegment(afterRemote);
+        if (result) { bestCity = result; break; }
+      }
+      continue;
+    }
+    
+    const result = extractCityFromSegment(seg);
+    if (result) {
+      bestCity = result;
+      break;
+    }
+  }
+
+  return bestCity;
+}
+
+/**
+ * Smart split for multi-location strings.
+ * Handles: "City, ST / City, ST", "City; City", "City | City", "City • City", "City or City"
+ */
+function splitMultiLocation(str) {
+  // Split on semicolons, pipes, and "or" keyword first (unambiguous)
+  let parts = str.split(/\s*[;|•]\s*|\s+or\s+/i);
+  
+  // For slash separators, only split if slash separates "City, ST / City, ST" patterns
+  const result = [];
+  for (const part of parts) {
+    if (part.includes("/")) {
+      // Check if this looks like multi-city: "Livingston, NJ / New York, NY"
+      const slashParts = part.split(/\s*\/\s*/);
+      // If most parts contain commas or are known cities, split them
+      const looksMultiCity = slashParts.filter(p => p.includes(",") || CITY_COORDS[p.toLowerCase().trim()]).length > 1;
+      if (looksMultiCity) {
+        result.push(...slashParts);
+      } else {
+        result.push(part);
+      }
+    } else {
+      result.push(part);
+    }
+  }
+  return result;
+}
+
+/**
+ * Extracts city info from a single location segment.
+ */
+function extractCityFromSegment(segment) {
+  if (!segment) return null;
+  
+  let seg = segment.trim();
+  
+  // Remove "Remote - " prefix if followed by a city
+  seg = seg.replace(/^Remote\s*[-–—:]\s*/i, "");
+  seg = seg.replace(/^Remote\s*\(([^)]+)\)$/i, "$1");
+  
+  // Handle Eightfold reversed format: "United States, State, City"
+  if (/^United States,/i.test(seg)) {
+    const parts = seg.split(",").map(p => p.trim());
+    if (parts.length >= 3) {
+      const city = parts[parts.length - 1];
+      const state = parts[parts.length - 2];
+      return lookupCity(city, state);
+    }
+  }
+  
+  // Remove country suffixes
+  seg = seg.replace(/,?\s*(United States( of America)?|USA|US)\s*$/i, "").trim();
+  
+  // Handle Eightfold no-space format: "City,State,Country" (already stripped country above)
+  // Check if original has no spaces after commas (eightfold pattern)
+  if (/^[^,]+,[^,]+$/.test(seg) && !seg.includes(", ")) {
+    const noSpaceParts = seg.split(",").map(p => p.trim());
+    if (noSpaceParts.length === 2) {
+      return lookupCity(noSpaceParts[0], noSpaceParts[1]);
+    }
+  }
+
+  // Standard format: "City, State" or "City, State, Country" or just "City"
+  const parts = seg.split(",").map(p => p.trim()).filter(Boolean);
+  
+  if (parts.length === 0) return null;
+  
+  // If just one part, try direct city lookup
+  if (parts.length === 1) {
+    return lookupCity(parts[0], null);
+  }
+  
+  // Two or more parts: first is city, second might be state
+  const cityCandidate = parts[0];
+  const stateCandidate = parts[1];
+  
+  return lookupCity(cityCandidate, stateCandidate);
+}
+
+/**
+ * Looks up a city in the coordinates table.
+ */
+function lookupCity(cityRaw, stateRaw) {
+  if (!cityRaw) return null;
+  
+  const city = cityRaw.trim().replace(/\s+/g, " ");
+  const cityLower = city.toLowerCase();
+  
+  // Skip if it's a state abbreviation only
+  if (/^[A-Z]{2}$/.test(city) && STATE_ABBRS.has(city)) return null;
+  // Skip if too short
+  if (city.length < 3) return null;
+  // Skip "Multiple Locations" (eightfold)
+  if (/multiple locations/i.test(city)) return null;
+  
+  // Resolve state abbreviation
+  let stateAbbr = null;
+  if (stateRaw) {
+    const stateClean = stateRaw.trim();
+    if (/^[A-Z]{2}$/i.test(stateClean) && STATE_ABBRS.has(stateClean.toUpperCase())) {
+      stateAbbr = stateClean.toUpperCase();
+    } else {
+      stateAbbr = STATE_TO_ABBR[stateClean.toLowerCase()] || null;
+    }
+  }
+
+  // Direct lookup
+  if (CITY_COORDS[cityLower]) {
+    const coords = CITY_COORDS[cityLower];
+    const canonicalName = CITY_CANONICAL[cityLower] || toTitleCase(cityLower);
+    return {
+      city: canonicalName,
+      state: stateAbbr || coords.state,
+      lat: coords.lat,
+      lng: coords.lng,
+    };
+  }
+  
+  // Try without trailing state abbreviation in city name (e.g., "Boston MA")
+  const withoutTrailingState = cityLower.replace(/\s+[a-z]{2}$/i, "").trim();
+  if (withoutTrailingState !== cityLower && CITY_COORDS[withoutTrailingState]) {
+    const coords = CITY_COORDS[withoutTrailingState];
+    const canonicalName = CITY_CANONICAL[withoutTrailingState] || toTitleCase(withoutTrailingState);
+    return {
+      city: canonicalName,
+      state: stateAbbr || coords.state,
+      lat: coords.lat,
+      lng: coords.lng,
+    };
+  }
+  
+  // San Francisco Bay Area special case
+  if (cityLower.includes("san francisco") || cityLower.includes("sf")) {
+    const coords = CITY_COORDS["san francisco"];
+    return { city: "San Francisco", state: "CA", lat: coords.lat, lng: coords.lng };
+  }
+
+  return null;
+}
+
+function toTitleCase(str) {
+  return str.split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+
+module.exports = { normalizeToMapLocation, CITY_COORDS, CITY_CANONICAL, STATE_TO_ABBR };
