@@ -130,11 +130,11 @@ function computeAggregations(jobs) {
     if (loc && loc.city && loc.state) {
       const key = `${loc.city}|${loc.state}`;
       if (!clusters[key]) {
-        clusters[key] = { lat: loc.lat, lng: loc.lng, count: 0, city: 0, remote: 0, state: 0 };
+        clusters[key] = { lat: loc.lat, lng: loc.lng, count: 0, cityPin: 0, remotePin: 0, statePin: 0 };
       }
       clusters[key].count++;
-      const pt = loc.pinType || "city";
-      if (clusters[key][pt] !== undefined) clusters[key][pt]++;
+      const ptKey = (loc.pinType || "city") + "Pin";
+      if (clusters[key][ptKey] !== undefined) clusters[key][ptKey]++;
     }
 
     // Company stats

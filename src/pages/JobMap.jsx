@@ -27,8 +27,8 @@ export default function JobMap({ user }) {
       try {
         const data = await getMapClusters();
         const clusterList = Object.entries(data.clusters || {}).map(([key, val]) => {
-          const [city, state] = key.split("|");
-          return { city, state, ...val };
+          const [cityName, stateCode] = key.split("|");
+          return { ...val, city: cityName, state: stateCode };
         });
         setClusters(clusterList.sort((a, b) => b.count - a.count));
         setTotalJobs(data.totalJobs || 0);
