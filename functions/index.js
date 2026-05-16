@@ -2757,14 +2757,20 @@ exports.geocodeBackfill = onRequest(
     try {
       const jobsCol = db.collection("users").doc(userId).collection("jobs");
 
-      // Fetch jobs without coordinates (geocoded field missing or false)
-      const snap = await jobsCol.where("geocoded", "!=", true).limit(500).get();
-      logger.info(`Geocode backfill: ${snap.size} jobs to process`);
+      // Fetch all jobs, then filter in memory because Firestore can't query missing fields
+      const snap = await jobsCol.get();
+      
+      const unProcessedDocs = snap.docs.filter(d => {
+        const data = d.data();
+        return data.geocoded === undefined;
+      }).slice(0, 500);
+
+      logger.info(`Geocode backfill: ${unProcessedDocs.length} jobs to process out of ${snap.size}`);
 
       let updated = 0;
       let skipped = 0;
 
-      for (const docSnap of snap.docs) {
+      for (const docSnap of unProcessedDocs) {
         const data = docSnap.data();
         const locationName = data.locationName;
 
@@ -2796,10 +2802,10 @@ exports.geocodeBackfill = onRequest(
 
       res.json({
         ok: true,
-        processed: snap.size,
+        processed: unProcessedDocs.length,
         updated,
         skipped,
-        message: snap.size === 500
+        message: unProcessedDocs.length === 500
           ? "Hit 500 limit — run again to continue backfill"
           : "Backfill complete",
       });

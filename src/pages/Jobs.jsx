@@ -823,38 +823,59 @@ export default function Jobs({ user, userMeta, preferences }) {
               className="z-0"
             >
               <TileLayer
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                attribution='&copy; <a href="https://carto.com/attributions">CARTO</a>'
               />
-              {filteredJobs
-                .filter((j) => j.coordinates && j.coordinates.lat && j.coordinates.lng)
-                .map((job) => (
-                  <Marker key={job.id} position={[job.coordinates.lat, job.coordinates.lng]}>
+              {(() => {
+                const geocoded = filteredJobs.filter(j => j.coordinates && j.coordinates.lat && j.coordinates.lng);
+                const groups = {};
+                for (const job of geocoded) {
+                  const key = `${job.coordinates.lat},${job.coordinates.lng}`;
+                  if (!groups[key]) {
+                    groups[key] = { lat: job.coordinates.lat, lng: job.coordinates.lng, locationName: job.locationName, jobs: [] };
+                  }
+                  groups[key].jobs.push(job);
+                }
+                
+                return Object.values(groups).map((group) => (
+                  <Marker key={`${group.lat}-${group.lng}`} position={[group.lat, group.lng]}>
                     <Popup className="job-map-popup">
-                      <div className="p-1 max-w-[200px]">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600 mb-1">
-                          {job.companyName}
-                        </p>
-                        <h4 className="text-xs font-bold text-gray-900 leading-tight mb-2">
-                          {job.title}
-                        </h4>
-                        <div className="flex items-center justify-between gap-2">
-                           <span className="text-[10px] font-bold text-gray-400">
-                             {job.relevanceScore}% Match
-                           </span>
-                           <a 
-                             href={job.absolute_url} 
-                             target="_blank" 
-                             rel="noreferrer"
-                             className="text-[10px] font-black uppercase text-indigo-600 hover:underline"
-                           >
-                             View Job
-                           </a>
+                      <div className="p-1 min-w-[220px] max-w-[280px] max-h-[320px] overflow-y-auto pr-2 custom-scrollbar">
+                        <div className="sticky top-0 bg-white z-10 pb-2 mb-2 border-b border-gray-100">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-indigo-600">
+                            {group.locationName || "Location"}
+                          </p>
+                          <p className="text-[10px] font-bold text-gray-400 mt-0.5">
+                            {group.jobs.length} open {group.jobs.length === 1 ? "role" : "roles"}
+                          </p>
+                        </div>
+                        <div className="flex flex-col gap-3">
+                          {group.jobs.map(job => (
+                            <div key={job.id} className="group/job border-b border-gray-50 pb-2 last:border-0 last:pb-0">
+                              <h4 className="text-xs font-bold text-gray-900 leading-tight mb-1 group-hover/job:text-indigo-600 transition-colors">
+                                {job.companyName}: {job.title}
+                              </h4>
+                              <div className="flex items-center justify-between gap-2 mt-1.5">
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-gray-100 text-[9px] font-bold text-gray-600">
+                                  {job.relevanceScore != null ? `Score: ${job.relevanceScore}` : "No Score"}
+                                </span>
+                                <a 
+                                  href={job.absolute_url} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="text-[9px] font-black uppercase tracking-wider text-white bg-indigo-500 hover:bg-indigo-600 px-2 py-1 rounded transition-colors"
+                                >
+                                  View Role
+                                </a>
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </div>
                     </Popup>
                   </Marker>
-                ))}
+                ));
+              })()}
             </MapContainer>
             {filteredJobs.filter(j => j.coordinates).length === 0 && (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/60 backdrop-blur-[2px]">
