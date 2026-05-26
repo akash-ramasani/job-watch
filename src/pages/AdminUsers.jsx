@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from "@headlessui/react";
-import { CheckIcon, ClipboardDocumentIcon, XMarkIcon } from "@heroicons/react/24/outline";
-import { collection, getDocs, doc, setDoc, updateDoc } from "firebase/firestore";
+import { CheckIcon, ClipboardDocumentIcon, TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
@@ -363,6 +363,21 @@ export default function AdminUsers({ user }) {
     }
   }
 
+  async function deleteInvite(invite) {
+    const used = invite.used;
+    const confirmMsg = used
+      ? `Delete used invite ${invite.id}? This is just record cleanup — the user account is unaffected.`
+      : `Delete invite ${invite.id}? Anyone holding this code will no longer be able to sign up.`;
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await deleteDoc(doc(db, "invites", invite.id));
+      setInvitesList(prev => prev.filter(i => i.id !== invite.id));
+      showToast("Invite deleted", "success");
+    } catch {
+      showToast("Failed to delete invite", "error");
+    }
+  }
+
   async function toggleAiAccess(targetUserId, currentAccess) {
     if (targetUserId === ADMIN_UID) return;
     try {
@@ -485,8 +500,10 @@ export default function AdminUsers({ user }) {
                           {invite.fullName && <span className="text-xs text-gray-500">· {invite.fullName}</span>}
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5 truncate">
-                          {invite.email || "No email"}
-                          {expiresAt ? ` · Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : ""}
+                          {[
+                            invite.email,
+                            expiresAt ? `Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : null,
+                          ].filter(Boolean).join(" · ") || "—"}
                         </p>
                       </div>
                     </div>
@@ -520,6 +537,14 @@ export default function AdminUsers({ user }) {
                           )}
                         </button>
                       )}
+                      <button
+                        onClick={() => deleteInvite(invite)}
+                        title="Delete invite"
+                        aria-label={`Delete invite ${invite.id}`}
+                        className="flex items-center justify-center h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
+                      >
+                        <TrashIcon className="h-4 w-4" />
+                      </button>
                     </div>
                   </li>
                 );
