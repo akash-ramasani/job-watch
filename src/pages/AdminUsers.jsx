@@ -90,6 +90,66 @@ function AccountStatusBadge({ status }) {
 }
 
 // ── Create Invite Modal ────────────────────────────────────────────────────────
+// ── Delete invite confirmation modal ──────────────────────────────────────────
+function DeleteInviteModal({ invite, busy, onCancel, onConfirm }) {
+  const used = invite?.used;
+  return (
+    <Dialog open={true} onClose={onCancel} className="relative z-50">
+      <DialogBackdrop
+        transition
+        className="fixed inset-0 bg-gray-900/50 backdrop-blur-sm transition-opacity data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in"
+      />
+      <div className="fixed inset-0 z-10 w-screen overflow-y-auto">
+        <div className="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+          <DialogPanel
+            transition
+            className="relative transform overflow-hidden rounded-2xl bg-white text-left shadow-2xl shadow-red-500/10 ring-1 ring-gray-200 transition-all data-closed:translate-y-4 data-closed:opacity-0 data-enter:duration-300 data-enter:ease-out data-leave:duration-200 data-leave:ease-in sm:my-8 sm:w-full sm:max-w-md data-closed:sm:translate-y-0 data-closed:sm:scale-95"
+          >
+            <div className="px-6 py-5 sm:px-8">
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-red-50 text-red-600 ring-1 ring-red-100">
+                  <TrashIcon className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <DialogTitle as="h2" className="text-base font-semibold text-gray-900">
+                    Delete invite code?
+                  </DialogTitle>
+                  <p className="text-sm text-gray-600 mt-1">
+                    <span className="font-mono font-bold tracking-wider text-gray-900">{invite?.id}</span>
+                  </p>
+                  <p className="text-sm text-gray-500 mt-3">
+                    {used
+                      ? "This invite was already used, so deleting it is just record cleanup. The user account stays active."
+                      : "Anyone holding this code will no longer be able to sign up. This cannot be undone."}
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-4 sm:px-8 border-t border-gray-100 bg-gray-50/50 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={busy}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={busy}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {busy ? "Deleting…" : "Delete invite"}
+              </button>
+            </div>
+          </DialogPanel>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 function CreateInviteModal({ onClose, onCreated, adminUid }) {
   const [accountType, setAccountType] = useState("trial");
   const [trialDays, setTrialDays] = useState(7);
@@ -336,6 +396,8 @@ export default function AdminUsers({ user }) {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
+  const [inviteToDelete, setInviteToDelete] = useState(null);
+  const [deletingInvite, setDeletingInvite] = useState(false);
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -375,17 +437,17 @@ export default function AdminUsers({ user }) {
   }
 
   async function deleteInvite(invite) {
-    const used = invite.used;
-    const confirmMsg = used
-      ? `Delete used invite ${invite.id}? This is just record cleanup — the user account is unaffected.`
-      : `Delete invite ${invite.id}? Anyone holding this code will no longer be able to sign up.`;
-    if (!window.confirm(confirmMsg)) return;
+    if (!invite) return;
+    setDeletingInvite(true);
     try {
       await deleteDoc(doc(db, "invites", invite.id));
       setInvitesList(prev => prev.filter(i => i.id !== invite.id));
       showToast("Invite deleted", "success");
+      setInviteToDelete(null);
     } catch {
       showToast("Failed to delete invite", "error");
+    } finally {
+      setDeletingInvite(false);
     }
   }
 
@@ -439,6 +501,15 @@ export default function AdminUsers({ user }) {
           onClose={() => setShowCreateModal(false)}
           onCreated={() => fetchData()}
           adminUid={user.uid}
+        />
+      )}
+
+      {inviteToDelete && (
+        <DeleteInviteModal
+          invite={inviteToDelete}
+          busy={deletingInvite}
+          onCancel={() => !deletingInvite && setInviteToDelete(null)}
+          onConfirm={() => deleteInvite(inviteToDelete)}
         />
       )}
 
@@ -545,7 +616,7 @@ export default function AdminUsers({ user }) {
                         </button>
                       )}
                       <button
-                        onClick={() => deleteInvite(invite)}
+                        onClick={() => setInviteToDelete(invite)}
                         title="Delete invite"
                         aria-label={`Delete invite ${invite.id}`}
                         className="flex items-center justify-center h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
