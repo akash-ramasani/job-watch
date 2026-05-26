@@ -14,6 +14,7 @@ import {
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
+import { track } from "../lib/analytics.js";
 
 const ScrollReveal = ({ children, delay = 0 }) => {
   const [isVisible, setIsVisible] = useState(false);
@@ -263,6 +264,8 @@ export default function Feeds({ user }) {
 
   async function runSyncNow() {
     setBusyRunNow(true);
+    const startedAt = Date.now();
+    track("sync_triggered");
     try {
       const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
       if (!projectId) {
@@ -280,11 +283,18 @@ export default function Feeds({ user }) {
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
+        track("sync_failed", { status: resp.status, duration_ms: Date.now() - startedAt });
         showToast(data?.error || "Manual run failed.", "error");
         return;
       }
+      track("sync_completed", {
+        scanned: data?.scanned || 0,
+        updated: data?.updated || 0,
+        duration_ms: Date.now() - startedAt,
+      });
       showToast(`Sync complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
     } catch (e) {
+      track("sync_failed", { reason: e?.message?.slice(0, 80) || "unknown", duration_ms: Date.now() - startedAt });
       console.error(e);
       showToast(e?.message || "Manual run failed.", "error");
     } finally {

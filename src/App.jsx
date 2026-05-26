@@ -27,6 +27,8 @@ import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 import { DataCacheProvider } from "./contexts/DataCacheContext.jsx";
 import { useSessionGuard } from "./hooks/useSessionGuard.js";
 import { ensureUserAvatar } from "./utils/avatar.js";
+import { identify as analyticsIdentify, reset as analyticsReset, trackPageView } from "./lib/analytics.js";
+import { identifyUserForErrors, clearUserForErrors } from "./lib/errorTracking.js";
 
 export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
@@ -83,9 +85,23 @@ export default function App() {
       setUser(u);
       setLoading(false);
       syncToExtension(u);
+      // Identify the user to analytics + error tracking, or clear on logout.
+      if (u?.uid) {
+        analyticsIdentify(u.uid, { is_admin: u.uid === ADMIN_UID });
+        identifyUserForErrors(u.uid, { is_admin: u.uid === ADMIN_UID });
+      } else {
+        analyticsReset();
+        clearUserForErrors();
+      }
     });
     return () => unsub();
   }, []);
+
+  // Fire a page_view event whenever the route changes. SPAs don't trigger
+  // these automatically — auto-capture in GA4/PostHog only fires on hard nav.
+  useEffect(() => {
+    trackPageView(location.pathname + location.search);
+  }, [location.pathname, location.search]);
 
   // If the extension injects AFTER Firebase restores the session (e.g., late
   // document_idle injection), re-sync the active user to it.

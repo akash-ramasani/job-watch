@@ -5,6 +5,7 @@ import { auth, db } from "../firebase";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { generateAndUploadAvatar } from "../utils/avatar.js";
+import { track } from "../lib/analytics.js";
 
 export default function Signup() {
   const [searchParams] = useSearchParams();
@@ -98,6 +99,15 @@ export default function Signup() {
       }
 
       showToast("Account created successfully!", "success");
+      track("signup_completed", {
+        account_type: accountType,
+        trial_days: trialDays,
+        had_invite_code: !!inviteCode,
+      });
+      track("invite_redeemed", {
+        account_type: accountType,
+        trial_days: trialDays,
+      });
     } catch (e2) {
       // Map Firestore permission-denied (rule rejected the read or the
       // mark-as-used update) to a user-facing message rather than the raw
@@ -107,6 +117,7 @@ export default function Signup() {
       if (code === "permission-denied" || /insufficient permissions/i.test(errorMessage)) {
         errorMessage = "This invite code is invalid, expired, or already used.";
       }
+      track("signup_failed", { reason: code || "unknown" });
       setErr(errorMessage);
       showToast(errorMessage, "error");
     } finally {

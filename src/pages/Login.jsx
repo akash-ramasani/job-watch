@@ -5,6 +5,7 @@ import { auth } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import OtpInput from "../components/OtpInput.jsx";
 import PhoneInput from "../components/PhoneInput.jsx";
+import { track } from "../lib/analytics.js";
 
 export default function Login() {
   const [email, setEmail] = useState("");
@@ -30,8 +31,10 @@ export default function Login() {
       // after the user object becomes available. DO NOT call registerSession here;
       // a duplicate call would race and eject the device we just logged in on.
       await signInWithEmailAndPassword(auth, email.trim(), password);
+      track("login_completed", { method: "email" });
       showToast("Logged in successfully!", "success");
     } catch (e2) {
+      track("login_failed", { method: "email", reason: e2?.code || "unknown" });
       setErr(e2.message || "Login failed");
       showToast("Login failed. Please try again.", "error");
     } finally {

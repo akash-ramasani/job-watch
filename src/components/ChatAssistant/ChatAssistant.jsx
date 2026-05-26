@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { db, auth } from '../../firebase';
 import { getIdToken } from 'firebase/auth';
 import { collection, query, orderBy, limit, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { track } from '../../lib/analytics.js';
 
 export default function ChatAssistant({ user }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -86,6 +87,9 @@ export default function ChatAssistant({ user }) {
     // Save user message to Firestore
     saveMessage('user', userContent);
 
+    const startedAt = Date.now();
+    track('assistant_message_sent', { message_count: newMessages.length, char_count: userContent.length });
+
     try {
       const idToken = await getIdToken(auth.currentUser);
       const response = await fetch('https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant', {
@@ -104,13 +108,16 @@ export default function ChatAssistant({ user }) {
         setMessages([...newMessages, assistantMsg]);
         // Save assistant response to Firestore
         saveMessage('assistant', assistantMsg.content);
+        track('assistant_message_received', { duration_ms: Date.now() - startedAt });
       } else {
         const errorMsg = { role: 'assistant', content: `Error: ${data.error || 'Something went wrong.'}` };
         setMessages([...newMessages, errorMsg]);
+        track('assistant_message_failed', { reason: data?.error?.slice(0, 80) || 'unknown' });
       }
     } catch (error) {
       const errorMsg = { role: 'assistant', content: 'Sorry, I failed to connect to the assistant.' };
       setMessages([...newMessages, errorMsg]);
+      track('assistant_message_failed', { reason: error?.message?.slice(0, 80) || 'network' });
     } finally {
       setLoading(false);
     }

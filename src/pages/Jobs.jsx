@@ -19,6 +19,7 @@ import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { useDataCache } from "../contexts/DataCacheContext.jsx";
+import { track } from "../lib/analytics.js";
 
 const PAGE_SIZE = 50;
 
@@ -265,10 +266,17 @@ export default function Jobs({ user, userMeta, preferences }) {
     e.preventDefault();
     e.stopPropagation();
     setClState({ isOpen: true, job, loading: true, text: "", error: "" });
+    const startedAt = Date.now();
+    track("cover_letter_requested", { source: job.source, company: job.companyName });
     try {
       const coverLetterFn = httpsCallable(functions, "generateCoverLetter", { headers: { "X-Session-Token": localStorage.getItem("jw_session_token") || "" } });
       const res = await coverLetterFn({ jobId: job.id });
       if (res.data?.text) {
+        track("cover_letter_generated", {
+          source: job.source,
+          duration_ms: Date.now() - startedAt,
+          chars: res.data.text.length,
+        });
         setClState({ isOpen: true, job, loading: false, text: res.data.text, error: "" });
       } else {
         throw new Error("No text returned");
@@ -277,11 +285,13 @@ export default function Jobs({ user, userMeta, preferences }) {
       console.error("Cover Letter gen error:", err);
       // Clean up firebase error msg
       const cleanMsg = err.message ? err.message.replace(/\[.*\]\s*/, "") : "Failed to generate";
+      track("cover_letter_failed", { reason: cleanMsg?.slice(0, 80) });
       setClState({ isOpen: true, job, loading: false, text: "", error: cleanMsg });
     }
   };
 
   const handleAutoApply = (job) => {
+    track("auto_apply_clicked", { source: job.source, company: job.companyName });
     if (!job.absolute_url || job.absolute_url === "#") {
       alert("No application URL available for this job.");
       return;
@@ -464,7 +474,13 @@ export default function Jobs({ user, userMeta, preferences }) {
         <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
 
         <div className="flex items-center justify-between gap-4">
-          <a href={job.absolute_url || "#"} target="_blank" rel="noreferrer" className="min-w-0 flex-1">
+          <a
+            href={job.absolute_url || "#"}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => track("job_opened", { source: job.source, company: job.companyName, has_score: job.relevanceScore != null })}
+            className="min-w-0 flex-1"
+          >
             <div className="flex items-center gap-2 mb-1.5">
               <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
                 {job.companyName || "Unknown"}

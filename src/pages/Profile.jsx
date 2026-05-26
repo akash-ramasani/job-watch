@@ -10,6 +10,7 @@ import OtpInput from "../components/OtpInput.jsx";
 import PhoneInput from "../components/PhoneInput.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import { ADMIN_UID } from "../App.jsx";
+import { track } from "../lib/analytics.js";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -184,6 +185,7 @@ export default function Profile({ user, userMeta }) {
     try {
       await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { aiScoringEnabled: next }, { merge: true });
       setAiScoringEnabled(next);
+      track("ai_scoring_toggled", { enabled: next });
       showToast(next ? "AI features enabled" : "AI features disabled", "success");
     } catch {
       showToast("Failed to update setting", "error");
@@ -366,7 +368,9 @@ export default function Profile({ user, userMeta }) {
       const resumeUrl = data.parsed?.resumeUrl || null;
       setResumeData({ ...emptyResume(), ...data.parsed, resumeUrl, fileName: file.name });
       setResumePhase("review");
+      track("resume_parsed", { file_type: ext, file_size_kb: Math.round(file.size / 1024) });
     } catch (err) {
+      track("resume_parse_failed", { file_type: ext, reason: err?.message?.slice(0, 80) || "unknown" });
       showToast(err.message, "error");
       setResumePhase("idle");
     }
@@ -385,6 +389,7 @@ export default function Profile({ user, userMeta }) {
         }, { merge: true });
       }
       setSavedResumeFull({ ...resumeData, savedAt: new Date() });
+      track("resume_saved");
       showToast("Resume saved!", "success");
       setResumePhase("idle");
     } catch { showToast("Failed to save resume", "error"); }
