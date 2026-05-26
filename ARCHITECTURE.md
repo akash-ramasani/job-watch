@@ -48,10 +48,6 @@ JobWatch is a job tracking web app that syncs job postings from Greenhouse, Ashb
 │    → getMapClusters()     → 1 read for entire map page              │
 │    → getCompanyStats()    → 1 read for companies dropdown           │
 │                                                                     │
-│  JobMap page                                                        │
-│    → Loads clusters from cache (1 read)                             │
-│    → On city click: queries jobs WHERE mapLocation.city == X        │
-│                                                                     │
 │  Jobs page                                                          │
 │    → Paginated job list (50/page, time-filtered)                    │
 │    → Companies from aggregation (1 read vs 1,000)                   │
