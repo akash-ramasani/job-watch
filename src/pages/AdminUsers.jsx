@@ -51,8 +51,8 @@ function buildInviteMessage(invite) {
   const expiresAt = invite.expiresAt?.toDate ? invite.expiresAt.toDate() : null;
   const remaining = timeUntil(expiresAt);
   const accountLine = isPaid
-    ? "Account: Paid (I'll activate it right after you sign up)."
-    : `Account: ${invite.trialDays}-day trial from activation. AI features stay off during the trial.`;
+    ? "Account: Paid. Full access unlocked the moment you sign up."
+    : `Account: ${invite.trialDays}-day trial. Full access unlocked the moment you sign up; AI features stay off during the trial.`;
 
   return `Hi,
 
