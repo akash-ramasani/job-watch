@@ -9,9 +9,11 @@ service firebase.storage {
 
     // ── Avatars: publicly readable so <img> tags can load them straight from
     //    the bucket; only the owner may upload/overwrite their own avatar. ──
-    match /avatars/{userId}.svg {
+    //    Filename pattern is `{uid}.svg` (see src/utils/avatar.js).
+    match /avatars/{filename} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null
+                   && filename == request.auth.uid + ".svg";
     }
 
     // ── Deny everything else ──
