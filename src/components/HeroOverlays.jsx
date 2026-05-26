@@ -230,27 +230,27 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
         )}
       </AnimatePresence>
 
-      <div className="relative h-full w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-20 pb-10 flex flex-col">
+      <div className="relative h-full w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-20 pb-12 sm:pb-10 flex flex-col gap-4">
 
         {/* ── TOP ROW: greeting (L) + alert health (R) ─────── */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-3 sm:gap-4">
           <motion.div
             initial={{ opacity: 0, x: -16 }}
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.5 }}
-            className="pointer-events-auto rounded-2xl bg-white/70 backdrop-blur-xl border border-white/60 shadow-xl shadow-indigo-500/5 px-5 py-3 max-w-sm"
+            className="pointer-events-auto rounded-2xl bg-white/70 backdrop-blur-xl border border-white/60 shadow-xl shadow-indigo-500/5 px-4 sm:px-5 py-2.5 sm:py-3 max-w-full sm:max-w-sm flex-1 sm:flex-initial"
           >
-            <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">
+            <p className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] sm:tracking-[0.25em] text-indigo-600">
               Dashboard · {now.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
             </p>
-            <h2 className="mt-0.5 text-lg sm:text-xl font-bold tracking-tight text-gray-900">
+            <h2 className="mt-0.5 text-base sm:text-xl font-bold tracking-tight text-gray-900">
               {greeting},{" "}
               <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">
                 {firstName}
               </span>{" "}
               <span className="inline-block animate-wave origin-[70%_70%]">👋</span>
             </h2>
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 sm:gap-2 text-[10px] sm:text-[11px] font-semibold">
               <span className="rounded-full bg-indigo-50 text-indigo-700 px-2 py-0.5">
                 <Ticker value={stats.today} /> today
               </span>
@@ -292,9 +292,9 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
         <div className="flex-1" />
 
         {/* ── BOTTOM ROW ───────────────────────────────────── */}
-        <div className="flex items-end justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 sm:gap-4">
           {/* LEFT cluster: Next-up card (or onboarding pill when empty) */}
-          <div className="flex flex-col items-start gap-2 max-w-[300px] w-full">
+          <div className="flex flex-col items-start gap-2 w-full sm:max-w-[300px] order-2 sm:order-1">
             {nextUp.length > 0 && (
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
@@ -345,7 +345,7 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
           </div>
 
           {/* Right cluster: legend + FAB */}
-          <div className="flex items-end gap-3">
+          <div className="flex items-center sm:items-end justify-end gap-3 order-1 sm:order-2">
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}

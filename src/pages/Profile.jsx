@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc, collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
-import { sendEmailVerification, getIdToken, linkWithPhoneNumber, RecaptchaVerifier, unlink } from "firebase/auth";
+import { getIdToken, linkWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
 import { db, messaging, auth } from "../firebase";
 import { getToken } from "firebase/messaging";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
@@ -8,6 +8,8 @@ import { motion } from "framer-motion";
 import Select from "../components/Select.jsx";
 import OtpInput from "../components/OtpInput.jsx";
 import PhoneInput from "../components/PhoneInput.jsx";
+import UserAvatar from "../components/UserAvatar.jsx";
+import { ADMIN_UID } from "../App.jsx";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -77,13 +79,33 @@ function AutoTextarea({ value, onChange, placeholder, id, className }) {
 }
 
 // ─── Section Header ────────────────────────────────────────────────────────────
-function SectionHeader({ label, title, description }) {
-  return (
-    <div className="mb-6">
-      <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-1">{label}</p>
-      <h2 className="text-xl font-bold text-gray-900">{title}</h2>
-      {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
-    </div>
+function ProfileCard({ title, description, headerAction, children, footer, onSubmit, bodyClassName = "" }) {
+  const shell = "bg-white shadow-2xl shadow-indigo-500/10 ring-1 ring-gray-200 sm:rounded-2xl overflow-hidden";
+  const body = (
+    <>
+      <div className={`px-4 py-6 sm:p-8 ${bodyClassName}`}>
+        {(title || description || headerAction) && (
+          <div className="mb-6 flex items-start justify-between gap-4">
+            <div>
+              {title && <h2 className="text-base font-semibold text-gray-900">{title}</h2>}
+              {description && <p className="mt-1 text-sm text-gray-500">{description}</p>}
+            </div>
+            {headerAction}
+          </div>
+        )}
+        {children}
+      </div>
+      {footer && (
+        <div className="flex items-center justify-end gap-x-6 border-t border-gray-900/10 bg-gray-50 px-4 py-4 sm:px-8 sm:rounded-b-2xl">
+          {footer}
+        </div>
+      )}
+    </>
+  );
+  return onSubmit ? (
+    <form onSubmit={onSubmit} className={shell}>{body}</form>
+  ) : (
+    <div className={shell}>{body}</div>
   );
 }
 
@@ -119,6 +141,7 @@ export default function Profile({ user, userMeta }) {
   const [skillInput, setSkillInput] = useState("");
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
   const [togglingAi, setTogglingAi] = useState(false);
+  const isAdmin = user?.uid === ADMIN_UID;
   const [sessions, setSessions] = useState([]);
   
   // Phone Auth Linking
@@ -155,6 +178,7 @@ export default function Profile({ user, userMeta }) {
   }, [user?.uid]);
 
   async function handleToggleAiScoring() {
+    if (isAdmin) return;
     setTogglingAi(true);
     const next = !aiScoringEnabled;
     try {
@@ -315,11 +339,6 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
-  async function handleVerify() {
-    try { await sendEmailVerification(user); showToast("Verification email sent!", "success"); }
-    catch (err) { showToast(err.message, "error"); }
-  }
-
   async function handleResumeFile(file) {
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
@@ -401,33 +420,54 @@ export default function Profile({ user, userMeta }) {
   return (
     <div className="page-wrapper space-y-12">
 
-      {/* ═══ PAGE HEADER ═══ */}
-      <div className="page-header flex items-center justify-between">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-1">Settings</p>
-          <h1>Your Profile</h1>
-          <p>Manage your personal details, resume, and notification preferences.</p>
+      {/* ═══ PROFILE HERO ═══ */}
+      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-gray-900/5">
+        <div className="h-24 bg-gradient-to-r from-indigo-500/20 via-indigo-400/10 to-indigo-500/5" />
+        <div className="px-4 pb-6 sm:px-8 sm:pb-8">
+          <div className="relative -mt-12 flex items-start gap-x-5">
+            <div className="h-24 w-24 shrink-0 rounded-2xl bg-white p-1 shadow-md ring-1 ring-gray-900/5">
+              <UserAvatar
+                uid={user?.uid}
+                avatarUrl={userMeta?.avatarUrl}
+                name={userMeta?.fullName}
+                email={user?.email}
+                size="xl"
+                className="rounded-xl"
+              />
+            </div>
+            <div className="flex h-24 flex-col justify-between pt-1">
+              <div className="flex h-11 items-center gap-3">
+                <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+                  {userMeta?.fullName || "Your Profile"}
+                </h1>
+                {user?.emailVerified && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-600 ring-1 ring-inset ring-emerald-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    Verified
+                  </span>
+                )}
+              </div>
+              <div className="flex h-12 items-center pt-2">
+                <span className="text-sm font-medium text-gray-500">{user?.email}</span>
+              </div>
+            </div>
+          </div>
         </div>
-        {user?.emailVerified && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-600 ring-1 ring-emerald-200">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-            Verified
-          </span>
-        )}
       </div>
 
       {/* ═══ PERSONAL INFORMATION ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }}>
-        <div className="section-grid">
-          <div>
-            <SectionHeader
-              label="Account"
-              title="Personal Information"
-              description="These details help us tailor job recommendations to your background."
-            />
-          </div>
-
-          <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
+        <ProfileCard
+          onSubmit={handleSave}
+          title="Personal Information"
+          description="These details help us tailor job recommendations to your background."
+          footer={
+            <button disabled={busy} type="submit" className="btn-primary">
+              {busy ? "Saving…" : "Save Personal Info"}
+            </button>
+          }
+        >
+          <div className="space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               <div>
                 <label htmlFor="firstName" className="caps-label block mb-2">First Name</label>
@@ -492,28 +532,23 @@ export default function Profile({ user, userMeta }) {
                 <input id="postalCode" name="postalCode" type="text" value={formData.postalCode} onChange={handleChange} className="input-standard" />
               </div>
             </div>
-
-            <div className="pt-2 flex justify-end">
-              <button disabled={busy} type="submit" className="btn-primary">
-                {busy ? "Saving…" : "Save Personal Info"}
-              </button>
-            </div>
-          </form>
-        </div>
+          </div>
+        </ProfileCard>
       </motion.div>
 
       {/* ═══ APPLICATION DEFAULTS ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.05 }}>
-        <div className="section-grid">
-          <div>
-            <SectionHeader
-              label="Auto Apply"
-              title="Application Defaults"
-              description="Pre-filled answers used by the extension when submitting Ashby applications automatically."
-            />
-          </div>
-          <form onSubmit={handleSave} className="md:col-span-2 bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-5">
-
+        <ProfileCard
+          onSubmit={handleSave}
+          title="Application Defaults"
+          description="Pre-filled answers used by the extension when submitting Ashby applications automatically."
+          footer={
+            <button disabled={busy} type="submit" className="btn-primary">
+              {busy ? "Saving…" : "Save Defaults"}
+            </button>
+          }
+        >
+          <div className="space-y-5">
             {/* Pronouns + Name Pronunciation */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
@@ -649,37 +684,28 @@ export default function Profile({ user, userMeta }) {
                 </div>
               </div>
             </div>
-
-            <div className="pt-2 flex justify-end">
-              <button disabled={busy} type="submit" className="btn-primary">
-                {busy ? "Saving…" : "Save Defaults"}
-              </button>
-            </div>
-          </form>
-        </div>
+          </div>
+        </ProfileCard>
       </motion.div>
 
       {/* ═══ RESUME & PROFESSIONAL PROFILE ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
-        <div className="section-grid">
-          <div>
-            <SectionHeader
-              label="AI Resume"
-              title="Resume & Professional Profile"
-              description="Upload your resume for AI extraction. Review and save your structured profile."
-            />
-            {savedResumeFull && resumePhase === "idle" && (
+        <ProfileCard
+          title="Resume & Professional Profile"
+          description="Upload your resume for AI extraction. Review and save your structured profile."
+          headerAction={
+            savedResumeFull && resumePhase === "idle" ? (
               <button
                 type="button"
                 onClick={() => { setResumeData(savedResumeFull); setResumePhase("review"); }}
-                className="btn-secondary mt-2 w-full justify-center"
+                className="btn-secondary whitespace-nowrap"
               >
                 Edit Saved Profile
               </button>
-            )}
-          </div>
-
-          <div className="md:col-span-2 space-y-6">
+            ) : null
+          }
+        >
+          <div className="space-y-6">
 
             {/* ── Idle: Dropzone + Snapshot ── */}
             {resumePhase === "idle" && (
@@ -890,21 +916,16 @@ export default function Profile({ user, userMeta }) {
               </div>
             )}
           </div>
-        </div>
+        </ProfileCard>
       </motion.div>
 
       {/* ═══ NOTIFICATIONS & ADVANCED ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.2 }}>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-10 pb-12">
-          <div>
-            <SectionHeader
-              label="Preferences"
-              title="Notifications"
-              description="Enable push alerts for new job postings and background syncs."
-            />
-          </div>
-
-          <div className="md:col-span-2 space-y-4">
+        <ProfileCard
+          title="Notifications & Advanced"
+          description="Enable push alerts for new job postings and background syncs."
+        >
+          <div className="space-y-4">
             {/* Push Notifications Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center justify-between gap-4">
               <div>
@@ -930,7 +951,9 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <p className="text-sm font-semibold text-gray-900">AI Features</p>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {aiScoringEnabled
+                  {isAdmin
+                    ? "Admin account — AI is always enabled."
+                    : aiScoringEnabled
                     ? "AI is enabled for job scoring, cover letter generation, and the assistant."
                     : "AI features are off. Jobs will be synced but not evaluated or analyzed."}
                 </p>
@@ -938,18 +961,19 @@ export default function Profile({ user, userMeta }) {
               <button
                 id="ai-scoring-toggle"
                 onClick={handleToggleAiScoring}
-                disabled={togglingAi}
-                className={aiScoringEnabled ? "btn-primary" : "btn-secondary"}
+                disabled={togglingAi || isAdmin}
+                className={(isAdmin || aiScoringEnabled) ? "btn-primary" : "btn-secondary"}
+                title={isAdmin ? "AI is always enabled for the admin account" : undefined}
               >
                 {togglingAi ? (
                   <span className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-gray-300 animate-pulse" />
                     Saving…
                   </span>
-                ) : aiScoringEnabled ? (
+                ) : (isAdmin || aiScoringEnabled) ? (
                   <span className="flex items-center gap-2">
                     <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                    Enabled
+                    {isAdmin ? "Always On" : "Enabled"}
                   </span>
                 ) : "Enable Scoring"}
               </button>
@@ -974,21 +998,16 @@ export default function Profile({ user, userMeta }) {
               </div>
             </div>
           </div>
-        </div>
+        </ProfileCard>
       </motion.div>
 
       {/* ═══ SECURITY & SESSIONS ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.3 }}>
-        <div className="section-grid">
-          <div>
-            <SectionHeader
-              label="Security"
-              title="Security & Authentication"
-              description="Manage your sign-in methods and review recent active devices."
-            />
-          </div>
-
-          <div className="md:col-span-2 space-y-6">
+        <ProfileCard
+          title="Security & Authentication"
+          description="Manage your sign-in methods and review recent active devices."
+        >
+          <div className="space-y-6">
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="px-6 py-4 border-b border-gray-50">
                 <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Sign-in Methods</p>
@@ -1141,7 +1160,7 @@ export default function Profile({ user, userMeta }) {
               Logging into a new device will automatically and immediately revoke access for all other active devices to protect your account.
             </p>
           </div>
-        </div>
+        </ProfileCard>
       </motion.div>
       <div id="link-recaptcha-container"></div>
     </div>

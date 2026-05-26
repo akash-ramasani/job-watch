@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import HeroUSMap from "../components/HeroUSMap.jsx";
@@ -298,8 +298,7 @@ export default function LandingPage() {
       </nav>
 
       {/* ═══ HERO ═══ */}
-      <section className="relative overflow-hidden -mt-16 pt-16 min-h-screen flex items-center">
-        <div className="absolute inset-0 hero-gradient opacity-[0.03]" />
+      <section className="relative overflow-hidden -mt-16 pt-16 min-h-[100svh] sm:min-h-screen flex items-center">
         <div className="pointer-events-none absolute -right-40 top-0 h-[500px] w-[500px] rounded-full bg-indigo-100/50 blur-3xl" />
         <div className="pointer-events-none absolute -left-40 bottom-0 h-[400px] w-[400px] rounded-full bg-violet-100/50 blur-3xl" />
 
@@ -614,16 +613,17 @@ export default function LandingPage() {
           }
         `}</style>
 
-        <div className="relative z-10 w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-12">
+        <div className="relative z-10 w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
           <div className="text-center max-w-3xl mx-auto">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6 }}
             >
-              <span className="inline-flex items-center gap-2 rounded-full bg-white/70 backdrop-blur-md border border-indigo-100 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6 shadow-sm">
-                <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-                Tracking Greenhouse, Ashby, Lever, Workday, Eightfold & 650+ career pages
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/70 backdrop-blur-md border border-indigo-100 px-3 sm:px-4 py-1.5 text-[10px] sm:text-xs font-bold text-indigo-700 uppercase tracking-widest mb-5 sm:mb-6 shadow-sm max-w-full">
+                <span className="inline-flex h-2 w-2 flex-shrink-0 rounded-full bg-indigo-500 animate-pulse" />
+                <span className="sm:hidden">Tracking 650+ career pages</span>
+                <span className="hidden sm:inline">Tracking Greenhouse, Ashby, Lever, Workday, Eightfold & 650+ career pages</span>
               </span>
             </motion.div>
 
@@ -631,7 +631,7 @@ export default function LandingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.15, duration: 0.6 }}
-              className="text-4xl sm:text-6xl font-bold tracking-tight text-gray-900 leading-[1.1]"
+              className="text-3xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-gray-900 leading-[1.1]"
             >
               Never miss a{" "}
               <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">job opportunity</span>{" "}
@@ -642,7 +642,7 @@ export default function LandingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.25, duration: 0.6 }}
-              className="mt-4 text-sm sm:text-base font-medium text-indigo-600/90"
+              className="mt-3 sm:mt-4 text-xs sm:text-base font-medium text-indigo-600/90"
             >
               Apply before the LinkedIn crowd finds it.
             </motion.p>
@@ -651,7 +651,7 @@ export default function LandingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.35, duration: 0.6 }}
-              className="mt-5 text-lg sm:text-xl text-gray-600 leading-relaxed max-w-2xl mx-auto"
+              className="mt-4 sm:mt-5 text-sm sm:text-lg lg:text-xl text-gray-600 leading-relaxed max-w-2xl mx-auto"
             >
               Track Greenhouse, Ashby, Lever, Workday, Eightfold, and company career pages automatically. Get notified within seconds when new roles match your search.
             </motion.p>
@@ -660,12 +660,12 @@ export default function LandingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.5, duration: 0.6 }}
-              className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4"
+              className="mt-6 sm:mt-8 flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-3 sm:gap-4"
             >
               <MagneticButton className="w-full sm:w-auto">
                 <Link
                   to="/signup"
-                  className="block w-full text-center rounded-xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
+                  className="block w-full text-center rounded-xl bg-indigo-600 px-6 sm:px-8 py-3 sm:py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
                 >
                   Track My First Company Free →
                 </Link>
@@ -673,7 +673,7 @@ export default function LandingPage() {
               <MagneticButton className="w-full sm:w-auto">
                 <a
                   href="#how-it-works"
-                  className="block w-full text-center rounded-xl border border-gray-200 bg-white/80 backdrop-blur-sm px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-white transition-all"
+                  className="block w-full text-center rounded-xl border border-gray-200 bg-white/80 backdrop-blur-sm px-6 sm:px-8 py-3 sm:py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-white transition-all"
                 >
                   See How It Works
                 </a>
@@ -684,7 +684,7 @@ export default function LandingPage() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.65, duration: 0.6 }}
-              className="mt-4 text-xs text-gray-500"
+              className="mt-3 sm:mt-4 text-[11px] sm:text-xs text-gray-500 px-2"
             >
               No credit card required · Set up in under 2 minutes · Email, Slack, Discord & SMS alerts
             </motion.p>
@@ -694,7 +694,7 @@ export default function LandingPage() {
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.8, duration: 0.6 }}
-              className="mt-8 mx-auto max-w-xl rounded-2xl bg-white/60 backdrop-blur-md border border-white/60 px-5 py-3 shadow-sm"
+              className="hidden sm:block mt-8 mx-auto max-w-xl rounded-2xl bg-white/60 backdrop-blur-md border border-white/60 px-5 py-3 shadow-sm"
             >
               <blockquote className="text-sm text-gray-700 italic">
                 “I found a role 20 minutes after it was posted and applied before it hit LinkedIn.”
@@ -710,7 +710,7 @@ export default function LandingPage() {
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.95, duration: 0.6 }}
-            className="mt-10 grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-3xl mx-auto"
+            className="mt-8 sm:mt-10 grid grid-cols-2 sm:grid-cols-4 gap-4 sm:gap-6 max-w-3xl mx-auto"
           >
             {STATS.map((s) => (
               <div key={s.label} className="text-center">

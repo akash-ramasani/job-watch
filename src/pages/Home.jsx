@@ -121,7 +121,6 @@ const fadeUp = {
 /* ── Component ─────────────────────────────────────────────── */
 
 export default function Home({ user, userMeta }) {
-  const firstName = userMeta?.firstName || user?.displayName?.split(" ")[0] || "there";
   const isAdmin = user?.uid === ADMIN_UID;
 
   const [interestedUsers, setInterestedUsers] = useState([]);
@@ -164,8 +163,7 @@ export default function Home({ user, userMeta }) {
   return (
     <>
       {/* ═══ HERO SECTION ═══ (sibling of page-wrapper so it can extend behind the nav cleanly) */}
-      <section className="relative overflow-hidden -mt-16 pt-16 left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen min-h-screen flex items-center">
-        <div className="absolute inset-0 hero-gradient opacity-[0.03]" />
+      <section className="relative overflow-hidden -mt-16 pt-16 left-1/2 right-1/2 -ml-[50vw] -mr-[50vw] w-screen min-h-[100svh] sm:min-h-screen flex items-center">
         <div className="pointer-events-none absolute -right-40 top-0 h-[500px] w-[500px] rounded-full bg-indigo-100/50 blur-3xl" />
         <div className="pointer-events-none absolute -left-40 bottom-0 h-[400px] w-[400px] rounded-full bg-violet-100/50 blur-3xl" />
 

@@ -26,6 +26,7 @@ import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 import { DataCacheProvider } from "./contexts/DataCacheContext.jsx";
 import { useSessionGuard } from "./hooks/useSessionGuard.js";
+import { ensureUserAvatar } from "./utils/avatar.js";
 
 export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
@@ -104,7 +105,14 @@ export default function App() {
     const ref = doc(db, "users", user.uid);
     const prefRef = doc(db, "users", user.uid, "settings", "preferences");
     
-    const unsubMeta = onSnapshot(ref, (snap) => setUserMeta(snap.exists() ? snap.data() : null));
+    const unsubMeta = onSnapshot(ref, (snap) => {
+      const data = snap.exists() ? snap.data() : null;
+      setUserMeta(data);
+      // Backfill avatar for legacy users that signed up before avatars existed.
+      if (data && !data.avatarUrl) {
+        ensureUserAvatar(user.uid).catch(() => {});
+      }
+    });
     const unsubPrefs = onSnapshot(prefRef, (snap) => {
       if (snap.exists()) setPreferences(snap.data());
     });
@@ -247,7 +255,7 @@ export default function App() {
   return (
     <DataCacheProvider>
     <ToastProvider>
-      <div className="flex flex-col min-h-screen bg-white">
+      <div className="flex flex-col min-h-screen">
         {user && (
           <>
             <TopBar

@@ -1,5 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   collection,
   getDocs,
@@ -8,9 +9,7 @@ import {
   query,
   startAfter,
   where,
-  Timestamp,
   doc,
-  getDoc,
   onSnapshot
 } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
@@ -69,15 +68,6 @@ function shortAgoFromDate(date) {
   return "Now";
 }
 
-function timeframeToThresholdTs(timeframe) {
-  if (timeframe === "all") return null;
-  const hoursMap = { "24h": 24, "12h": 12, "6h": 6, "1h": 1 };
-  const hours = hoursMap[timeframe];
-  if (!hours) return null;
-  const ms = hours * 60 * 60 * 1000;
-  return Timestamp.fromDate(new Date(Date.now() - ms));
-}
-
 function extractStateCodesFromLocationTokens(tokensOrString) {
   const tokens = Array.isArray(tokensOrString) ? tokensOrString : [tokensOrString].filter(Boolean);
   const found = new Set();
@@ -95,17 +85,32 @@ export default function Jobs({ user, userMeta, preferences }) {
   const { showToast } = useToast();
   const { getCompanyStats } = useDataCache();
 
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [companies, setCompanies] = useState([]);
-  const [selectedKeys, setSelectedKeys] = useState([]);
+  const [selectedKeys, setSelectedKeys] = useState(
+    () => (searchParams.get("companies") || "").split(",").map(s => s.trim()).filter(Boolean)
+  );
 
   const [jobs, setJobs] = useState([]);
+  const [myScores, setMyScores] = useState({}); // { [jobId]: { score, reason } }
   const [loading, setLoading] = useState(true);
 
-  const [titleSearch, setTitleSearch] = useState("");
+  const [titleSearch, setTitleSearch] = useState(() => searchParams.get("title") || "");
   const [companySearch, setCompanySearch] = useState("");
-  const [stateFilter, setStateFilter] = useState("");
-  const [timeframe, setTimeframe] = useState("1h");
+  const [stateFilter, setStateFilter] = useState(() => searchParams.get("state") || "");
+  const [timeframe, setTimeframe] = useState(() => searchParams.get("t") || "1h");
   const [isFilterExpanded, setIsFilterExpanded] = useState(false);
+
+  // Keep the URL in sync with shareable filter state.
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (selectedKeys.length) next.set("companies", selectedKeys.join(","));
+    if (titleSearch.trim()) next.set("title", titleSearch.trim());
+    if (stateFilter) next.set("state", stateFilter);
+    if (timeframe && timeframe !== "1h") next.set("t", timeframe);
+    setSearchParams(next, { replace: true });
+  }, [selectedKeys, titleSearch, stateFilter, timeframe, setSearchParams]);
 
   // Cover Letter State
   const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
@@ -126,7 +131,34 @@ export default function Jobs({ user, userMeta, preferences }) {
     return () => { cancelled = true; };
   }, [user.uid, getCompanyStats]);
 
-  const fetchAllJobs = useCallback(
+  // ─── Job enrichment shared by both data sources ────────────────────────
+  const enrichJob = useCallback((data, id) => {
+    const locationNameToken = Array.isArray(data.locationTokens)
+      ? data.locationTokens.map(t => typeof t === "string" ? t : (t?.name || t?.city || "")).filter(Boolean).join("; ")
+      : "";
+    const locationName = data.locationName || locationNameToken || "Remote";
+    const companyName = data.companyName || "Unknown";
+    const stateCodes =
+      Array.isArray(data.stateCodes) && data.stateCodes.length > 0
+        ? data.stateCodes
+        : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
+    const updatedShort = data.sourceUpdatedTs?.toDate
+      ? shortAgoFromDate(data.sourceUpdatedTs.toDate())
+      : "—";
+    return {
+      id,
+      ...data,
+      companyName,
+      locationName,
+      stateCodes,
+      absolute_url: data.jobUrl || data.applyUrl || "#",
+      firstSeenAt: data.firstSeenAt || data.fetchedAt || null,
+      _updatedShort: updatedShort,
+    };
+  }, []);
+
+  // ─── Legacy paginated fetch (used only when timeframe === "all") ───────
+  const fetchAllJobsLegacy = useCallback(
     async () => {
       setLoading(true);
       setJobs([]);
@@ -135,9 +167,10 @@ export default function Jobs({ user, userMeta, preferences }) {
         const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
         const allDocs = [];
         let cursor = null;
+        let pagesFetched = 0;
+        const MAX_PAGES = 6; // hard cap: 300 docs for the "all" view
 
-        // Loop through all pages until exhausted
-        while (true) {
+        while (pagesFetched < MAX_PAGES) {
           const constraints = [];
 
           if (selectedKeys.length > 0) {
@@ -145,52 +178,15 @@ export default function Jobs({ user, userMeta, preferences }) {
           }
 
           constraints.push(orderBy("sourceUpdatedTs", "desc"));
-
-          if (timeframe !== "all") {
-            const thresholdTs = timeframeToThresholdTs(timeframe);
-            if (thresholdTs) constraints.push(where("sourceUpdatedTs", ">=", thresholdTs));
-          }
-
           constraints.push(limit(PAGE_SIZE));
           if (cursor) constraints.push(startAfter(cursor));
 
           const snap = await getDocs(query(jobsCol, ...constraints));
+          snap.docs.forEach((d) => allDocs.push(enrichJob(d.data(), d.id)));
 
-          snap.docs.forEach((d) => {
-            const data = d.data();
-
-            const locationNameToken = Array.isArray(data.locationTokens) 
-              ? data.locationTokens.map(t => typeof t === "string" ? t : (t?.name || t?.city || "")).filter(Boolean).join("; ")
-              : "";
-
-            const locationName =
-              data.locationName || locationNameToken || "Remote";
-
-            const companyName = data.companyName || "Unknown";
-
-            const stateCodes =
-              Array.isArray(data.stateCodes) && data.stateCodes.length > 0
-                ? data.stateCodes
-                : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
-
-            const updatedShort =
-              data.sourceUpdatedTs?.toDate ? shortAgoFromDate(data.sourceUpdatedTs.toDate()) : "—";
-
-            allDocs.push({
-              id: d.id,
-              ...data,
-              companyName,
-              locationName,
-              stateCodes,
-              absolute_url: data.jobUrl || data.applyUrl || "#",
-              firstSeenAt: data.firstSeenAt || data.fetchedAt || null,
-              _updatedShort: updatedShort,
-              _path: d.ref.path,
-            });
-          });
-
-          if (snap.docs.length < PAGE_SIZE) break; // no more pages
+          if (snap.docs.length < PAGE_SIZE) break;
           cursor = snap.docs[snap.docs.length - 1];
+          pagesFetched += 1;
         }
 
         setJobs(allDocs);
@@ -201,37 +197,69 @@ export default function Jobs({ user, userMeta, preferences }) {
         setLoading(false);
       }
     },
-    [selectedKeys, timeframe, showToast]
+    [selectedKeys, enrichJob, showToast]
   );
 
+  // ─── Default data source: single-doc snapshot of the recentJobs aggregation.
+  //     Cost per session: 1 read for the initial load + 1 per backend rebuild.
+  //     Replaces paginated getDocs for the recent timeframes (1h / 6h / 12h / 24h).
+  //     The doc is maintained by Cloud Functions: scoreNewJobsForUser, syncUserRecentJobs,
+  //     and dailyAggregationReconciliation all call rebuildRecentJobs(ADMIN_UID).
   useEffect(() => {
-    fetchAllJobs();
-  }, [selectedKeys, timeframe]);
+    if (timeframe === "all") {
+      fetchAllJobsLegacy();
+      return undefined;
+    }
 
-  // Live score updates via onSnapshot on scoringStatus aggregation doc (1 listener, not polling)
-  useEffect(() => {
-    if (jobs.length === 0) return;
-    const statusRef = doc(db, "users", ADMIN_UID, "aggregations", "scoringStatus");
-    const unsub = onSnapshot(statusRef, (snap) => {
-      if (!snap.exists()) return;
-      const { recentScores } = snap.data();
-      if (!Array.isArray(recentScores) || recentScores.length === 0) return;
-
-      setJobs((prev) => {
-        let changed = false;
-        const updated = prev.map((j) => {
-          const match = recentScores.find((s) => s.id === j.id);
-          if (match && j.relevanceScore !== match.score) {
-            changed = true;
-            return { ...j, relevanceScore: match.score, scoreReason: match.reason };
-          }
-          return j;
-        });
-        return changed ? updated : prev;
-      });
-    });
+    setLoading(true);
+    const ref = doc(db, "users", ADMIN_UID, "aggregations", "recentJobs");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setJobs([]);
+          setLoading(false);
+          return;
+        }
+        const data = snap.data();
+        const list = Array.isArray(data.jobs) ? data.jobs : [];
+        setJobs(list.map((j) => enrichJob(j, j.id)));
+        setLoading(false);
+      },
+      (err) => {
+        console.error("recentJobs snapshot error:", err);
+        showToast("Error loading jobs.", "error");
+        setLoading(false);
+      }
+    );
     return () => unsub();
-  }, [jobs.length > 0]);
+  }, [timeframe, fetchAllJobsLegacy, enrichJob, showToast]);
+
+  // ─── Per-user AI scores ──────────────────────────────────────────────
+  //  Subscribes to /users/{currentUser.uid}/aggregations/myJobScores, a single
+  //  doc holding a map of jobId → { score, reason } for THIS user only.
+  //  Cost: 1 read per session + 1 per backend rebuild (after scoring).
+  //  Non-admin users with AI disabled simply get an empty doc.
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    const ref = doc(db, "users", user.uid, "aggregations", "myJobScores");
+    const unsub = onSnapshot(
+      ref,
+      (snap) => {
+        if (!snap.exists()) {
+          setMyScores({});
+          return;
+        }
+        const data = snap.data();
+        setMyScores(data && typeof data.scores === "object" ? data.scores : {});
+      },
+      (err) => {
+        console.warn("myJobScores snapshot error:", err);
+        setMyScores({});
+      }
+    );
+    return () => unsub();
+  }, [user?.uid]);
 
   const handleGenerateCoverLetter = async (e, job) => {
     e.preventDefault();
@@ -347,9 +375,23 @@ export default function Jobs({ user, userMeta, preferences }) {
   }, [companies, companySearch]);
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
+    const companyKeySet = selectedKeys.length > 0 ? new Set(selectedKeys) : null;
+    const thresholdMs = (() => {
+      if (timeframe === "all") return null;
+      const hoursMap = { "24h": 24, "12h": 12, "6h": 6, "1h": 1 };
+      const h = hoursMap[timeframe];
+      return h ? Date.now() - h * 60 * 60 * 1000 : null;
+    })();
 
     const filtered = jobs.filter((j) => {
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
+
+      if (companyKeySet && !companyKeySet.has(j.companyKey)) return false;
+
+      if (thresholdMs !== null) {
+        const ts = j.sourceUpdatedTs?.toDate ? j.sourceUpdatedTs.toDate().getTime() : 0;
+        if (!ts || ts < thresholdMs) return false;
+      }
 
       if (stateFilter) {
         if (Array.isArray(j.stateCodes)) {
@@ -364,8 +406,17 @@ export default function Jobs({ user, userMeta, preferences }) {
       return true;
     });
 
-    return [...filtered].sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, titleSearch, stateFilter]);
+    // Merge in the current user's personal AI scores from myJobScores. Jobs
+    // without a personal score render as "unscored" (which is correct for
+    // any user who hasn't enabled AI / hasn't been backfilled).
+    const merged = filtered.map((j) => {
+      const s = myScores[j.id];
+      if (!s) return j;
+      return { ...j, relevanceScore: s.score, scoreReason: s.reason };
+    });
+
+    return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe]);
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "—";
@@ -557,10 +608,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               setTitleSearch("");
               setCompanySearch("");
               setStateFilter("");
-              setLocationTypeFilter("");
               setTimeframe("1h");
-              setOnlyHighRelevant(false);
-              setOnlyAutoApply(false);
               setSelectedKeys([]);
             }}
             className="text-xs font-bold text-gray-400 hover:text-indigo-600 py-1"

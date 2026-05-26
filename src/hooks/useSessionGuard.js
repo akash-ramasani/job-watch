@@ -46,7 +46,6 @@ export function useSessionGuard(user) {
   const ejectedRef      = useRef(false);
   const wasLoggedInRef  = useRef(false);
   const channelRef      = useRef(null);
-  const heartbeatRef    = useRef(null);
   const snapshotUnsub   = useRef(null);   // keep one stable listener
 
   // Keep userRef in sync without causing effect reruns

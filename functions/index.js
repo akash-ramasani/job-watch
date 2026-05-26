@@ -38,6 +38,10 @@ const { jsonrepair } = require("jsonrepair");
 const pLimitPkg = require("p-limit");
 const pLimit = pLimitPkg.default ?? pLimitPkg;
 
+// Admin user — owns the shared job corpus. All other users get personalized
+// scores written to their own jobScores subcollection.
+const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+
 const Anthropic = require("@anthropic-ai/sdk");
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
@@ -827,6 +831,35 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     await scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
       logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
     );
+
+    // Fan out scoring to every other AI-enabled user. The job corpus lives
+    // under admin, so each user gets the same jobs scored against their own
+    // resume, with results written to users/{uid}/jobScores/*. Sequential to
+    // stay within Claude rate limits (each call uses concurrency=1 internally).
+    if (userId === ADMIN_UID) {
+      try {
+        const otherUids = (await listAiEnabledUserIds()).filter((u) => u !== ADMIN_UID);
+        for (const uid of otherUids) {
+          await scoreNewJobsForUser(uid, newJobsForScoring).catch((err) =>
+            logger.error(`scoreNewJobsForUser fan-out failed userId=${uid}: ${err?.message || err}`)
+          );
+        }
+      } catch (err) {
+        logger.warn(`scoring fan-out failed: ${err?.message}`);
+      }
+    }
+  }
+
+  // Rebuild the /jobs page aggregation doc so clients can render with a single read.
+  // Only rebuild if we actually wrote or scored something new — otherwise it's a no-op.
+  if (jobsWritten > 0 || newJobsForScoring.length > 0) {
+    try {
+      const { rebuildRecentJobs } = require("./lib/recentJobs.cjs");
+      const n = await rebuildRecentJobs(userId);
+      logger.info(`recentJobs aggregation rebuilt for ${userId}: ${n} jobs`);
+    } catch (err) {
+      logger.warn(`recentJobs rebuild failed for ${userId}: ${err?.message || err}`);
+    }
   }
 
   return {
@@ -846,7 +879,23 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
  * ----------------------------
  */
 async function listUserIdsToProcess() {
-  return ["7Tojjo8l5PZIYctPmdwncf7PC133"];
+  return [ADMIN_UID];
+}
+
+/**
+ * Returns the set of users who should have AI scoring run for them on the
+ * next sync. Admin is always included (AI is always on for admin). Other
+ * users must have `aiAccess === true` on their user doc — admin grants this
+ * from the Users page. New signups default to `aiAccess: false`.
+ */
+async function listAiEnabledUserIds() {
+  const snap = await db.collection("users").get();
+  const uids = new Set([ADMIN_UID]);
+  snap.forEach((d) => {
+    if (d.id === ADMIN_UID) return;
+    if (d.data()?.aiAccess === true) uids.add(d.id);
+  });
+  return Array.from(uids);
 }
 
 /**
@@ -1469,6 +1518,22 @@ Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
 async function scoreNewJobsForUser(userId, newJobs) {
   if (!newJobs || newJobs.length === 0) return;
 
+  const isAdmin = userId === ADMIN_UID;
+
+  // Permission gate — non-admin users must have aiAccess === true on their user doc.
+  if (!isAdmin) {
+    try {
+      const userDoc = await db.collection("users").doc(userId).get();
+      if (!userDoc.exists || userDoc.data()?.aiAccess !== true) {
+        logger.info(`scoreNewJobsForUser: aiAccess not granted for userId=${userId}, skipping`);
+        return;
+      }
+    } catch (err) {
+      logger.warn(`scoreNewJobsForUser: could not read user doc for userId=${userId}: ${err?.message}`);
+      return;
+    }
+  }
+
   // Check user's AI scoring toggle — stored at users/{uid}/settings/preferences
   try {
     const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
@@ -1515,9 +1580,10 @@ async function scoreNewJobsForUser(userId, newJobs) {
   }
 
   // ─── OPTIMIZATION 1: Batch pre-read all job docs in ONE Firestore round-trip ──
-  // Replaces N individual reads that burned concurrency slots doing nothing useful.
-  // Gets: (a) already-scored check, (b) job titles — all before any tasks start.
-  const jobsCol = db.collection("users").doc(userId).collection("jobs");
+  // Jobs ALWAYS live under the admin user (shared corpus). Scores are written
+  // per-user to users/{userId}/jobScores/*.
+  const sharedJobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
+  const userScoresCol = db.collection("users").doc(userId).collection("jobScores");
 
   // Deduplicate before batch read to prevent db.getAll duplicate ref errors
   const uniqueJobsMap = new Map();
@@ -1525,25 +1591,48 @@ async function scoreNewJobsForUser(userId, newJobs) {
     uniqueJobsMap.set(job.jobDocId, job);
   }
   const uniqueNewJobs = Array.from(uniqueJobsMap.values());
-  const docRefs = uniqueNewJobs.map((job) => jobsCol.doc(job.jobDocId));
+  const jobRefs = uniqueNewJobs.map((job) => sharedJobsCol.doc(job.jobDocId));
 
   // db.getAll() uses JS spread — chunk to 300 to guard against call stack overflow on large syncs
   const CHUNK = 300;
-  const snapshots = [];
-  for (let i = 0; i < docRefs.length; i += CHUNK) {
-    const batch = await db.getAll(...docRefs.slice(i, i + CHUNK));
-    snapshots.push(...batch);
+  const jobSnapshots = [];
+  for (let i = 0; i < jobRefs.length; i += CHUNK) {
+    const batch = await db.getAll(...jobRefs.slice(i, i + CHUNK));
+    jobSnapshots.push(...batch);
+  }
+
+  // For non-admin: batch-read this user's existing score docs to detect
+  // already-scored jobs. (Admin's "already scored" check uses the legacy
+  // relevanceScore field on the job doc itself.)
+  const alreadyScoredIds = new Set();
+  if (!isAdmin) {
+    const scoreRefs = uniqueNewJobs.map((job) => userScoresCol.doc(job.jobDocId));
+    const scoreSnaps = [];
+    for (let i = 0; i < scoreRefs.length; i += CHUNK) {
+      const batch = await db.getAll(...scoreRefs.slice(i, i + CHUNK));
+      scoreSnaps.push(...batch);
+    }
+    scoreSnaps.forEach((s) => {
+      if (s.exists && typeof s.data()?.score === "number" && s.data().score >= 0) {
+        alreadyScoredIds.add(s.id);
+      }
+    });
   }
 
   const titleMap = {};
   const unscoredJobs = [];
 
-  for (let i = 0; i < snapshots.length; i++) {
-    const snap = snapshots[i];
+  for (let i = 0; i < jobSnapshots.length; i++) {
+    const snap = jobSnapshots[i];
     const job = uniqueNewJobs[i];
-    const existingScore = snap.exists ? snap.data()?.relevanceScore : null;
-    if (existingScore !== null && existingScore >= 0) {
-      logger.info(`scoreNewJobsForUser: ${job.jobDocId} already has valid score (${existingScore}), skipping`);
+
+    if (isAdmin) {
+      const existingScore = snap.exists ? snap.data()?.relevanceScore : null;
+      if (existingScore !== null && existingScore >= 0) {
+        logger.info(`scoreNewJobsForUser: ${job.jobDocId} already has valid score (${existingScore}), skipping`);
+        continue;
+      }
+    } else if (alreadyScoredIds.has(job.jobDocId)) {
       continue;
     }
 
@@ -1554,16 +1643,20 @@ async function scoreNewJobsForUser(userId, newJobs) {
   }
 
   if (unscoredJobs.length === 0) {
-    logger.info(`scoreNewJobsForUser: all ${newJobs.length} jobs already scored, nothing to do`);
+    logger.info(`scoreNewJobsForUser: all ${newJobs.length} jobs already scored for ${userId}, nothing to do`);
     return;
   }
 
-  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting`);
+  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting for userId=${userId}`);
 
   // Claude Tier 1: 50K TPM — use concurrency of 1 to avoid rate limits
   const concurrency = 1;
   const scoringLimiter = pLimit(concurrency);
   const scoredAt = admin.firestore.Timestamp.now();
+
+  // Accumulate results across tasks so we can do a single per-user score
+  // write at the end (one batched aggregation rebuild instead of N).
+  const computedResults = []; // [{ jobId, score, reason }]
 
   const scoringTasks = unscoredJobs.map((job) =>
     scoringLimiter(async () => {
@@ -1591,10 +1684,13 @@ async function scoreNewJobsForUser(userId, newJobs) {
         }
         if (!description || description.length < 50) {
           logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, writing fallback score`);
-          await jobsCol.doc(job.jobDocId).set(
-            { relevanceScore: -1, scoreReason: "Could not fetch Job Description directly.", scoredAt },
-            { merge: true }
-          );
+          if (isAdmin) {
+            await sharedJobsCol.doc(job.jobDocId).set(
+              { relevanceScore: -1, scoreReason: "Could not fetch Job Description directly.", scoredAt },
+              { merge: true }
+            );
+          }
+          computedResults.push({ jobId: job.jobDocId, score: -1, reason: "Could not fetch Job Description directly." });
           return;
         }
         // Trim to 2000 chars — enough context for scoring, fast enough to avoid timeouts
@@ -1634,26 +1730,35 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
         if (!result) {
           logger.warn(`scoreNewJobsForUser: AI returned no score/error for ${job.jobDocId}`);
-          await jobsCol.doc(job.jobDocId).set(
-            { relevanceScore: -1, scoreReason: "AI returned invalid response format or rate limited.", scoredAt },
-            { merge: true }
-          );
+          if (isAdmin) {
+            await sharedJobsCol.doc(job.jobDocId).set(
+              { relevanceScore: -1, scoreReason: "AI returned invalid response format or rate limited.", scoredAt },
+              { merge: true }
+            );
+          }
+          computedResults.push({ jobId: job.jobDocId, score: -1, reason: "AI returned invalid response format or rate limited." });
           return;
         }
 
-        // 3. Write ONLY score + reason (no JD) back to job doc
-        await jobsCol.doc(job.jobDocId).set(
-          { relevanceScore: result.score, scoreReason: result.reason, scoredAt },
-          { merge: true }
-        );
+        // 3. Write ONLY score + reason (no JD) back to job doc (admin only — legacy fallback)
+        if (isAdmin) {
+          await sharedJobsCol.doc(job.jobDocId).set(
+            { relevanceScore: result.score, scoreReason: result.reason, scoredAt },
+            { merge: true }
+          );
+        }
+        computedResults.push({ jobId: job.jobDocId, score: result.score, reason: result.reason });
 
-        logger.info(`Scored ${job.jobDocId}: ${result.score}/100 — ${result.reason}`);
+        logger.info(`Scored ${job.jobDocId} for ${userId}: ${result.score}/100 — ${result.reason}`);
       } catch (err) {
         logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
-        await jobsCol.doc(job.jobDocId).set(
-          { relevanceScore: -1, scoreReason: "AI timeout or processing error.", scoredAt },
-          { merge: true }
-        ).catch(() => { });
+        if (isAdmin) {
+          await sharedJobsCol.doc(job.jobDocId).set(
+            { relevanceScore: -1, scoreReason: "AI timeout or processing error.", scoredAt },
+            { merge: true }
+          ).catch(() => { });
+        }
+        computedResults.push({ jobId: job.jobDocId, score: -1, reason: "AI timeout or processing error." });
       }
     })
   );
@@ -1663,24 +1768,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   // Write scoring status aggregation (frontend listens via onSnapshot)
   try {
-    const scoredResults = [];
-    for (const snap of snapshots) {
-      if (!snap.exists) continue;
-      const d = snap.data();
-      if (typeof d.relevanceScore === "number" && d.relevanceScore >= 0 && d.scoredAt) {
-        scoredResults.push({ id: snap.id, score: d.relevanceScore, reason: d.scoreReason || "" });
-      }
-    }
-    // Re-read the jobs we just scored to get their final scores
-    const justScoredRefs = unscoredJobs.map((j) => jobsCol.doc(j.jobDocId));
-    const justScoredSnaps = [];
-    for (let i = 0; i < justScoredRefs.length; i += CHUNK) {
-      const batch = await db.getAll(...justScoredRefs.slice(i, i + CHUNK));
-      justScoredSnaps.push(...batch);
-    }
-    const recentScores = justScoredSnaps
-      .filter((s) => s.exists && typeof s.data().relevanceScore === "number")
-      .map((s) => ({ id: s.id, score: s.data().relevanceScore, reason: s.data().scoreReason || "" }))
+    const recentScores = computedResults
+      .filter((r) => typeof r.score === "number")
+      .map((r) => ({ id: r.jobId, score: r.score, reason: r.reason || "" }))
       .slice(0, 50);
 
     if (recentScores.length > 0) {
@@ -1690,6 +1780,32 @@ async function scoreNewJobsForUser(userId, newJobs) {
         scoringInProgress: false,
         updatedAt: admin.firestore.Timestamp.now(),
       });
+
+      // Mirror the just-computed scores into the per-user jobScores collection
+      // and refresh /users/{userId}/aggregations/myJobScores. The Jobs page
+      // reads scores from there, NOT from the shared job docs, so each user
+      // (with AI enabled) gets their own personalized view.
+      try {
+        const { writeUserScores } = require("./lib/userJobScores.cjs");
+        await writeUserScores(userId, recentScores.map((s) => ({
+          jobId: s.id,
+          score: s.score,
+          reason: s.reason,
+        })));
+      } catch (err) {
+        logger.warn(`writeUserScores failed for ${userId}: ${err?.message}`);
+      }
+
+      // Refresh recentJobs (shared metadata) so any new jobs appear too.
+      // Only admin owns this doc — non-admin runs never touch admin's data.
+      if (isAdmin) {
+        try {
+          const { rebuildRecentJobs } = require("./lib/recentJobs.cjs");
+          await rebuildRecentJobs(userId);
+        } catch (err) {
+          logger.warn(`recentJobs rebuild after scoring failed: ${err?.message}`);
+        }
+      }
     }
   } catch (err) {
     logger.warn(`scoringStatus aggregation write failed: ${err?.message}`);
@@ -1874,14 +1990,14 @@ exports.askAssistant = onRequest(
                 }
                 case "get_recent_jobs": {
                   const limit = args.limit || 10;
-                  const snap = await db.collection("users").doc(activeUserId).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(limit).get();
+                  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(limit).get();
                   resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
                   break;
                 }
                 case "search_jobs": {
                   const query = args.query.toLowerCase();
                   const limit = args.limit || 5;
-                  const snap = await db.collection("users").doc(activeUserId).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(50).get();
+                  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(50).get();
                   resultData = snap.docs
                     .map(d => ({ id: d.id, ...d.data() }))
                     .filter(j => (j.title && j.title.toLowerCase().includes(query)) || (j.companyName && j.companyName.toLowerCase().includes(query)))
@@ -2199,8 +2315,8 @@ exports.generateCoverLetter = onCall(
         throw new HttpsError("failed-precondition", "Your resume has no parseable text. Please re-upload.");
       }
 
-      // 3. Fetch Job Details
-      const jobSnap = await db.collection("users").doc(uid).collection("jobs").doc(jobId).get();
+      // 3. Fetch Job Details (jobs live in the shared admin corpus)
+      const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
       if (!jobSnap.exists) {
         throw new HttpsError("not-found", "Job not found in database.");
       }

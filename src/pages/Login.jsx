@@ -45,7 +45,7 @@ export default function Login() {
         window.recaptchaVerifier.clear();
         window.recaptchaVerifier = null;
       }
-    } catch (_) {}
+    } catch {}
     // Also remove any leftover reCAPTCHA iframes injected into body
     document.querySelectorAll("iframe[src*='recaptcha']").forEach(el => el.closest("div[style]")?.remove());
   }

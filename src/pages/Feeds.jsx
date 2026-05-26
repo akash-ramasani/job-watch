@@ -140,7 +140,7 @@ function getDomainFromFeed(feed) {
     }
     // Fallback to company name
     return `${(feed.company || "company").toLowerCase().replace(/\s+/g, "")}.com`;
-  } catch (e) {
+  } catch {
     return "google.com";
   }
 }
@@ -182,14 +182,13 @@ const LogoImage = ({ src, alt, company }) => {
 
 export default function Feeds({ user }) {
   const { showToast } = useToast();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
 
   const [company, setCompany] = useState(searchParams.get("company") || "");
   const [url, setUrl] = useState(searchParams.get("url") || "");
   const [feeds, setFeeds] = useState([]);
   const [busyArchiveId, setBusyArchiveId] = useState(null);
   const [busyRunNow, setBusyRunNow] = useState(false);
-  const [lastRunSummary, setLastRunSummary] = useState(null);
 
   const LOGO_KEY = import.meta.env.VITE_LOGO_DEV_KEY || "";
 
@@ -264,7 +263,6 @@ export default function Feeds({ user }) {
 
   async function runSyncNow() {
     setBusyRunNow(true);
-    setLastRunSummary(null);
     try {
       const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
       if (!projectId) {
@@ -285,7 +283,6 @@ export default function Feeds({ user }) {
         showToast(data?.error || "Manual run failed.", "error");
         return;
       }
-      setLastRunSummary(data);
       showToast(`Sync complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
     } catch (e) {
       console.error(e);

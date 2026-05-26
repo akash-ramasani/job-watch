@@ -28,6 +28,28 @@ html, body {
   -ms-overflow-style: none;
 }
 
+/* ── Global app background ──
+   Same shade, intensity, and animation as .hero-gradient at opacity 0.03
+   so every page shares one consistent backdrop. Fixed so it doesn't scroll. */
+body {
+  background-color: #ffffff;
+}
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(-45deg, #4f46e5, #7c3aed, #6366f1, #818cf8);
+  background-size: 300% 300%;
+  animation: gradient-shift 8s ease infinite;
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 0;
+}
+#root {
+  position: relative;
+  z-index: 1;
+}
+
 /* 1. Root & Layout Fixes: Essential for the split-screen login/signup */
 html, 
 body, 
@@ -108,11 +130,28 @@ a[role="button"]:active,
 
 /* 4. Interactive Buttons: Optimized for the United States tech market look */
 .btn-primary {
-  @apply flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition-all hover:bg-indigo-700 hover:shadow-lg active:scale-[0.98] disabled:opacity-50;
+  @apply flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition-all duration-200 ease-out hover:bg-indigo-700 hover:shadow-lg hover:shadow-indigo-300 hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/30 disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-md;
 }
 
 .btn-secondary {
-  @apply rounded-lg bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 transition-all active:scale-[0.98];
+  @apply rounded-lg bg-white px-4 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200 ease-out active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-500/20;
+}
+
+/* 4b. Micro-interaction helpers — apply to any custom button/link */
+.btn-lift {
+  @apply transition-all duration-200 ease-out hover:-translate-y-0.5 hover:shadow-md active:translate-y-0 active:scale-[0.98];
+}
+
+.btn-pop {
+  @apply transition-transform duration-200 ease-out hover:scale-105 active:scale-95;
+}
+
+.icon-pop {
+  @apply transition-transform duration-200 ease-out group-hover:scale-110;
+}
+
+.icon-slide {
+  @apply transition-transform duration-200 ease-out group-hover:translate-x-0.5;
 }
 
 /* 5. Custom Utilities: For horizontal scrollable company filters */

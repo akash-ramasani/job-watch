@@ -1,21 +1,29 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { auth, db } from "../firebase";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import { generateAndUploadAvatar } from "../utils/avatar.js";
 
 export default function Signup() {
+  const [searchParams] = useSearchParams();
+  const prefilledInvite = (searchParams.get("invite") || "").trim().toUpperCase();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [inviteCode, setInviteCode] = useState("");
+  const [inviteCode, setInviteCode] = useState(prefilledInvite);
   const [err, setErr] = useState("");
 
   const { showToast } = useToast();
 
+  // Keep field in sync if user lands with the param then changes the URL
+  useEffect(() => {
+    if (prefilledInvite) setInviteCode(prefilledInvite);
+  }, [prefilledInvite]);
 
   async function onSubmit(e) {
     e.preventDefault();
@@ -33,18 +41,18 @@ export default function Signup() {
       const inviteData = inviteSnap.data();
 
       if (inviteData.used) {
-        throw new Error("This invite code has already been used.");
+        throw new Error("This invite link has already been used.");
       }
 
-      // Check 12-hour expiry
+      // Check 24-hour expiry
       if (inviteData.expiresAt) {
         const expiresAt = inviteData.expiresAt.toDate ? inviteData.expiresAt.toDate() : new Date(inviteData.expiresAt);
         if (new Date() > expiresAt) {
-          throw new Error("This invite code has expired (valid for 12 hours).");
+          throw new Error("This invite link has expired.");
         }
       }
 
-      // Check email matches
+      // Legacy invites may still carry an email binding — honor it if present.
       if (inviteData.email && inviteData.email.toLowerCase() !== email.trim().toLowerCase()) {
         throw new Error("This invite code is linked to a different email address.");
       }
@@ -81,6 +89,13 @@ export default function Signup() {
         trialDays,
         trialEndsAt,
       }, { merge: true });
+
+      // Generate + upload avatar to Storage (best-effort, non-blocking for UX).
+      try {
+        await generateAndUploadAvatar(cred.user.uid);
+      } catch (avatarErr) {
+        console.warn("[signup] avatar generation failed:", avatarErr?.message);
+      }
 
       showToast("Account created successfully!", "success");
     } catch (e2) {
@@ -178,11 +193,15 @@ export default function Signup() {
                   <input
                     type="text"
                     required
+                    readOnly={!!prefilledInvite}
                     value={inviteCode}
                     onChange={(e) => setInviteCode(e.target.value)}
-                    className="input-standard"
+                    className={`input-standard ${prefilledInvite ? "bg-gray-50 text-gray-500 cursor-not-allowed" : ""}`}
                     placeholder="Enter your unique invite code"
                   />
+                  {prefilledInvite && (
+                    <p className="mt-1.5 text-xs text-indigo-600">Invite link detected — code applied automatically.</p>
+                  )}
                 </div>
               </div>
 

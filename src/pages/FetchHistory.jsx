@@ -110,11 +110,6 @@ export default function FetchHistory({ user }) {
     [chartData]
   );
 
-  const totalScanned = useMemo(
-    () => chartData.reduce((sum, d) => sum + d.scanned, 0),
-    [chartData]
-  );
-
   const renderRunItem = (r) => {
     const isOpen = openId === r.id;
 

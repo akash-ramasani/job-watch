@@ -80,10 +80,22 @@ async function rebuildAggregations(userId, dbInstance) {
     updatedAt: now,
   });
 
+  // Also refresh the per-jobs-page aggregation so the frontend can keep doing
+  // single-read loads even if a daily reconciliation runs between syncs.
+  let recentCount = 0;
+  try {
+    const { rebuildRecentJobs } = require("./recentJobs.cjs");
+    recentCount = await rebuildRecentJobs(userId, db);
+  } catch (err) {
+    // Non-fatal: the next sync will rebuild it.
+    console.warn(`rebuildRecentJobs failed for ${userId}: ${err && err.message}`);
+  }
+
   return {
     totalJobs,
     cities: Object.keys(clusters).length,
     companies: Object.keys(companies).length,
+    recentJobs: recentCount,
   };
 }
 
