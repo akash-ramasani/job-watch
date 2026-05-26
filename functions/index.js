@@ -1,12 +1,12 @@
 /**
  * functions/index.js (Firebase Cloud Functions Gen2, Node 20)
  *
- * ✅ Hourly scheduler:
- * - Runs every 60 minutes
+ * ✅ 15-minute scheduler:
+ * - Runs every 15 minutes
  * - Reads active feeds
  * - Fetches jobs
  * - Filters by locations (US cities/states + Remote-US strings)
- * - ONLY writes jobs updated within last 65 minutes
+ * - ONLY writes jobs updated within last 20 minutes
  * - Sets TTL field: expireAt = sourceUpdatedTs + 3 days
  *
  * ✅ Manual HTTP trigger:
@@ -58,7 +58,7 @@ const storageBucket = admin.storage().bucket("greenhouse-jobs-scrapper.firebases
 const REGION = "us-central1";
 const FEED_CONCURRENCY = 15;
 
-const RECENT_WINDOW_MINUTES = 65;
+const RECENT_WINDOW_MINUTES = 20;
 const TTL_DAYS = 3;
 
 /**
@@ -428,13 +428,13 @@ const NON_US_LOCATION_RE = /\b(afghanistan|albania|algeria|angola|argentina|arme
 
 /**
  * =====================================================================================
- * 1) SCHEDULED: Every 1 hour sync
+ * 1) SCHEDULED: Every 15 minutes sync
  * =====================================================================================
  */
 exports.syncRecentJobsHourly = onSchedule(
   {
     region: REGION,
-    schedule: "every 60 minutes",
+    schedule: "every 15 minutes",
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
     memory: "1GiB",

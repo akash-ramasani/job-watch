@@ -1,6 +1,8 @@
 import React, { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
+import HeroUSMap from "../components/HeroUSMap.jsx";
+import SharedMagneticButton from "../components/MagneticButton.jsx";
 import {
   AreaChart,
   Area,
@@ -151,10 +153,10 @@ const fadeUp = {
 };
 
 const STATS = [
-  { value: "33K+", label: "Jobs Tracked" },
-  { value: "650+", label: "Companies" },
-  { value: "99.9%", label: "Uptime" },
-  { value: "<1min", label: "Alert Speed" },
+  { value: "33K+", label: "Job Postings Monitored" },
+  { value: "650+", label: "Companies Tracked" },
+  { value: "99.9%", label: "Monitor Uptime" },
+  { value: "47 sec", label: "Median Alert Time" },
 ];
 
 const FEATURED_COMPANIES = [
@@ -248,34 +250,8 @@ function DemoTooltip({ active, payload, label }) {
 
 /* ── Interactive Components ───────────────────────────────────────── */
 
-function MagneticButton({ children, className = "" }) {
-  const ref = useRef(null);
-  const [position, setPosition] = useState({ x: 0, y: 0 });
-
-  const handleMouse = (e) => {
-    const { clientX, clientY } = e;
-    const { height, width, left, top } = ref.current.getBoundingClientRect();
-    const middleX = clientX - (left + width / 2);
-    const middleY = clientY - (top + height / 2);
-    setPosition({ x: middleX * 0.15, y: middleY * 0.15 });
-  };
-
-  const reset = () => {
-    setPosition({ x: 0, y: 0 });
-  };
-
-  return (
-    <motion.div
-      ref={ref}
-      onMouseMove={handleMouse}
-      onMouseLeave={reset}
-      animate={{ x: position.x, y: position.y }}
-      transition={{ type: "spring", stiffness: 150, damping: 15, mass: 0.1 }}
-      className={`inline-block ${className}`}
-    >
-      {children}
-    </motion.div>
-  );
+function MagneticButton(props) {
+  return <SharedMagneticButton {...props} />;
 }
 
 /* ── Component ─────────────────────────────────────────────── */
@@ -285,8 +261,7 @@ export default function LandingPage() {
     <div>
 
       {/* ═══ PUBLIC NAVBAR ═══ */}
-      <nav className="sticky top-0 z-50 w-full bg-white/80 backdrop-blur-md">
-        <div className="absolute inset-0 hero-gradient opacity-[0.03] -z-10" />
+      <nav className="sticky top-0 z-50 w-full bg-transparent backdrop-blur-md backdrop-saturate-150">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
@@ -323,21 +298,332 @@ export default function LandingPage() {
       </nav>
 
       {/* ═══ HERO ═══ */}
-      <section className="relative overflow-hidden">
+      <section className="relative overflow-hidden -mt-16 pt-16 min-h-screen flex items-center">
         <div className="absolute inset-0 hero-gradient opacity-[0.03]" />
         <div className="pointer-events-none absolute -right-40 top-0 h-[500px] w-[500px] rounded-full bg-indigo-100/50 blur-3xl" />
         <div className="pointer-events-none absolute -left-40 bottom-0 h-[400px] w-[400px] rounded-full bg-violet-100/50 blur-3xl" />
 
-        <div className="relative mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-24 sm:py-36">
+        {/* Full-bleed animated US map backdrop */}
+        <div className="pointer-events-none absolute inset-0 z-0 opacity-90">
+          <HeroUSMap />
+        </div>
+
+        {/* Floating product-proof cards over the map */}
+        <motion.div
+          initial={{ opacity: 0, x: -20, y: 10 }}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          transition={{ delay: 0.9, duration: 0.6 }}
+          className="hero-card-job hidden lg:block absolute z-20 left-8 top-[18%] w-[280px] rounded-2xl bg-white/80 backdrop-blur-xl border border-white/60 shadow-2xl shadow-indigo-500/10 p-4 overflow-hidden"
+        >
+          {/* shimmer sweep */}
+          <div className="hero-card-shimmer" />
+          <div className="flex items-center gap-2 mb-2 relative">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+            </span>
+            <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 hero-card-flash">New job detected</span>
+          </div>
+          <div className="text-sm font-semibold text-gray-900 relative">
+            <span className="hero-card-typing">Software Engineer, Infrastructure</span>
+          </div>
+          <div className="text-xs text-gray-500 mt-0.5 relative">Netflix · Remote</div>
+          <div className="text-[11px] text-gray-400 mt-1 relative">
+            Posted <span className="hero-card-count-up">42</span> seconds ago
+          </div>
+          <div className="mt-3 flex flex-wrap gap-1 relative">
+            {["backend", "distributed systems", "remote"].map((t, i) => (
+              <span
+                key={t}
+                className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hero-card-tag-in"
+                style={{ animationDelay: `${1.2 + i * 0.15}s` }}
+              >
+                {t}
+              </span>
+            ))}
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, x: 20, y: 10 }}
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          transition={{ delay: 1.15, duration: 0.6 }}
+          className="hero-card-alert hidden lg:block absolute z-20 right-8 top-[28%] w-[240px]"
+        >
+          <div className="hero-flip">
+            <div className="hero-flip-inner">
+              {/* FRONT — Found job */}
+              <div className="hero-flip-face hero-flip-front rounded-2xl bg-white/80 backdrop-blur-xl border border-white/60 shadow-2xl shadow-indigo-500/10 p-4 overflow-hidden">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Found job</span>
+                </div>
+                <div className="text-sm font-semibold text-gray-900">Senior ML Engineer</div>
+                <div className="text-xs text-gray-500 mt-0.5">Stripe · New York</div>
+                <div className="text-[11px] text-gray-400 mt-1">Matched 4 of your filters</div>
+                <div className="mt-2 h-1 rounded-full bg-gray-100 overflow-hidden">
+                  <div className="hero-match-bar h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500" />
+                </div>
+              </div>
+
+              {/* BACK — Alert sent */}
+              <div className="hero-flip-face hero-flip-back rounded-2xl bg-white/80 backdrop-blur-xl border border-white/60 shadow-2xl shadow-indigo-500/10 p-4 overflow-hidden">
+                <div className="hero-card-progress" />
+                <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+                  <span className="hero-seq hero-seq-1">Email</span>
+                  <span className="hero-seq hero-seq-2 text-gray-300">+</span>
+                  <span className="hero-seq hero-seq-3">Slack</span>
+                </div>
+                <div className="flex items-center gap-2 mt-2 hero-seq hero-seq-4">
+                  <svg className="h-4 w-4 text-emerald-600 hero-card-check" fill="none" viewBox="0 0 24 24" strokeWidth={2.75} stroke="currentColor">
+                    <path className="hero-card-check-path" strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" pathLength="1" />
+                  </svg>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">Alert sent</span>
+                </div>
+                <div className="text-[11px] text-gray-500 mt-1.5 hero-seq hero-seq-5">
+                  Delivery time: <span className="font-semibold text-gray-700 hero-card-timer">18 sec</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+
+        <style>{`
+          /* ── Card 1: New job detected ─────────────────────── */
+          .hero-card-job {
+            animation: hero-card-float-a 7s ease-in-out infinite;
+          }
+          @keyframes hero-card-float-a {
+            0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+            50%      { transform: translate3d(0, -8px, 0) rotate(-0.4deg); }
+          }
+          .hero-card-shimmer {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(115deg, transparent 30%, rgba(99,102,241,0.10) 50%, transparent 70%);
+            transform: translateX(-100%);
+            animation: hero-shimmer 4.5s ease-in-out infinite;
+            pointer-events: none;
+          }
+          @keyframes hero-shimmer {
+            0%   { transform: translateX(-100%); }
+            55%  { transform: translateX(100%); }
+            100% { transform: translateX(100%); }
+          }
+          .hero-card-flash {
+            animation: hero-flash 3s ease-in-out infinite;
+          }
+          @keyframes hero-flash {
+            0%, 100% { color: #059669; text-shadow: 0 0 0 rgba(16,185,129,0); }
+            50%      { color: #047857; text-shadow: 0 0 12px rgba(16,185,129,0.45); }
+          }
+          .hero-card-typing {
+            display: inline-block;
+            white-space: nowrap;
+            overflow: hidden;
+            border-right: 1.5px solid transparent;
+            animation: hero-typing 3.5s steps(34, end) 0.6s 1 normal both,
+                       hero-caret 0.8s steps(1) infinite;
+            max-width: 100%;
+          }
+          @keyframes hero-typing {
+            from { width: 0; }
+            to   { width: 100%; }
+          }
+          @keyframes hero-caret {
+            0%, 50%   { border-color: #4f46e5; }
+            51%, 100% { border-color: transparent; }
+          }
+          .hero-card-tag-in {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(6px) scale(0.9);
+            animation: hero-tag-in 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+          }
+          @keyframes hero-tag-in {
+            to { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          .hero-card-count-up::after {
+            content: "";
+            display: inline-block;
+            width: 0;
+          }
+
+          /* ── Card 2: Alert sent ───────────────────────────── */
+          .hero-card-alert {
+            animation: hero-card-float-b 8s ease-in-out infinite;
+            animation-delay: -2s;
+          }
+          @keyframes hero-card-float-b {
+            0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg); }
+            50%      { transform: translate3d(0, -10px, 0) rotate(0.5deg); }
+          }
+
+          /* Flip card mechanics */
+          .hero-flip {
+            perspective: 1200px;
+            width: 100%;
+          }
+          .hero-flip-inner {
+            position: relative;
+            width: 100%;
+            min-height: 130px;
+            transform-style: preserve-3d;
+            animation: hero-flip-loop 8s ease-in-out infinite;
+          }
+          @keyframes hero-flip-loop {
+            0%, 38%   { transform: rotateY(0deg); }
+            50%, 88%  { transform: rotateY(180deg); }
+            100%      { transform: rotateY(360deg); }
+          }
+          .hero-flip-face {
+            position: absolute;
+            inset: 0;
+            -webkit-backface-visibility: hidden;
+                    backface-visibility: hidden;
+          }
+          .hero-flip-front {
+            transform: rotateY(0deg);
+          }
+          .hero-flip-back {
+            transform: rotateY(180deg);
+          }
+          .hero-match-bar {
+            width: 0%;
+            animation: hero-match-fill 8s ease-in-out infinite;
+          }
+          @keyframes hero-match-fill {
+            0%       { width: 0%; }
+            25%, 38% { width: 85%; }
+            50%, 100%{ width: 85%; }
+          }
+          .hero-card-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 2px;
+            width: 100%;
+            background: linear-gradient(90deg, #6366f1, #8b5cf6, #6366f1);
+            background-size: 200% 100%;
+            transform-origin: left;
+            animation: hero-progress-fill 8s ease-in-out infinite,
+                       hero-progress-shine 2s linear infinite;
+          }
+          @keyframes hero-progress-fill {
+            0%, 50%   { transform: scaleX(0); opacity: 0;   }
+            52%       { transform: scaleX(0); opacity: 0.95; }
+            66%       { transform: scaleX(1); opacity: 0.95; }
+            72%       { transform: scaleX(1); opacity: 0;   }
+            100%      { transform: scaleX(0); opacity: 0;   }
+          }
+          @keyframes hero-progress-shine {
+            0%   { background-position: 0% 50%; }
+            100% { background-position: 200% 50%; }
+          }
+          .hero-card-check-path {
+            stroke-dasharray: 1;
+            stroke-dashoffset: 1;
+            animation: hero-check-draw 8s ease-in-out infinite;
+          }
+          @keyframes hero-check-draw {
+            0%, 78%   { stroke-dashoffset: 1; }
+            82%       { stroke-dashoffset: 0; }
+            88%, 100% { stroke-dashoffset: 0; }
+          }
+          .hero-card-check {
+            animation: hero-check-pop 8s ease-in-out infinite;
+            transform-origin: center;
+          }
+          @keyframes hero-check-pop {
+            0%, 78%   { transform: scale(0.55); }
+            82%       { transform: scale(1.3);  }
+            86%, 100% { transform: scale(1);    }
+          }
+
+          /* Sequential reveal: each item appears one after another while the
+             back face is visible (50%–88% of the 8s flip loop). */
+          .hero-seq {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(4px) scale(0.9);
+            animation: hero-seq-in 8s ease-in-out infinite;
+          }
+          @keyframes hero-seq-in {
+            0%, var(--seq-start, 0%) { opacity: 0; transform: translateY(4px) scale(0.9); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          /* Per-item timelines (start hidden, pop in at staggered % of 8s) */
+          .hero-seq-1 { animation: hero-seq-1 8s ease-in-out infinite; }
+          .hero-seq-2 { animation: hero-seq-2 8s ease-in-out infinite; }
+          .hero-seq-3 { animation: hero-seq-3 8s ease-in-out infinite; }
+          .hero-seq-4 { animation: hero-seq-4 8s ease-in-out infinite; display: flex !important; }
+          .hero-seq-5 { animation: hero-seq-5 8s ease-in-out infinite; display: block !important; }
+
+          @keyframes hero-seq-1 {
+            0%, 62%   { opacity: 0; transform: translateY(4px) scale(0.85); }
+            68%       { opacity: 1; transform: translateY(0)   scale(1.1);  }
+            72%, 100% { opacity: 1; transform: translateY(0)   scale(1);    }
+          }
+          @keyframes hero-seq-2 {
+            0%, 68%   { opacity: 0; transform: translateY(4px) scale(0.85); }
+            73%       { opacity: 1; transform: translateY(0)   scale(1.1);  }
+            76%, 100% { opacity: 1; transform: translateY(0)   scale(1);    }
+          }
+          @keyframes hero-seq-3 {
+            0%, 73%   { opacity: 0; transform: translateY(4px) scale(0.85); }
+            78%       { opacity: 1; transform: translateY(0)   scale(1.1);  }
+            81%, 100% { opacity: 1; transform: translateY(0)   scale(1);    }
+          }
+          @keyframes hero-seq-4 {
+            0%, 78%   { opacity: 0; transform: translateY(4px) scale(0.9); }
+            83%       { opacity: 1; transform: translateY(0)   scale(1.05);}
+            86%, 100% { opacity: 1; transform: translateY(0)   scale(1);   }
+          }
+          @keyframes hero-seq-5 {
+            0%, 84%   { opacity: 0; transform: translateY(4px) scale(0.95); }
+            88%       { opacity: 1; transform: translateY(0)   scale(1);    }
+            100%      { opacity: 1; transform: translateY(0)   scale(1);    }
+          }
+          .hero-card-timer {
+            background: linear-gradient(90deg, #4338ca, #7c3aed, #4338ca);
+            background-size: 200% 100%;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: hero-timer-shine 3s linear infinite;
+          }
+          @keyframes hero-timer-shine {
+            0%   { background-position: 0% 50%; }
+            100% { background-position: 200% 50%; }
+          }
+
+          @media (prefers-reduced-motion: reduce) {
+            .hero-card-job, .hero-card-alert, .hero-card-shimmer, .hero-card-flash,
+            .hero-card-typing, .hero-card-tag-in, .hero-card-progress,
+            .hero-card-check-path, .hero-card-check, .hero-seq,
+            .hero-seq-1, .hero-seq-2, .hero-seq-3, .hero-seq-4, .hero-seq-5,
+            .hero-card-timer, .hero-flip-inner, .hero-match-bar {
+              animation: none !important;
+            }
+            .hero-card-typing { width: 100% !important; border-right: 0 !important; }
+            .hero-card-tag-in, .hero-seq { opacity: 1 !important; transform: none !important; }
+            .hero-match-bar { width: 85% !important; }
+          }
+        `}</style>
+
+        <div className="relative z-10 w-full mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-12">
           <div className="text-center max-w-3xl mx-auto">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.6 }}
             >
-              <span className="inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6">
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/70 backdrop-blur-md border border-indigo-100 px-4 py-1.5 text-xs font-bold text-indigo-700 uppercase tracking-widest mb-6 shadow-sm">
                 <span className="inline-flex h-2 w-2 rounded-full bg-indigo-500 animate-pulse" />
-                Now tracking Greenhouse, AshbyHQ, Eightfold.ai & Netflix
+                Tracking Greenhouse, Ashby, Lever, Workday, Eightfold & 650+ career pages
               </span>
             </motion.div>
 
@@ -347,59 +633,159 @@ export default function LandingPage() {
               transition={{ delay: 0.15, duration: 0.6 }}
               className="text-4xl sm:text-6xl font-bold tracking-tight text-gray-900 leading-[1.1]"
             >
-              Never miss a
-              <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent"> job opportunity </span>
+              Never miss a{" "}
+              <span className="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">job opportunity</span>{" "}
               again
             </motion.h1>
 
             <motion.p
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3, duration: 0.6 }}
-              className="mt-6 text-lg sm:text-xl text-gray-500 leading-relaxed max-w-2xl mx-auto"
+              transition={{ delay: 0.25, duration: 0.6 }}
+              className="mt-4 text-sm sm:text-base font-medium text-indigo-600/90"
             >
-              JobWatch monitors company job boards in real time and notifies you the instant new positions are posted. Stop refreshing career pages — start applying faster.
+              Apply before the LinkedIn crowd finds it.
+            </motion.p>
+
+            <motion.p
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.35, duration: 0.6 }}
+              className="mt-5 text-lg sm:text-xl text-gray-600 leading-relaxed max-w-2xl mx-auto"
+            >
+              Track Greenhouse, Ashby, Lever, Workday, Eightfold, and company career pages automatically. Get notified within seconds when new roles match your search.
             </motion.p>
 
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.45, duration: 0.6 }}
-              className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4"
+              transition={{ delay: 0.5, duration: 0.6 }}
+              className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4"
             >
               <MagneticButton className="w-full sm:w-auto">
                 <Link
                   to="/signup"
                   className="block w-full text-center rounded-xl bg-indigo-600 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700 hover:shadow-xl hover:shadow-indigo-300 transition-all"
                 >
-                  Start Tracking for Free →
+                  Track My First Company Free →
                 </Link>
               </MagneticButton>
               <MagneticButton className="w-full sm:w-auto">
                 <a
-                  href="#features"
-                  className="block w-full text-center rounded-xl border border-gray-200 bg-white px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50 transition-all"
+                  href="#how-it-works"
+                  className="block w-full text-center rounded-xl border border-gray-200 bg-white/80 backdrop-blur-sm px-8 py-3.5 text-sm font-bold text-gray-700 shadow-sm hover:bg-white transition-all"
                 >
                   See How It Works
                 </a>
               </MagneticButton>
             </motion.div>
+
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.65, duration: 0.6 }}
+              className="mt-4 text-xs text-gray-500"
+            >
+              No credit card required · Set up in under 2 minutes · Email, Slack, Discord & SMS alerts
+            </motion.p>
+
+            {/* Mini testimonial */}
+            <motion.figure
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.8, duration: 0.6 }}
+              className="mt-8 mx-auto max-w-xl rounded-2xl bg-white/60 backdrop-blur-md border border-white/60 px-5 py-3 shadow-sm"
+            >
+              <blockquote className="text-sm text-gray-700 italic">
+                “I found a role 20 minutes after it was posted and applied before it hit LinkedIn.”
+              </blockquote>
+              <figcaption className="mt-1 text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
+                — Early user
+              </figcaption>
+            </motion.figure>
           </div>
 
           {/* Stats */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6, duration: 0.6 }}
-            className="mt-20 grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-2xl mx-auto"
+            transition={{ delay: 0.95, duration: 0.6 }}
+            className="mt-10 grid grid-cols-2 sm:grid-cols-4 gap-6 max-w-3xl mx-auto"
           >
             {STATS.map((s) => (
               <div key={s.label} className="text-center">
                 <div className="text-2xl sm:text-3xl font-bold text-gray-900">{s.value}</div>
-                <div className="mt-1 text-xs font-semibold text-gray-400 uppercase tracking-widest">{s.label}</div>
+                <div className="mt-1 text-[10px] sm:text-xs font-semibold text-gray-400 uppercase tracking-widest">{s.label}</div>
               </div>
             ))}
           </motion.div>
+        </div>
+      </section>
+
+      {/* ═══ HOW IT WORKS (3-step strip) ═══ */}
+      <section id="how-it-works" className="relative py-20 bg-white border-y border-gray-100">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center mb-12">
+            <h2 className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600 mb-3">
+              How It Works
+            </h2>
+            <p className="text-3xl sm:text-4xl font-bold text-gray-900 tracking-tight">
+              From signup to first alert in under 2 minutes
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-4 relative">
+            {/* connector line */}
+            <div className="hidden md:block absolute top-8 left-[16%] right-[16%] h-px bg-gradient-to-r from-transparent via-indigo-200 to-transparent" />
+
+            {[
+              {
+                step: "1",
+                title: "Add companies",
+                desc: "Paste career page URLs or choose from 650+ tracked companies.",
+                icon: (
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                  </svg>
+                ),
+              },
+              {
+                step: "2",
+                title: "Set role filters",
+                desc: "Keywords, locations, remote, seniority, salary, or department.",
+                icon: (
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+                  </svg>
+                ),
+              },
+              {
+                step: "3",
+                title: "Get instant alerts",
+                desc: "Email, Slack, Discord, SMS, or webhook notifications.",
+                icon: (
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
+                  </svg>
+                ),
+              },
+            ].map((s) => (
+              <div key={s.step} className="relative text-center md:text-left">
+                <div className="mx-auto md:mx-0 mb-5 relative h-16 w-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+                  {s.icon}
+                  <span className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-white text-indigo-600 text-xs font-black flex items-center justify-center border border-indigo-100 shadow-sm">
+                    {s.step}
+                  </span>
+                </div>
+                <h3 className="text-lg font-bold text-gray-900">{s.title}</h3>
+                <p className="mt-2 text-sm text-gray-500 leading-relaxed max-w-xs mx-auto md:mx-0">{s.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-12 text-center text-sm text-gray-500 italic">
+            The best roles often get hundreds of applicants before they appear on job boards.
+          </p>
         </div>
       </section>
 

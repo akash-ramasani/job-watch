@@ -12,6 +12,22 @@
   color-scheme: light;
 }
 
+/* Hide scrollbars globally while preserving scroll behaviour.            */
+/* Chrome / Safari / Edge (WebKit / Blink):                              */
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+/* Firefox: */
+* {
+  scrollbar-width: none;
+}
+/* Legacy IE / Edge: */
+html, body {
+  -ms-overflow-style: none;
+}
+
 /* 1. Root & Layout Fixes: Essential for the split-screen login/signup */
 html, 
 body, 
@@ -24,6 +40,60 @@ body {
   font-family: var(--font-sans);
   @apply bg-white text-gray-900 antialiased;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* Global springy button animation — gives every button + link-styled-as-button
+   the same lift / scale / smoothing feel as the hero CTAs.  Honors
+   prefers-reduced-motion and skips disabled controls.                       */
+button,
+a[role="button"],
+[type="button"],
+[type="submit"],
+[type="reset"] {
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.25s ease-out,
+    background-color 0.2s ease-out,
+    color 0.2s ease-out,
+    border-color 0.2s ease-out,
+    opacity 0.2s ease-out;
+  will-change: transform;
+}
+button:hover:not(:disabled):not([aria-disabled="true"]),
+a[role="button"]:hover,
+[type="button"]:hover:not(:disabled),
+[type="submit"]:hover:not(:disabled),
+[type="reset"]:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+}
+button:active:not(:disabled):not([aria-disabled="true"]),
+a[role="button"]:active,
+[type="button"]:active:not(:disabled),
+[type="submit"]:active:not(:disabled),
+[type="reset"]:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 0.08s;
+}
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a[role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"] {
+    transition: none;
+  }
+  button:hover,
+  a[role="button"]:hover,
+  [type="button"]:hover,
+  [type="submit"]:hover,
+  [type="reset"]:hover,
+  button:active,
+  a[role="button"]:active,
+  [type="button"]:active,
+  [type="submit"]:active,
+  [type="reset"]:active {
+    transform: none;
+  }
 }
 
 /* 2. Descriptive Grid: Used for Profile and Dashboard sections */

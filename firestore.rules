@@ -8,6 +8,12 @@ service cloud.firestore {
     match /users/{userId} {
       allow read, write: if request.auth != null && (request.auth.uid == userId || request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
       
+      // Public read for the admin's mapClusters aggregation only — used by the
+      // landing-page hero map. Contains only aggregated city/lat/lng/count data.
+      match /aggregations/mapClusters {
+        allow read: if userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      }
+
       // 2. Nested Collections (feeds, companies, fetchRuns)
       // Standard rules for sub-collections inside a user document
       match /{allSubcollections=**} {

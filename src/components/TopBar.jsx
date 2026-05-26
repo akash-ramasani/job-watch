@@ -16,71 +16,71 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
   };
 
   return (
-    <nav className="sticky top-0 z-50 w-full border-b border-gray-200 bg-white/80 backdrop-blur-md">
+    <nav className="sticky top-0 z-50 w-full bg-transparent backdrop-blur-md backdrop-saturate-150">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex h-16 items-center justify-between">
-          <div className="flex items-center gap-10">
-            <Link
-              to="/"
-              className="flex items-center gap-2 transition-opacity hover:opacity-80"
-            >
-              <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
-                <span className="text-white font-bold text-lg">J</span>
-              </div>
-              <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
-            </Link>
+          <Link
+            to="/"
+            className="flex items-center gap-2 transition-opacity hover:opacity-80"
+          >
+            <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center">
+              <span className="text-white font-bold text-lg">J</span>
+            </div>
+            <span className="text-xl font-bold tracking-tight text-gray-900">JobWatch</span>
+          </Link>
 
-            {user && (
-              <div className="hidden md:flex items-center gap-1">
-                <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
-                {user.uid === ADMIN_UID && (
-                  <>
-                    <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
-                    <NavButton active={location.pathname === "/users"} to="/users">Users</NavButton>
-                  </>
-                )}
-                <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
-                <NavButton active={location.pathname === "/map"} to="/map">Map</NavButton>
-                <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
-                <NavButton active={location.pathname === "/profile"} to="/profile">Profile</NavButton>
-              </div>
-            )}
-          </div>
+          {user && (
+            <div className="hidden md:flex items-center gap-6">
+              <NavButton active={location.pathname === "/"} to="/">Dashboard</NavButton>
+              {user.uid === ADMIN_UID && (
+                <>
+                  <NavButton active={location.pathname === "/feeds"} to="/feeds">Feeds</NavButton>
+                  <NavButton active={location.pathname === "/users"} to="/users">Users</NavButton>
+                </>
+              )}
+              <NavButton active={location.pathname === "/jobs"} to="/jobs">Jobs</NavButton>
+              <NavButton active={location.pathname === "/history"} to="/history">History</NavButton>
+              <NavButton active={location.pathname === "/profile"} to="/profile">Profile</NavButton>
+            </div>
+          )}
 
           <div className="flex items-center gap-4">
             {user ? (
               <div className="flex items-center gap-6">
-                {/* Extension status indicator */}
+                {/* Extension status — iOS-style camera-access dot */}
                 <div className="hidden md:flex items-center">
                   {extInstalled ? (
-                    <span className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-600">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-                      Extension
+                    <span
+                      title="JobWatch extension is connected"
+                      className="relative inline-flex h-2.5 w-2.5"
+                    >
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 animate-ping" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]" />
                     </span>
                   ) : (
                     <a
                       href="https://github.com/akash-ramasani/job-watch"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-500 hover:text-amber-600 transition-colors"
                       title="Install the JobWatch extension to use Auto Apply"
+                      className="relative inline-flex h-2.5 w-2.5"
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
-                      No Extension
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75 animate-ping" />
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.7)]" />
                     </a>
                   )}
                 </div>
-                <div className="hidden md:flex flex-col items-end">
-                  <span className="text-sm font-semibold text-gray-900">
-                    {userMeta?.fullName || "User"}
-                  </span>
-                  <button
-                    onClick={handleLogoutClick}
-                    className="text-[11px] font-bold uppercase tracking-wider text-gray-400 hover:text-indigo-600 transition-colors"
-                  >
-                    Sign Out &rarr;
-                  </button>
-                </div>
+
+                <span className="hidden md:inline text-sm font-semibold text-gray-700">
+                  {userMeta?.fullName || "User"}
+                </span>
+
+                <button
+                  onClick={handleLogoutClick}
+                  className="hidden md:block rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 transition-colors"
+                >
+                  Sign Out
+                </button>
 
                 <button className="md:hidden p-2 text-gray-500" onClick={() => setIsMenuOpen(!isMenuOpen)}>
                   <span className="text-2xl">{isMenuOpen ? "✕" : "☰"}</span>
@@ -108,7 +108,6 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
-              <MobileNavButton active={location.pathname === "/map"} to="/map" onClick={() => setIsMenuOpen(false)}>Map</MobileNavButton>
               <MobileNavButton active={location.pathname === "/history"} to="/history" onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
               <MobileNavButton active={location.pathname === "/profile"} to="/profile" onClick={() => setIsMenuOpen(false)}>Profile</MobileNavButton>
               <button
@@ -132,16 +131,11 @@ function NavButton({ active, children, to }) {
   return (
     <Link
       to={to}
-      className={`relative px-4 py-2 text-sm font-medium transition-colors ${active ? "text-indigo-600" : "text-gray-500 hover:text-gray-900"
-        }`}
+      className={`text-sm font-medium transition-colors ${
+        active ? "text-indigo-600" : "text-gray-600 hover:text-gray-900"
+      }`}
     >
       {children}
-      {active && (
-        <motion.div
-          layoutId="activeNav"
-          className="absolute bottom-[-22px] left-0 right-0 h-[2px] bg-indigo-600"
-        />
-      )}
     </Link>
   );
 }

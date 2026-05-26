@@ -15,7 +15,6 @@ import ForgotPassword from "./pages/ForgotPassword.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
 import Home from "./pages/Home.jsx";
 import Jobs from "./pages/Jobs.jsx";
-import JobMap from "./pages/JobMap.jsx";
 import Feeds from "./pages/Feeds.jsx";
 import Profile from "./pages/Profile.jsx";
 import FetchHistory from "./pages/FetchHistory.jsx";
@@ -238,7 +237,6 @@ export default function App() {
           }
         />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} preferences={preferences} />} />
-        <Route path="/map" element={<JobMap user={user} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
         <Route path="/history" element={<FetchHistory user={user} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -278,7 +276,7 @@ export default function App() {
           </div>
         ) : (
           <>
-            <main className="flex-1 py-10">
+            <main className="flex-1">
               <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                 <AnimatePresence mode="wait">
                   <motion.div
