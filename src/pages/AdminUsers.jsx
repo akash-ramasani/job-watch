@@ -13,6 +13,24 @@ function inviteSignupLink(code) {
   return `${origin}/signup?invite=${encodeURIComponent(code)}`;
 }
 
+// Crockford-style base32 alphabet (no I, L, O, U, 0, 1 — unambiguous when
+// read aloud or transcribed). 12 chars × 5 bits = 60 bits of entropy, sourced
+// from crypto.getRandomValues so the codes are unpredictable across sessions.
+const INVITE_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"; // 30 chars
+function generateInviteCode(length = 12) {
+  const cryptoObj = (typeof globalThis !== "undefined" && globalThis.crypto) || null;
+  if (!cryptoObj?.getRandomValues) {
+    throw new Error("Secure random generator unavailable; refusing to create weak invite code.");
+  }
+  const buf = new Uint32Array(length);
+  cryptoObj.getRandomValues(buf);
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += INVITE_CODE_ALPHABET[buf[i] % INVITE_CODE_ALPHABET.length];
+  }
+  return out;
+}
+
 // ── Build invite message ───────────────────────────────────────────────────────
 function buildInviteMessage(invite) {
   const isPaid = invite.accountType === "paid";
@@ -77,7 +95,7 @@ function CreateInviteModal({ onClose, onCreated, adminUid }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const code = generateInviteCode();
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
       await setDoc(doc(db, "invites", code), {
