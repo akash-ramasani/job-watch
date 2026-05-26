@@ -770,15 +770,15 @@ export default function LandingPage() {
                 ),
               },
             ].map((s) => (
-              <div key={s.step} className="relative text-center md:text-left">
-                <div className="mx-auto md:mx-0 mb-5 relative h-16 w-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
+              <div key={s.step} className="relative text-center">
+                <div className="mx-auto mb-5 relative h-16 w-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white shadow-lg shadow-indigo-200">
                   {s.icon}
                   <span className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-white text-indigo-600 text-xs font-black flex items-center justify-center border border-indigo-100 shadow-sm">
                     {s.step}
                   </span>
                 </div>
                 <h3 className="text-lg font-bold text-gray-900">{s.title}</h3>
-                <p className="mt-2 text-sm text-gray-500 leading-relaxed max-w-xs mx-auto md:mx-0">{s.desc}</p>
+                <p className="mt-2 text-sm text-gray-500 leading-relaxed max-w-xs mx-auto">{s.desc}</p>
               </div>
             ))}
           </div>
