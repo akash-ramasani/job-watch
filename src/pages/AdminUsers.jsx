@@ -54,7 +54,7 @@ function buildInviteMessage(invite) {
     ? "Account: Paid (I'll activate it right after you sign up)."
     : `Account: ${invite.trialDays}-day trial from activation. AI features stay off during the trial.`;
 
-  return `Hi${invite.fullName ? ` ${invite.fullName.split(" ")[0]}` : ""},
+  return `Hi,
 
 You're invited to JobWatch.
 
@@ -508,13 +508,9 @@ export default function AdminUsers({ user }) {
                           <span className={`text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded ${isPaid ? "bg-indigo-50 text-indigo-600" : "bg-gray-100 text-gray-500"}`}>
                             {isPaid ? "Paid" : `Trial · ${invite.trialDays}d`}
                           </span>
-                          {invite.fullName && <span className="text-xs text-gray-500">· {invite.fullName}</span>}
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5 truncate">
-                          {[
-                            invite.email,
-                            expiresAt ? `Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : null,
-                          ].filter(Boolean).join(" · ") || "—"}
+                          {expiresAt ? `Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : "—"}
                         </p>
                       </div>
                     </div>
