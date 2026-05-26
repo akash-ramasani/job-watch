@@ -99,7 +99,14 @@ export default function Signup() {
 
       showToast("Account created successfully!", "success");
     } catch (e2) {
-      const errorMessage = e2.message || "Signup failed";
+      // Map Firestore permission-denied (rule rejected the read or the
+      // mark-as-used update) to a user-facing message rather than the raw
+      // Firebase error string.
+      const code = e2?.code || "";
+      let errorMessage = e2.message || "Signup failed";
+      if (code === "permission-denied" || /insufficient permissions/i.test(errorMessage)) {
+        errorMessage = "This invite code is invalid, expired, or already used.";
+      }
       setErr(errorMessage);
       showToast(errorMessage, "error");
     } finally {

@@ -36,8 +36,25 @@ service cloud.firestore {
       allow read: if request.auth != null && (request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
     }
 
+    // Invite codes are unguessable 8-char bearer tokens. Anyone holding the
+    // code can fetch the invite by ID (needed during /signup before the user
+    // has authenticated). Listing the collection is admin-only so we don't
+    // leak the full set of outstanding codes. Writes are restricted:
+    //   - create: admin only
+    //   - update: only to mark `used: true` on an unused, unexpired invite
+    //   - delete: admin only
+    // This makes the TTL and single-use guarantees enforceable server-side.
     match /invites/{inviteId} {
-      allow read, write: if request.auth != null;
+      allow get: if true;
+      allow list: if request.auth != null
+        && request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      allow create, delete: if request.auth != null
+        && request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      allow update: if request.auth != null
+        && resource.data.used == false
+        && request.resource.data.used == true
+        && request.resource.data.usedBy == request.auth.uid
+        && (resource.data.expiresAt == null || resource.data.expiresAt > request.time);
     }
 
     
