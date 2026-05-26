@@ -31,29 +31,40 @@ function generateInviteCode(length = 12) {
   return out;
 }
 
+// Returns a short human phrase describing how long until `target`, e.g.
+// "23 hours", "45 minutes", or "expired". Never uses em-dashes.
+function timeUntil(target) {
+  if (!target) return "soon";
+  const ms = target.getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"}`;
+}
+
 // ── Build invite message ───────────────────────────────────────────────────────
 function buildInviteMessage(invite) {
   const isPaid = invite.accountType === "paid";
-  const trialLine = !isPaid && invite.trialDays
-    ? `Your trial runs for ${invite.trialDays} day${invite.trialDays !== 1 ? "s" : ""} from activation. After the trial your account will be automatically deactivated.`
-    : "";
-  const paidLine = isPaid
-    ? `Your account is pending activation. Once you sign up, I'll activate it for you — you'll receive a confirmation shortly.`
-    : "";
+  const expiresAt = invite.expiresAt?.toDate ? invite.expiresAt.toDate() : null;
+  const remaining = timeUntil(expiresAt);
+  const accountLine = isPaid
+    ? "Account: Paid (I'll activate it right after you sign up)."
+    : `Account: ${invite.trialDays}-day trial from activation. AI features stay off during the trial.`;
 
-  return `Hi there,
+  return `Hi${invite.fullName ? ` ${invite.fullName.split(" ")[0]}` : ""},
 
-You've been invited to join JobWatch! 🎉
+You're invited to JobWatch.
 
-Sign up here: ${inviteSignupLink(invite.id)}
+Sign up: ${inviteSignupLink(invite.id)}
 
-Important:
-• This link is single-use and expires in 24 hours
-• AI features (job scoring, cover letters, AI assistant, auto-apply) are disabled during the trial — upgrade to unlock all features
-${trialLine ? `• ${trialLine}` : ""}${paidLine ? `• ${paidLine}` : ""}
+This link is single use and you have ${remaining} to use it.
+${accountLine}
 
-Welcome aboard!
-– The JobWatch Team`.trim();
+Welcome aboard,
+The JobWatch Team`.trim();
 }
 
 // ── Account status badge helper ────────────────────────────────────────────────
