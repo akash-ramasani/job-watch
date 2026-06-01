@@ -1,17 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import {
-  collection,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  startAfter,
-  where,
-  doc,
-  onSnapshot
-} from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { jsPDF } from "jspdf";
 import { httpsCallable } from "firebase/functions";
@@ -20,8 +10,6 @@ import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import { track } from "../lib/analytics.js";
-
-const PAGE_SIZE = 50;
 
 
 const US_STATES = [
@@ -158,68 +146,51 @@ export default function Jobs({ user, userMeta, preferences }) {
     };
   }, []);
 
-  // ─── Legacy paginated fetch (used only when timeframe === "all") ───────
-  const fetchAllJobsLegacy = useCallback(
-    async () => {
-      setLoading(true);
-      setJobs([]);
-
-      try {
-        const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
-        const allDocs = [];
-        let cursor = null;
-        let pagesFetched = 0;
-        const MAX_PAGES = 6; // hard cap: 300 docs for the "all" view
-
-        while (pagesFetched < MAX_PAGES) {
-          const constraints = [];
-
-          if (selectedKeys.length > 0) {
-            constraints.push(where("companyKey", "in", selectedKeys.slice(0, 10)));
-          }
-
-          constraints.push(orderBy("sourceUpdatedTs", "desc"));
-          constraints.push(limit(PAGE_SIZE));
-          if (cursor) constraints.push(startAfter(cursor));
-
-          const snap = await getDocs(query(jobsCol, ...constraints));
-          snap.docs.forEach((d) => allDocs.push(enrichJob(d.data(), d.id)));
-
-          if (snap.docs.length < PAGE_SIZE) break;
-          cursor = snap.docs[snap.docs.length - 1];
-          pagesFetched += 1;
-        }
-
-        setJobs(allDocs);
-      } catch (err) {
-        console.error("Fetch jobs error:", err);
-        showToast("Error loading jobs. Check Firestore indexes.", "error");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [selectedKeys, enrichJob, showToast]
-  );
-
-  // ─── Default data source: single-doc snapshot of the recentJobs aggregation.
+  // ─── Single data source for all timeframes: aggregation docs.
   //     Cost per session: 1 read for the initial load + 1 per backend rebuild.
-  //     Replaces paginated getDocs for the recent timeframes (1h / 6h / 12h / 24h).
-  //     The doc is maintained by Cloud Functions: scoreNewJobsForUser, syncUserRecentJobs,
-  //     and dailyAggregationReconciliation all call rebuildRecentJobs(ADMIN_UID).
+  //     - timeframe === "all" → /users/{ADMIN_UID}/aggregations/allJobs
+  //         (lean projection, up to ALL_JOBS_LIMIT ≈ 1500 jobs)
+  //         Falls back to recentJobs if allJobs hasn't been built yet.
+  //     - all other timeframes → /users/{ADMIN_UID}/aggregations/recentJobs
+  //         (full projection, up to RECENT_JOBS_LIMIT = 500 jobs)
+  //     Both docs are maintained by Cloud Functions: scoreNewJobsForUser,
+  //     syncUserRecentJobs, and dailyAggregationReconciliation all rebuild them.
   useEffect(() => {
-    if (timeframe === "all") {
-      fetchAllJobsLegacy();
-      return undefined;
-    }
-
     setLoading(true);
-    const ref = doc(db, "users", ADMIN_UID, "aggregations", "recentJobs");
-    const unsub = onSnapshot(
+    const primaryDocId = timeframe === "all" ? "allJobs" : "recentJobs";
+    const fallbackDocId = timeframe === "all" ? "recentJobs" : null;
+
+    let unsubFallback = null;
+
+    const subscribeToFallback = () => {
+      if (!fallbackDocId || unsubFallback) return;
+      const fbRef = doc(db, "users", ADMIN_UID, "aggregations", fallbackDocId);
+      unsubFallback = onSnapshot(
+        fbRef,
+        (snap) => {
+          const data = snap.exists() ? snap.data() : null;
+          const list = Array.isArray(data?.jobs) ? data.jobs : [];
+          setJobs(list.map((j) => enrichJob(j, j.id)));
+          setLoading(false);
+        },
+        (err) => {
+          console.error(`${fallbackDocId} fallback snapshot error:`, err);
+          setLoading(false);
+        }
+      );
+    };
+
+    const ref = doc(db, "users", ADMIN_UID, "aggregations", primaryDocId);
+    const unsubPrimary = onSnapshot(
       ref,
       (snap) => {
         if (!snap.exists()) {
-          setJobs([]);
-          setLoading(false);
+          if (fallbackDocId) {
+            subscribeToFallback();
+          } else {
+            setJobs([]);
+            setLoading(false);
+          }
           return;
         }
         const data = snap.data();
@@ -228,13 +199,16 @@ export default function Jobs({ user, userMeta, preferences }) {
         setLoading(false);
       },
       (err) => {
-        console.error("recentJobs snapshot error:", err);
+        console.error(`${primaryDocId} snapshot error:`, err);
         showToast("Error loading jobs.", "error");
         setLoading(false);
       }
     );
-    return () => unsub();
-  }, [timeframe, fetchAllJobsLegacy, enrichJob, showToast]);
+    return () => {
+      unsubPrimary();
+      if (unsubFallback) unsubFallback();
+    };
+  }, [timeframe, enrichJob, showToast]);
 
   // ─── Per-user AI scores ──────────────────────────────────────────────
   //  Subscribes to /users/{currentUser.uid}/aggregations/myJobScores, a single

@@ -46,6 +46,12 @@ const Anthropic = require("@anthropic-ai/sdk");
 const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
 const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
 
+// OpenAI is used exclusively for resume parsing, even when AI features
+// are disabled for the user. All other AI features continue to use Claude.
+const OpenAI = require("openai");
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 
 
@@ -850,15 +856,17 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     }
   }
 
-  // Rebuild the /jobs page aggregation doc so clients can render with a single read.
+  // Rebuild the /jobs page aggregation docs so clients can render with a single read.
   // Only rebuild if we actually wrote or scored something new — otherwise it's a no-op.
   if (jobsWritten > 0 || newJobsForScoring.length > 0) {
     try {
-      const { rebuildRecentJobs } = require("./lib/recentJobs.cjs");
+      const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
       const n = await rebuildRecentJobs(userId);
       logger.info(`recentJobs aggregation rebuilt for ${userId}: ${n} jobs`);
+      const m = await rebuildAllJobs(userId);
+      logger.info(`allJobs aggregation rebuilt for ${userId}: ${m} jobs`);
     } catch (err) {
-      logger.warn(`recentJobs rebuild failed for ${userId}: ${err?.message || err}`);
+      logger.warn(`recentJobs/allJobs rebuild failed for ${userId}: ${err?.message || err}`);
     }
   }
 
@@ -1796,14 +1804,15 @@ async function scoreNewJobsForUser(userId, newJobs) {
         logger.warn(`writeUserScores failed for ${userId}: ${err?.message}`);
       }
 
-      // Refresh recentJobs (shared metadata) so any new jobs appear too.
-      // Only admin owns this doc — non-admin runs never touch admin's data.
+      // Refresh recentJobs/allJobs (shared metadata) so any new jobs appear too.
+      // Only admin owns these docs — non-admin runs never touch admin's data.
       if (isAdmin) {
         try {
-          const { rebuildRecentJobs } = require("./lib/recentJobs.cjs");
+          const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
           await rebuildRecentJobs(userId);
+          await rebuildAllJobs(userId);
         } catch (err) {
-          logger.warn(`recentJobs rebuild after scoring failed: ${err?.message}`);
+          logger.warn(`recentJobs/allJobs rebuild after scoring failed: ${err?.message}`);
         }
       }
     }
@@ -2045,7 +2054,7 @@ exports.askAssistant = onRequest(
 
 /**
  * =====================================================================================
- * 📄 RESUME PARSER: Upload a PDF/DOCX/TXT file and extract structured JSON via Claude
+ * 📄 RESUME PARSER: Upload a PDF/DOCX/TXT file and extract structured JSON via OpenAI (gpt-4o-mini)
  * =====================================================================================
  *
  * POST multipart/form-data with fields:
@@ -2193,14 +2202,23 @@ Rules:
 - If a section has no data, use an empty array [] or empty string "".
 - Dates: preserve whatever format is in the resume; do not invent missing dates.
 - Output ONLY the raw JSON object. No markdown fences, no explanation.`;
-      // Use Claude for resume parsing with jsonrepair as safety net
-      const claudeRes = await anthropic.messages.create({
-        model: "claude-sonnet-4-6",
+      // Use OpenAI (gpt-4o-mini) for resume parsing — runs regardless of the
+      // user's AI-features toggle. jsonrepair stays as a safety net.
+      if (!openai) {
+        logger.error("parseResume: OPENAI_API_KEY is not configured");
+        return res.status(500).json({ error: "Resume parsing is not configured on the server." });
+      }
+      const openaiRes = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
         max_tokens: 2048,
-        system: systemPrompt,
-        messages: [{ role: "user", content: `Resume text:\n\n${truncatedText}\n\nIMPORTANT: Output ONLY a raw JSON object. No markdown fences, no explanation, no text before or after.` }],
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: `Resume text:\n\n${truncatedText}\n\nIMPORTANT: Output ONLY a raw JSON object. No markdown fences, no explanation, no text before or after.` },
+        ],
       });
-      const rawOutput = claudeRes.content[0]?.text?.trim() || "";
+      const rawOutput = openaiRes.choices?.[0]?.message?.content?.trim() || "";
 
       // Strip markdown fences and extract the JSON object robustly
       let jsonStr = rawOutput.replace(/^```(?:json)?\n?/i, "").replace(/\n?```$/i, "").trim();
@@ -2215,7 +2233,7 @@ Rules:
         // Try to auto-repair common JSON issues (unescaped quotes, trailing commas, etc.)
         try {
           parsed = JSON.parse(jsonrepair(jsonStr));
-          logger.warn("parseResume: used jsonrepair to fix Claude output");
+          logger.warn("parseResume: used jsonrepair to fix OpenAI output");
         } catch (repairErr) {
           logger.error("JSON parse failed even after repair. Raw output:", rawOutput.slice(0, 2000));
           return res.status(500).json({ error: "AI returned an unexpected response format. Please try again." });
