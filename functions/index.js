@@ -27,6 +27,7 @@
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
 const Busboy = require("busboy");
@@ -42,15 +43,27 @@ const pLimit = pLimitPkg.default ?? pLimitPkg;
 // scores written to their own jobScores subcollection.
 const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
-const Anthropic = require("@anthropic-ai/sdk");
-const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
-const anthropic = new Anthropic({ apiKey: CLAUDE_API_KEY });
-
-// OpenAI is used exclusively for resume parsing, even when AI features
-// are disabled for the user. All other AI features continue to use Claude.
+// OpenAI is the sole AI provider for all AI-powered features
+// (scoring, assistant chat, cover letters, form-field mapping,
+// name pronunciation, resume parsing).
+//
+// The API key is stored in Google Secret Manager and injected at runtime.
+// Every function that calls OpenAI must include `secrets: [OPENAI_API_KEY]`
+// in its options.
 const OpenAI = require("openai");
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+
+// Default OpenAI models used across features. Override via env if needed.
+const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini";
+const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "gpt-4o-mini";
+
+function requireOpenAI() {
+  const apiKey = OPENAI_API_KEY.value() || process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENAI_API_KEY is not configured on the server.");
+  }
+  return new OpenAI({ apiKey });
+}
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 
@@ -119,8 +132,6 @@ async function verifyToken(req) {
     throw err;
   }
 }
-
-const ONLY_USER_ID = process.env.ONLY_USER_ID || "";
 
 /**
  * ----------------------------
@@ -448,6 +459,7 @@ exports.syncRecentJobsHourly = onSchedule(
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
     memory: "1GiB",
+    secrets: [OPENAI_API_KEY],
   },
   async () => {
     const now = admin.firestore.Timestamp.now();
@@ -542,7 +554,7 @@ exports.syncRecentJobsHourly = onSchedule(
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
  */
 exports.runSyncNow = onRequest(
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: CORS_ORIGINS },
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     let decodedToken;
     try {
@@ -841,7 +853,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     // Fan out scoring to every other AI-enabled user. The job corpus lives
     // under admin, so each user gets the same jobs scored against their own
     // resume, with results written to users/{uid}/jobScores/*. Sequential to
-    // stay within Claude rate limits (each call uses concurrency=1 internally).
+    // stay within OpenAI rate limits (each call uses concurrency=1 internally).
     if (userId === ADMIN_UID) {
       try {
         const otherUids = (await listAiEnabledUserIds()).filter((u) => u !== ADMIN_UID);
@@ -989,6 +1001,7 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
 
 async function fetchJson(url, maxRetries = 2) {
   let attempts = 0;
+  // eslint-disable-next-line no-constant-condition
   while (true) {
     const resp = await fetch(url, {
       method: "GET",
@@ -1452,10 +1465,10 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
 }
 
 /**
- * Score a single job against a resume using Claude.
+ * Score a single job against a resume using OpenAI.
  * Returns { score: number, reason: string } or null.
  */
-async function scoreJobWithClaude(jobTitle, jobDescription, resumeText) {
+async function scoreJobWithAI(jobTitle, jobDescription, resumeText) {
   const systemPrompt = `You are a technical recruiting expert. Score this job's relevance for the candidate. Be fast and decisive.
 
 SCORING RUBRIC (apply in order — first match wins):
@@ -1488,23 +1501,22 @@ ${jobDescription}
 
 Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
 
-  const msg = await anthropic.messages.create(
+  const client = requireOpenAI();
+  const completion = await client.chat.completions.create(
     {
-      model: "claude-haiku-4-5",
-      max_tokens: 80,
-      system: [
-        {
-          type: "text",
-          text: systemPrompt,
-          cache_control: { type: "ephemeral" },
-        },
+      model: OPENAI_FAST_MODEL,
+      max_tokens: 120,
+      temperature: 0,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
       ],
-      messages: [{ role: "user", content: userPrompt }],
     },
-    { timeout: 30000 } // 30 second timeout — generous enough for slow Claude responses
+    { timeout: 30000 } // 30 second timeout — generous enough for slow AI responses
   );
 
-  const raw = msg.content?.[0]?.text?.trim() || "";
+  const raw = completion.choices?.[0]?.message?.content?.trim() || "";
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return null;
   let parsed;
@@ -1520,7 +1532,7 @@ Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
 
 /**
  * Main scoring orchestrator — runs after every sync, fire-and-forget.
- * Fetches JDs, scores with Claude, writes score back to job doc.
+ * Fetches JDs, scores with OpenAI, writes score back to job doc.
  * Never stores the JD itself.
  */
 async function scoreNewJobsForUser(userId, newJobs) {
@@ -1657,7 +1669,7 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting for userId=${userId}`);
 
-  // Claude Tier 1: 50K TPM — use concurrency of 1 to avoid rate limits
+  // OpenAI Tier: use concurrency of 1 to avoid rate limits
   const concurrency = 1;
   const scoringLimiter = pLimit(concurrency);
   const scoredAt = admin.firestore.Timestamp.now();
@@ -1687,7 +1699,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
                 const jinaText = await jinaReq.text();
                 if (jinaText.length > 50) description = stripHtml(jinaText);
               }
-            } catch (e) { }
+            } catch (e) {
+              logger.warn(`Jina reader fallback failed for ${job.jobUrl}: ${e?.message || e}`);
+            }
           }
         }
         if (!description || description.length < 50) {
@@ -1711,9 +1725,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
         while (attempts < 5) {
           attempts++;
           try {
-            result = await scoreJobWithClaude(jobTitle, jd, resumeText);
+            result = await scoreJobWithAI(jobTitle, jd, resumeText);
             if (result) break;
-            logger.warn(`scoreJobWithClaude: attempt ${attempts}/5 returned invalid format for ${job.jobDocId}, retrying...`);
+            logger.warn(`scoreJobWithAI: attempt ${attempts}/5 returned invalid format for ${job.jobDocId}, retrying...`);
             await new Promise((r) => setTimeout(r, 1000));
           } catch (apiErr) {
             const isRetryable =
@@ -1885,7 +1899,7 @@ async function sendPushNotification(userId, summary, durationMs) {
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
 exports.askAssistant = onRequest(
-  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: CORS_ORIGINS },
+  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     try {
       let decodedToken;
@@ -1911,49 +1925,58 @@ exports.askAssistant = onRequest(
 
       const tools = [
         {
-          name: "list_feeds",
-          description: "List all active job feeds/companies for the user.",
-          input_schema: {
-            type: "object",
-            properties: {},
-          },
-        },
-        {
-          name: "get_recent_jobs",
-          description: "Fetch the most recent job listings across all sources.",
-          input_schema: {
-            type: "object",
-            properties: {
-              limit: { type: "number", description: "Number of jobs to fetch (default: 10)" },
+          type: "function",
+          function: {
+            name: "list_feeds",
+            description: "List all active job feeds/companies for the user.",
+            parameters: {
+              type: "object",
+              properties: {},
             },
           },
         },
         {
-          name: "search_jobs",
-          description: "Search for jobs by title or company name in the recent results.",
-          input_schema: {
-            type: "object",
-            properties: {
-              query: { type: "string", description: "Search query (title or company)" },
-              limit: { type: "number", description: "Number of results (default: 5)" },
+          type: "function",
+          function: {
+            name: "get_recent_jobs",
+            description: "Fetch the most recent job listings across all sources.",
+            parameters: {
+              type: "object",
+              properties: {
+                limit: { type: "number", description: "Number of jobs to fetch (default: 10)" },
+              },
             },
-            required: ["query"],
           },
         },
         {
-          name: "get_sync_status",
-          description: "Check the status of the latest job sync runs.",
-          input_schema: {
-            type: "object",
-            properties: {
-              limit: { type: "number", description: "Number of latest runs (default: 3)" },
+          type: "function",
+          function: {
+            name: "search_jobs",
+            description: "Search for jobs by title or company name in the recent results.",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string", description: "Search query (title or company)" },
+                limit: { type: "number", description: "Number of results (default: 5)" },
+              },
+              required: ["query"],
+            },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "get_sync_status",
+            description: "Check the status of the latest job sync runs.",
+            parameters: {
+              type: "object",
+              properties: {
+                limit: { type: "number", description: "Number of latest runs (default: 3)" },
+              },
             },
           },
         },
       ];
-
-      let currentMessages = [...messages];
-      let finalResponse = null;
 
       const systemPrompt = `You are the JobWatch AI Assistant. You help users manage their job tracking, sync data, and analyze market trends.
           You have access to the user's specific job listings, feeds, and sync history via tools.
@@ -1961,33 +1984,51 @@ exports.askAssistant = onRequest(
           IMPORTANT: All timestamps and dates in your responses must be in Pacific Time (PT). 
           Current User ID: ${activeUserId}`;
 
-      // Tool handling loop
-      while (true) {
-        let generatedText = "";
-        let toolCalls = [];
+      // Normalize incoming messages to OpenAI shape. Client historically sent
+      // { role, content: "text" } which is compatible with OpenAI as-is.
+      const currentMessages = [
+        { role: "system", content: systemPrompt },
+        ...messages.map((m) => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+        })),
+      ];
 
-        const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-6",
+      const client = requireOpenAI();
+      let finalResponse = null;
+
+      // Tool handling loop — cap iterations to guard against loops
+      for (let iter = 0; iter < 8; iter++) {
+        const response = await client.chat.completions.create({
+          model: OPENAI_SMART_MODEL,
           max_tokens: 4096,
-          system: systemPrompt,
           messages: currentMessages,
-          tools: tools,
+          tools,
         });
 
-        if (response.stop_reason === "tool_use") {
-          toolCalls = response.content.filter(c => c.type === "tool_use");
-          currentMessages.push({ role: "assistant", content: response.content });
-        } else {
-          finalResponse = response.content[0].text;
+        const choice = response.choices?.[0];
+        const message = choice?.message;
+
+        if (!message) {
+          finalResponse = "";
           break;
         }
 
-        if (toolCalls.length > 0) {
-          const toolResults = [];
-          for (const block of toolCalls) {
-            const toolName = block.name;
-            const args = block.input;
-            const toolId = block.id;
+        if (choice.finish_reason === "tool_calls" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+          currentMessages.push({
+            role: "assistant",
+            content: message.content || "",
+            tool_calls: message.tool_calls,
+          });
+
+          for (const call of message.tool_calls) {
+            const toolName = call.function?.name;
+            let args = {};
+            try {
+              args = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
+            } catch (e) {
+              args = {};
+            }
 
             let resultData;
             try {
@@ -2004,7 +2045,7 @@ exports.askAssistant = onRequest(
                   break;
                 }
                 case "search_jobs": {
-                  const query = args.query.toLowerCase();
+                  const query = String(args.query || "").toLowerCase();
                   const limit = args.limit || 5;
                   const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(50).get();
                   resultData = snap.docs
@@ -2026,15 +2067,17 @@ exports.askAssistant = onRequest(
               resultData = { error: err.message };
             }
 
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: toolId,
+            currentMessages.push({
+              role: "tool",
+              tool_call_id: call.id,
               content: JSON.stringify(resultData),
             });
           }
-
-          currentMessages.push({ role: "user", content: toolResults });
+          continue;
         }
+
+        finalResponse = message.content || "";
+        break;
       }
 
       return res.json({
@@ -2064,7 +2107,7 @@ exports.askAssistant = onRequest(
  * Returns: { ok: true, parsed: { summary, skills, roles, education, projects, certifications, rawText } }
  */
 exports.parseResume = onRequest(
-  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: CORS_ORIGINS },
+  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed. Use POST." });
@@ -2160,7 +2203,7 @@ exports.parseResume = onRequest(
         return res.status(422).json({ error: "Could not extract readable text from the file. Please try a different format." });
       }
 
-      const truncatedText = rawText.slice(0, 12000); // keep Claude prompt manageable
+      const truncatedText = rawText.slice(0, 12000); // keep prompt manageable
 
       // ─── 4. Call AI to extract structured JSON ──────────────────────
       const systemPrompt = `You are a professional resume parser. The user will provide the raw text of a resume.
@@ -2204,12 +2247,15 @@ Rules:
 - Output ONLY the raw JSON object. No markdown fences, no explanation.`;
       // Use OpenAI (gpt-4o-mini) for resume parsing — runs regardless of the
       // user's AI-features toggle. jsonrepair stays as a safety net.
-      if (!openai) {
+      let openaiClient;
+      try {
+        openaiClient = requireOpenAI();
+      } catch (e) {
         logger.error("parseResume: OPENAI_API_KEY is not configured");
         return res.status(500).json({ error: "Resume parsing is not configured on the server." });
       }
-      const openaiRes = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+      const openaiRes = await openaiClient.chat.completions.create({
+        model: OPENAI_FAST_MODEL,
         max_tokens: 2048,
         temperature: 0,
         response_format: { type: "json_object" },
@@ -2286,6 +2332,7 @@ exports.generateCoverLetter = onCall(
     minInstances: 0,
     maxInstances: 10,
     timeoutSeconds: 60,
+    secrets: [OPENAI_API_KEY],
   },
   async (request) => {
     // 1. Auth check
@@ -2365,17 +2412,20 @@ ${jobDesc}
 ${builtResumeStr}
 `;
 
-      const msg = await anthropic.messages.create(
+      const client = requireOpenAI();
+      const completion = await client.chat.completions.create(
           {
-            model: "claude-haiku-4-5",
+            model: OPENAI_FAST_MODEL,
             max_tokens: 600,
             temperature: 0.7,
-            system: systemPrompt,
-            messages: [{ role: "user", content: userPrompt }],
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userPrompt },
+            ],
           },
           { timeout: 30000 }
         );
-      const generatedText = msg.content?.[0] ? msg.content[0].text.trim() : "";
+      const generatedText = completion.choices?.[0]?.message?.content?.trim() || "";
 
       if (!generatedText) throw new Error("AI returned an empty string.");
 
@@ -2396,13 +2446,14 @@ ${builtResumeStr}
  * Takes scraped form fields + job context, returns a field_id → answer mapping.
  *
  * System fields (_systemfield_name, _systemfield_email, _systemfield_resume) are
- * mapped deterministically. Unknown UUID fields are handled by Claude Haiku.
+ * mapped deterministically. Unknown UUID fields are handled by OpenAI.
  */
 exports.mapFormFields = onCall(
   {
     region: REGION,
     timeoutSeconds: 30,
     memory: "256MiB",
+    secrets: [OPENAI_API_KEY],
   },
   async (request) => {
     const uid = request.auth?.uid;
@@ -2424,7 +2475,7 @@ exports.mapFormFields = onCall(
 
     const fullName = user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim();
 
-    // Skills, experience, education from resume for richer Claude context
+    // Skills, experience, education from resume for richer AI context
     const topSkills = (resume.skills || []).slice(0, 20).join(", ");
     const topRoles = (resume.roles || resume.experience || []).slice(0, 3)
       .map(r => `${r.title || r.role || ""} at ${r.company || r.employer || ""} (${r.startDate || ""}–${r.endDate || "present"})`)
@@ -2687,7 +2738,7 @@ exports.mapFormFields = onCall(
       unknownFields.push(field);
     }
 
-    // ── Claude Haiku for open-ended / custom fields ─────────────────────────
+    // ── OpenAI for open-ended / custom fields ───────────────────────────────
     if (unknownFields.length > 0) {
       const fieldList = unknownFields
         .map((f) => {
@@ -2744,16 +2795,18 @@ Fields:
 ${fieldList}`;
 
       try {
-        const msg = await anthropic.messages.create({
-          model: "claude-haiku-4-5",
+        const client = requireOpenAI();
+        const completion = await client.chat.completions.create({
+          model: OPENAI_FAST_MODEL,
           max_tokens: 500,
+          response_format: { type: "json_object" },
           messages: [{ role: "user", content: prompt }],
         });
-        const raw = msg.content?.[0]?.text?.trim() || "{}";
+        const raw = completion.choices?.[0]?.message?.content?.trim() || "{}";
         const jsonMatch = raw.match(/\{[\s\S]*\}/);
         if (jsonMatch) Object.assign(result, JSON.parse(jsonMatch[0]));
       } catch (e) {
-        logger.warn("mapFormFields: Claude call failed:", e.message);
+        logger.warn("mapFormFields: OpenAI call failed:", e.message);
       }
     }
 
@@ -2764,21 +2817,22 @@ ${fieldList}`;
 
 // ── Generate name pronunciation ─────────────────────────────────────────────
 exports.generateNamePronunciation = onRequest(
-  { region: REGION, timeoutSeconds: 15, memory: "128MiB", cors: CORS_ORIGINS },
+  { region: REGION, timeoutSeconds: 15, memory: "128MiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
     const { name } = req.body || {};
     if (!name) return res.status(400).json({ error: "name required" });
     try {
-      const msg = await anthropic.messages.create({
-        model: "claude-haiku-4-5",
+      const client = requireOpenAI();
+      const completion = await client.chat.completions.create({
+        model: OPENAI_FAST_MODEL,
         max_tokens: 60,
         messages: [{
           role: "user",
           content: `Generate a simple phonetic pronunciation guide for the name "${name}". Return ONLY the pronunciation string, e.g. "Ah-kash Rah-mah-sah-nee". No explanation.`,
         }],
       });
-      const pronunciation = msg.content?.[0]?.text?.trim() || name;
+      const pronunciation = completion.choices?.[0]?.message?.content?.trim() || name;
       res.json({ pronunciation });
     } catch (e) {
       res.status(500).json({ error: e.message });

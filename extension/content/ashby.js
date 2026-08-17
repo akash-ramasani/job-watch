@@ -365,7 +365,7 @@
   }
 
   // ─── Deterministic Text Rule Engine ────────────────────────────────────────
-  // Instantly maps known text fields using regex — no Claude needed.
+  // Instantly maps known text fields using regex — no AI needed.
   function applyTextRules(fields, mappings, userDoc, resumeDoc = {}) {
     const cityRegion = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
 
@@ -564,7 +564,7 @@
   }
 
   // ─── Deterministic Yes/No rule engine ──────────────────────────────────────
-  // Overrides Claude answers for well-known checkbox questions so we never
+  // Overrides AI answers for well-known checkbox questions so we never
   // misanswer visa / work-auth / office questions.
   function applyYesNoRules(fields, mappings, userDoc) {
     // User profile flags (with safe defaults matching Firestore strings)
@@ -947,7 +947,7 @@
         // 1) Ashby embeds job data as JSON in __NEXT_DATA__ — most reliable
         // 2) JSON-LD schema — used by newer Ashby/Parafin instances
         // 3) pendingJob from session storage (set when auto-apply was triggered)
-        // 4) Nothing — never fall back to Claude's answer or user's home city
+        // 4) Nothing — never fall back to AI's answer or user's home city
         let pageJobLocation = null;
         try {
           const nextData = JSON.parse(document.getElementById("__NEXT_DATA__")?.textContent || "{}");
@@ -1333,7 +1333,7 @@
     const { userDoc, mappings, pendingJob, resumeBase64, resumeDoc = {} } = fillData;
 
     // Apply deterministic rule engines BEFORE filling
-    // This entirely overrides Claude for standard questions (Phone, LinkedIn, Visa, Office)
+    // This entirely overrides AI for standard questions (Phone, LinkedIn, Visa, Office)
     applyTextRules(fields, mappings, userDoc, resumeDoc);
     applyYesNoRules(fields, mappings, userDoc);
 

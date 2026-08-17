@@ -6,7 +6,7 @@ JobWatch is a modern, high-performance job tracking and scraping platform built 
 
 ## 🚀 Key Features
 
-- **🤖 Native AI Assistant**: An integrated, Claude-powered chat assistant that can query your job data, summarize sync runs, and perform smart searches directly in-app.
+- **🤖 Native AI Assistant**: An integrated, OpenAI-powered chat assistant that can query your job data, summarize sync runs, and perform smart searches directly in-app.
 - **⚡ Automated Scraping**: Periodically monitors job boards (Greenhouse, Ashby, Eightfold, Microsoft, etc.) for new postings.
 - **💬 Rich Markdown Support**: Assistant responses include beautifully rendered tables, lists, and formatted text.
 - **🌎 Localized Experience**: All job timestamps and sync logs are automatically localized to **Pacific Time (PT)**.
@@ -41,7 +41,7 @@ For developers, a standalone MCP server is included in `mcp-server/`. Connect it
 | **Frontend** | React 19, Vite, Tailwind CSS, Framer Motion |
 | **Backend** | Firebase Cloud Functions (Gen 2), Node.js |
 | **Database** | Firebase Firestore |
-| **AI Brain** | Anthropic Claude 3.5/4.6 Sonnet |
+| **AI Brain** | OpenAI GPT-4o mini |
 | **Analytics** | Recharts |
 | **Tooling** | Model Context Protocol (MCP) |
 
@@ -61,7 +61,7 @@ For developers, a standalone MCP server is included in `mcp-server/`. Connect it
 1.  **Clone the repo**: `git clone ...`
 2.  **Install dependencies**: `npm install`
 3.  **Setup Firebase**: Add your `.env` file with Firebase credentials.
-4.  **Backend Keys**: Set `CLAUDE_API_KEY` in `functions/.env` or via Firebase Secrets.
+4.  **Backend Keys**: Set `OPENAI_API_KEY` in `functions/.env` or via Firebase Secrets.
 5.  **Run Dev Server**: `npm run dev`
 
 ---
