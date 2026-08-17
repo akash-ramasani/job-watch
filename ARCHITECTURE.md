@@ -1,4 +1,4 @@
-# JobWatch — Architecture & Data Flow
+# JobWatch: Architecture & Data Flow
 
 ## Overview
 
@@ -99,9 +99,9 @@ The `locationNormalizer.cjs` resolves raw location strings from job sources into
 ```
 
 ### Pin Types
-- **`city`** — Exact city match found in 230+ US city database
-- **`remote`** — Remote, country-only ("United States"), or vague locations → defaults to San Francisco
-- **`state`** — State-only ("California") → mapped to biggest city in that state
+- **`city`**: Exact city match found in 230+ US city database
+- **`remote`**: Remote, country-only ("United States"), or vague locations → defaults to San Francisco
+- **`state`**: State-only ("California") → mapped to biggest city in that state
 
 ### Multi-location Jobs
 First resolvable city is used. Job appears once on the map.
@@ -147,9 +147,9 @@ Request → Check in-memory cache (TTL: 5 min)
   └── MISS → Read from Firestore → Store in cache → Return
 ```
 
-- `getMapClusters()` — Cached 5 minutes
-- `getCompanyStats()` — Cached 5 minutes
-- `invalidate(key)` — Manually bust cache (e.g., after sync)
+- `getMapClusters()`: Cached 5 minutes
+- `getCompanyStats()`: Cached 5 minutes
+- `invalidate(key)`: Manually bust cache (e.g., after sync)
 
 Navigation between pages does NOT re-fetch if within TTL window.
 
@@ -227,11 +227,11 @@ Navigation between pages does NOT re-fetch if within TTL window.
 11. **TTL-aware aggregation refresh**
     - When a job's `expireAt` TTL fires, aggregation counts become stale
     - Add Cloud Function trigger on TTL deletion to decrement counts
-    - (Note: Firestore TTL doesn't trigger Cloud Functions today — would need workaround)
+    - (Note: Firestore TTL doesn't trigger Cloud Functions today, would need workaround)
 
 12. **Multi-user aggregation efficiency**
     - Current daily reconciliation rebuilds for ALL users
-    - Add `lastSyncAt` check — skip users who haven't had new jobs since last rebuild
+    - Add `lastSyncAt` check, skip users who haven't had new jobs since last rebuild
 
 13. **Upgrade to Firebase Functions v2 SDK**
     - Current SDK is v4.9.0 (deprecated warnings on deploy)

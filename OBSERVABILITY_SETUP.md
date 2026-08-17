@@ -12,7 +12,7 @@ After completing all four steps you'll have:
 
 ---
 
-## Step 1 — Vercel Analytics & Speed Insights
+## Step 1: Vercel Analytics & Speed Insights
 
 **Free. No signup. ~2 minutes.**
 
@@ -34,7 +34,7 @@ first page view. Gives you:
 
 ---
 
-## Step 2 — Firebase Analytics
+## Step 2: Firebase Analytics
 
 **Already streaming. Nothing to do.** Just know where to look.
 
@@ -52,7 +52,7 @@ explorations).
 
 ---
 
-## Step 3 — Sentry (error tracking + session replay)
+## Step 3: Sentry (error tracking + session replay)
 
 **Free tier: 5,000 errors + 50 replays / month. ~5 minutes. Biggest impact step.**
 
@@ -66,7 +66,7 @@ of what the user was doing.
 2. **Create Project**:
    - Platform: **React**
    - Project name: `job-watch`
-3. Sentry will show a code snippet — **ignore it**, the code is already
+3. Sentry will show a code snippet, **ignore it**, the code is already
    written. Just copy the **DSN** at the top. It looks like:
 
    ```text
@@ -99,7 +99,7 @@ hitting the page, and confirming it shows up.
 
 ---
 
-## Step 4 — PostHog (funnels, retention, session replay)
+## Step 4: PostHog (funnels, retention, session replay)
 
 **Free tier: 1M events + 5,000 replays / month. ~5 minutes.**
 
@@ -109,9 +109,9 @@ heatmaps, and feature flags in one tool.
 
 ### Get the API key
 
-1. Go to <https://posthog.com> → **Get started — free**.
+1. Go to <https://posthog.com> → **Get started, free**.
 2. Sign up (GitHub login works).
-3. When asked for region: pick **US Cloud** (or **EU Cloud** — just remember
+3. When asked for region: pick **US Cloud** (or **EU Cloud**: just remember
    which, you'll need it below).
 4. After login → click the gear icon (top-left) → **Project Settings**.
 5. Copy the **Project API Key** (starts with `phc_...`).
@@ -175,13 +175,13 @@ After completing all four steps and redeploying:
 3. Within 5 minutes, check that the same events show up in **all four**
    dashboards:
 
-   - [ ] Vercel Analytics — page view recorded
-   - [ ] Firebase Analytics → Realtime — events visible
-   - [ ] Sentry → Issues — empty (good!) or any errors you triggered
-   - [ ] PostHog → Activity — all events streaming live
+   - [ ] Vercel Analytics, page view recorded
+   - [ ] Firebase Analytics → Realtime, events visible
+   - [ ] Sentry → Issues, empty (good!) or any errors you triggered
+   - [ ] PostHog → Activity, all events streaming live
 
 If anything is missing, the most likely cause is the env var wasn't picked
-up — confirm the variable name matches exactly (`VITE_SENTRY_DSN`,
+up, confirm the variable name matches exactly (`VITE_SENTRY_DSN`,
 `VITE_POSTHOG_KEY`) and that you redeployed *without* build cache.
 
 ---
@@ -227,7 +227,7 @@ All four services have generous free tiers. Rough usage:
 - **Firebase Analytics**: free, unlimited.
 - **Sentry**: free 5k errors/mo. You'll likely use < 100/mo with a healthy app.
 - **PostHog**: free 1M events/mo + 5k replays. A 50-user beta typically
-  burns ~50k events/mo — well within free tier.
+  burns ~50k events/mo, well within free tier.
 
 You won't pay anything until you have hundreds of active users. When you
 do, the first paid tier is usually $20-30/mo each.
