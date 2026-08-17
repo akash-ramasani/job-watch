@@ -771,7 +771,7 @@ export default function Profile({ user, userMeta }) {
                                 <div className="h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
                                 <span className="text-sm text-gray-700">
                                   <span className="font-semibold text-gray-900">{r.title}</span>
-                                  {r.company && <> — {r.company}</>}
+                                  {r.company && <> at {r.company}</>}
                                 </span>
                               </div>
                             ))}
@@ -957,7 +957,7 @@ export default function Profile({ user, userMeta }) {
                 <p className="text-sm font-semibold text-gray-900">AI Features</p>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {isAdmin
-                    ? "Admin account — AI is always enabled."
+                    ? "Admin account. AI is always enabled."
                     : aiScoringEnabled
                     ? "AI is enabled for job scoring, cover letter generation, and the assistant."
                     : "AI features are off. Jobs will be synced but not evaluated or analyzed."}

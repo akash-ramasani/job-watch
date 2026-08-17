@@ -24,7 +24,7 @@ function timeOfDayClass(hour) {
 }
 
 function relativeTime(ts) {
-  if (!ts) return "—";
+  if (!ts) return "N/A";
   const date = ts.toDate ? ts.toDate() : new Date(ts);
   const diffMs = Date.now() - date.getTime();
   const sec = Math.max(1, Math.floor(diffMs / 1000));
@@ -258,7 +258,7 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
                 <Ticker value={stats.tracked} /> tracked
               </span>
               <span className="rounded-full bg-emerald-50 text-emerald-700 px-2 py-0.5">
-                Last alert {stats.lastTs ? relativeTime(stats.lastTs) : "—"}
+                Last alert {stats.lastTs ? relativeTime(stats.lastTs) : "N/A"}
               </span>
             </div>
           </motion.div>

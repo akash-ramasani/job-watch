@@ -292,7 +292,7 @@ export default function Feeds({ user }) {
         updated: data?.updated || 0,
         duration_ms: Date.now() - startedAt,
       });
-      showToast(`Sync complete — scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
+      showToast(`Sync complete. Scanned ${data?.scanned || 0}, wrote ${data?.updated || 0}`, "success");
     } catch (e) {
       track("sync_failed", { reason: e?.message?.slice(0, 80) || "unknown", duration_ms: Date.now() - startedAt });
       console.error(e);

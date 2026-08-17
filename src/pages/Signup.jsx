@@ -218,7 +218,7 @@ export default function Signup() {
                     placeholder="Enter your unique invite code"
                   />
                   {prefilledInvite && (
-                    <p className="mt-1.5 text-xs text-indigo-600">Invite link detected — code applied automatically.</p>
+                    <p className="mt-1.5 text-xs text-indigo-600">Invite link detected. Code applied automatically.</p>
                   )}
                 </div>
               </div>

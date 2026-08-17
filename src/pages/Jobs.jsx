@@ -33,7 +33,7 @@ const US_STATES = [
 ];
 
 function timeAgoFromFirestore(ts) {
-  if (!ts?.toDate) return "—";
+  if (!ts?.toDate) return "N/A";
   const d = ts.toDate();
   const diffMs = Date.now() - d.getTime();
   const mins = Math.floor(diffMs / (1000 * 60));
@@ -46,7 +46,7 @@ function timeAgoFromFirestore(ts) {
 }
 
 function shortAgoFromDate(date) {
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "—";
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "N/A";
   const diffMs = Date.now() - date.getTime();
   const mins = Math.floor(diffMs / (1000 * 60));
   const hours = Math.floor(mins / 60);
@@ -133,7 +133,7 @@ export default function Jobs({ user, userMeta, preferences }) {
         : extractStateCodesFromLocationTokens(data.locationTokens || locationName);
     const updatedShort = data.sourceUpdatedTs?.toDate
       ? shortAgoFromDate(data.sourceUpdatedTs.toDate())
-      : "—";
+      : "N/A";
     return {
       id,
       ...data,
@@ -403,7 +403,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe]);
 
   const renderJobItem = (job) => {
-    const updatedShort = job._updatedShort || "—";
+    const updatedShort = job._updatedShort || "N/A";
     const score = job.relevanceScore;
     const hasScore = typeof score === "number";
 
@@ -559,7 +559,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               Company
             </label>
             <input
-              placeholder="e.g. NVIDIA — Tab to complete"
+              placeholder="e.g. NVIDIA (Tab to complete)"
               className="input-standard !bg-gray-50 border-transparent focus:!bg-white h-11 w-full"
               value={companySearch}
               onChange={(e) => setCompanySearch(e.target.value)}

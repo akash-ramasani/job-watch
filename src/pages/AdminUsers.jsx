@@ -581,7 +581,7 @@ export default function AdminUsers({ user }) {
                           </span>
                         </div>
                         <p className="text-xs text-gray-400 mt-0.5 truncate">
-                          {expiresAt ? `Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : "—"}
+                          {expiresAt ? `Expires ${expiresAt.toLocaleString([], { dateStyle: "short", timeStyle: "short" })}` : "N/A"}
                         </p>
                       </div>
                     </div>

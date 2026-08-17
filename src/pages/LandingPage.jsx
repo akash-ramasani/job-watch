@@ -23,7 +23,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Auto-Sync Feeds",
-    desc: "Connect Greenhouse, AshbyHQ & Eightfold.ai job boards once — JobWatch syncs new postings automatically every hour.",
+    desc: "Connect Greenhouse, AshbyHQ & Eightfold.ai job boards once. JobWatch syncs new postings automatically every hour.",
   },
   {
     icon: (
@@ -50,7 +50,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Sync History",
-    desc: "Full transparency — see exactly when each sync ran, how many jobs were found, and if anything failed.",
+    desc: "Full transparency. See exactly when each sync ran, how many jobs were found, and if anything failed.",
   },
   {
     icon: (
@@ -59,7 +59,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Secure by Design",
-    desc: "Built on Firebase with per-user data isolation. Your feeds, your jobs, your data — always private.",
+    desc: "Built on Firebase with per-user data isolation. Your feeds, your jobs, your data, always private.",
   },
   {
     icon: (
@@ -700,7 +700,7 @@ export default function LandingPage() {
                 “I found a role 20 minutes after it was posted and applied before it hit LinkedIn.”
               </blockquote>
               <figcaption className="mt-1 text-[11px] font-semibold text-gray-500 uppercase tracking-widest">
-                — Early user
+                Early user
               </figcaption>
             </motion.figure>
           </div>
@@ -922,7 +922,7 @@ export default function LandingPage() {
               {
                 step: "03",
                 title: "Apply First",
-                desc: "Filter, sort, and click through to apply — before the role even hits LinkedIn.",
+                desc: "Filter, sort, and click through to apply, before the role even hits LinkedIn.",
               },
             ].map((item, i) => (
               <motion.div
@@ -979,7 +979,7 @@ export default function LandingPage() {
                 <div className="w-3 h-3 rounded-full bg-green-500/80" />
               </div>
               <div className="flex-1 text-center text-[11px] font-medium text-gray-400 font-mono tracking-wider opacity-60">
-                job-watch — node sync.js
+                job-watch · node sync.js
               </div>
             </div>
 

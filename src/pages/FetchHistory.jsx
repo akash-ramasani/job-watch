@@ -17,7 +17,7 @@ import {
 
 function fmtDateTimeFull(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
-  if (!d || Number.isNaN(d.getTime())) return "—";
+  if (!d || Number.isNaN(d.getTime())) return "N/A";
   return d.toLocaleString("en-US", {
     timeZone: "America/Los_Angeles",
     year: "numeric",
@@ -31,7 +31,7 @@ function fmtDateTimeFull(tsOrDate) {
 
 function fmtSince(tsOrDate) {
   const d = tsOrDate?.toDate ? tsOrDate.toDate() : tsOrDate instanceof Date ? tsOrDate : null;
-  if (!d || Number.isNaN(d.getTime())) return "—";
+  if (!d || Number.isNaN(d.getTime())) return "N/A";
   const diffMs = Date.now() - d.getTime();
   const mins = Math.floor(diffMs / (1000 * 60));
   const hours = Math.floor(mins / 60);
@@ -44,7 +44,7 @@ function fmtSince(tsOrDate) {
 
 function fmtDuration(ms) {
   const n = Number(ms);
-  if (!Number.isFinite(n) || n <= 0) return "—";
+  if (!Number.isFinite(n) || n <= 0) return "N/A";
   if (n < 1000) return `${Math.round(n)}ms`;
   const s = n / 1000;
   if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)}s`;
@@ -235,7 +235,7 @@ export default function FetchHistory({ user }) {
                       Recent Cutoff
                     </div>
                     <div className="text-sm font-bold text-gray-800">
-                      {recentCutoffIso ? fmtDateTimeFull(recentCutoffIso) : "—"}
+                      {recentCutoffIso ? fmtDateTimeFull(recentCutoffIso) : "N/A"}
                     </div>
                   </div>
                 </div>
