@@ -182,6 +182,18 @@ async function callMapFormFields(fields, jobTitle, companyName, jobLocationName,
   if (!res.ok || json.error) throw new Error(json.error?.message || "mapFormFields failed");
   return json.result?.mappings || {};
 }
+
+// Compute a full Greenhouse application (answers + resume + cover letter).
+async function callPrepareGreenhouse(token, id, idToken) {
+  const res = await fetch(`${FUNCTIONS_BASE}/prepareGreenhouseApplication`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data: { token, id } }),
+  });
+  const json = await res.json();
+  if (!res.ok || json.error) throw new Error(json.error?.message || "prepareGreenhouseApplication failed");
+  return json.result;
+}
 // ─── Proactive Ashby job prefetch ────────────────────────────────────────────
 // Fires as soon as any Ashby application page finishes loading.
 // Looks up the job in Firestore by externalId and caches it as pendingJob so
@@ -361,6 +373,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           pendingJob,
           resumeBase64,
         });
+        return;
+      }
+
+      // ── Greenhouse: compute the full application for the content script ──
+      if (message.type === "GET_GH_FILL_DATA") {
+        try {
+          const { idToken } = await getFreshToken();
+          const data = await callPrepareGreenhouse(message.token, message.id, idToken);
+          sendResponse({ ok: true, data });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
         return;
       }
 
@@ -588,12 +612,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return results;
         };
 
+        // Greenhouse custom combobox: open it, then pick the option by text.
+        const ghSelectCombobox = async (fieldId, value) => {
+          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const el = document.getElementById(fieldId);
+          if (!el) return { ok: false, error: "combobox not found: " + fieldId };
+          const want = nrm(value);
+          el.focus();
+          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          el.click();
+          await wait(300);
+          const collect = () => [...document.querySelectorAll('[role=option], ul[role=listbox] li, [id$="-listbox"] li, [class*="option"]')].filter(o => o.offsetParent !== null);
+          let opts = collect();
+          let match = opts.find(o => nrm(o.textContent) === want);
+          if (!match) {
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            try { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); } catch (e) { /* not a text combobox */ }
+            await wait(400);
+            opts = collect();
+            match = opts.find(o => nrm(o.textContent) === want)
+              || opts.find(o => nrm(o.textContent).startsWith(want))
+              || opts.find(o => nrm(o.textContent).includes(want));
+          }
+          if (!match) return { ok: false, error: "option not found", want, seen: opts.slice(0, 12).map(o => o.textContent.trim()) };
+          match.scrollIntoView({ block: "nearest" });
+          match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          match.click();
+          await wait(200);
+          return { ok: true, picked: match.textContent.trim() };
+        };
+
+        // Check a consent/agreement checkbox.
+        const ghCheck = async (fieldId) => {
+          const el = document.getElementById(fieldId);
+          if (!el) return { ok: false, error: "checkbox not found: " + fieldId };
+          if (!el.checked) { el.click(); await new Promise(r => setTimeout(r, 150)); }
+          return { ok: el.checked === true };
+        };
+
         let funcToRun = setReactFile;
         let argsToRun = [id, b64Data, fileName];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
         if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
         if (action === "clickRadio") { funcToRun = setReactRadio; argsToRun = [id, value]; }
+        if (action === "ghSelectCombobox") { funcToRun = ghSelectCombobox; argsToRun = [id, value]; }
+        if (action === "ghCheck") { funcToRun = ghCheck; argsToRun = [id]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({

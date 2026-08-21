@@ -66,6 +66,7 @@ function requireOpenAI() {
 }
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
+const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
 
@@ -2852,6 +2853,20 @@ exports.generateNamePronunciation = onRequest(
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
+  }
+);
+
+// Compute a full Greenhouse application (answers + cover letter + resume bytes)
+// for the browser extension to fill. Reuses the tested answer engine.
+exports.prepareGreenhouseApplication = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const { token, id } = request.data || {};
+    if (!token || !id) throw new HttpsError("invalid-argument", "token and id are required.");
+    const openai = requireOpenAI();
+    return prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
   }
 );
 
