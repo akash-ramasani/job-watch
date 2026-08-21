@@ -6,6 +6,7 @@
 import { coverLetter, tailorResume } from "./ai.mjs";
 import { renderResume, renderCoverLetter } from "./pdf.mjs";
 import { contactFromProfile, sentencesFrom } from "./profile-util.mjs";
+import { downloadResume } from "./firestore.mjs";
 
 /** Build the AI context object from profile + resume + job. */
 function buildContext(profile, resume, job) {
@@ -24,19 +25,29 @@ function buildContext(profile, resume, job) {
   };
 }
 
-/** Generate both documents. outDir must exist. Returns { resumePath, coverPath }. */
-export async function generateApplicationDocs(profile, resume, job, outDir) {
+/** Generate both documents. outDir must exist. Returns { resumePath, coverPath }.
+ *  Default (useRealResume=true): attach the user's REAL uploaded resume, no
+ *  fabrication risk. Only the cover letter is generated. Set useRealResume=false
+ *  to also produce an AI-tailored resume (may embellish; needs review). */
+export async function generateApplicationDocs(profile, resume, job, outDir, { useRealResume = true } = {}) {
   const ctx = buildContext(profile, resume, job);
   const contact = contactFromProfile(profile);
   const roles = resume.roles || resume.experience || [];
   const safe = (job.title || "job").replace(/[^a-z0-9]+/gi, "-").slice(0, 40);
 
-  // Cover letter (always AI, always sanitized).
+  // Cover letter (always AI, always sanitized, never invents facts).
   const clText = await coverLetter(ctx);
   const coverPath = `${outDir}/cover-${safe}.pdf`;
   await renderCoverLetter(clText, { name: ctx.name, contact, companyName: ctx.companyName, jobTitle: ctx.jobTitle }, coverPath);
 
-  // Tailored resume, with a safe fallback to untailored real content.
+  // Resume: use the real uploaded PDF as-is (recommended, zero fabrication).
+  if (useRealResume) {
+    const realPath = `${outDir}/resume-real.pdf`;
+    const got = await downloadResume(realPath).catch(() => null);
+    return { resumePath: got, coverPath, tailored: false, coverText: clText };
+  }
+
+  // Otherwise, AI-tailored resume with a safe fallback to untailored real content.
   let tr = null;
   try { tr = await tailorResume(ctx); } catch { tr = null; }
   const resumeData = {

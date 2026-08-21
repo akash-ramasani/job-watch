@@ -47,12 +47,36 @@ export async function fetchForm(token, id) {
   };
 }
 
-/** SUBMIT — deliberately not wired yet.
- *  Greenhouse accepts POST {BASE}/{token}/jobs/{id} with multipart form data,
- *  but (a) some boards disable direct submission, (b) it needs the resume/cover
- *  files uploaded, and (c) it must run ONLY after verifyFourTimes() passes.
- *  We implement this in the next phase, behind an explicit --submit flag and a
- *  single real-board test, so we never accidentally send a bad application. */
-export async function submit() {
-  throw new Error("submit() not implemented — dry-run only until the 4-pass gate is field-tested");
+/** Submit an application to Greenhouse.
+ *  POSTs multipart/form-data to {BASE}/{token}/jobs/{id}.
+ *  - answers: the mapped answers array (each { answers: [{name,value,isFile}] }).
+ *  - resumePath / coverPath: local PDF paths to attach.
+ *  MUST only be called after verifyFourTimes() passes.
+ *
+ *  Note: some boards require the company's Job Board API key (HTTP 401/403). If
+ *  that happens, this returns ok:false with the status so the caller can fall
+ *  back to the browser form. We attempt the public submission (no key) first. */
+export async function submit({ token, id, answers, resumePath, coverPath }) {
+  const { readFile } = await import("node:fs/promises");
+  const fd = new FormData();
+
+  for (const a of answers) {
+    for (const ans of a.answers) {
+      if (ans.isFile) continue; // files attached below
+      if (ans.value == null || ans.value === "") continue;
+      fd.append(ans.name, String(ans.value));
+    }
+  }
+  if (resumePath) {
+    const buf = await readFile(resumePath);
+    fd.append("resume", new Blob([buf], { type: "application/pdf" }), "resume.pdf");
+  }
+  if (coverPath) {
+    const buf = await readFile(coverPath);
+    fd.append("cover_letter", new Blob([buf], { type: "application/pdf" }), "cover_letter.pdf");
+  }
+
+  const res = await fetch(`${BASE}/${token}/jobs/${id}`, { method: "POST", body: fd });
+  const body = await res.text();
+  return { ok: res.ok, status: res.status, body: body.slice(0, 500) };
 }

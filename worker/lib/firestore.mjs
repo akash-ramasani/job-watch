@@ -41,3 +41,17 @@ export async function getResume(uid = ADMIN_UID) {
   const snap = await (await db()).collection("users").doc(uid).collection("resume").doc("profile").get();
   return snap.exists ? snap.data() : null;
 }
+
+/** Download the user's REAL uploaded resume PDF to destPath. Uses the stored
+ *  download URL (resumeUrl). Returns destPath, or null if there is no resume. */
+export async function downloadResume(destPath, uid = ADMIN_UID) {
+  const { writeFile } = await import("node:fs/promises");
+  const resume = await getResume(uid);
+  const url = resume?.resumeUrl;
+  if (!url) return null;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`resume download failed: ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  await writeFile(destPath, buf);
+  return destPath;
+}
