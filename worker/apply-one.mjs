@@ -33,10 +33,18 @@ async function main() {
   const optLabel = {};
   form.questions.forEach((q) => (q.fields[0].values || []).forEach((v) => (optLabel[v.value] = v.label)));
 
-  console.log(`\n${c.b}${form.title}${c.x}  ${c.d}(${token}/${id})${c.x}`);
+  // Real company name from the job doc (fallback: cleaned board token).
+  let companyName = args.company || null;
+  if (!companyName) {
+    const d = await db();
+    const snap = await d.collection("users").doc(ADMIN_UID).collection("jobs").where("externalId", "==", id).limit(1).get();
+    companyName = snap.empty ? token.replace(/\d+$/, "") : (snap.docs[0].data().companyName || token);
+  }
+
+  console.log(`\n${c.b}${form.title}${c.x}  ${c.d}at ${companyName} (${token}/${id})${c.x}`);
   console.log(`${c.d}applying as ${profile.email}${c.x}\n`);
 
-  const job = { title: form.title, companyName: form.title, questions: form.questions, descriptionHtml: form.descriptionHtml };
+  const job = { title: form.title, companyName, questions: form.questions, descriptionHtml: form.descriptionHtml };
   const result = await runApplyFlow(profile, resume, job, OUT); // real resume + cover letter
 
   for (const a of result.mapped.answers) {
