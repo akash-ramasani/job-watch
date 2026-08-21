@@ -157,7 +157,6 @@ async function fsQuery(parentPath, collectionId, filters, idToken, limit = null)
 
 async function fsSet(path, data, idToken) {
   const fields = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, fsValue(v)]));
-  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}?currentDocument.exists=false`;
   // Use PATCH with updateMask for upsert behavior
   const patchUrl = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}`;
   const res = await fetch(patchUrl, {
@@ -613,6 +612,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "APPLICATION_DONE") {
         const { idToken, uid } = await getFreshToken();
         const { jobId, jobTitle, companyName, status, answersLog } = message;
+
+        // Recover the cached job so we can record its URL. Without this load,
+        // `pendingJob` is undefined in this scope and reading .absolute_url
+        // throws a ReferenceError, aborting the whole handler.
+        const { pendingJob } = await new Promise((r) =>
+          chrome.storage.session.get("pendingJob", r)
+        );
 
         // Log to applications sub-collection with full answer record
         const docPath = `users/${uid}/applications/${jobId || Date.now()}`;

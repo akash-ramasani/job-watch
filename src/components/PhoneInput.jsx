@@ -1,6 +1,7 @@
 import React from "react";
 
 // Formats as (XXX) XXX-XXXX
+// eslint-disable-next-line react-refresh/only-export-components
 export function formatUSPhone(raw) {
   const digits = raw.replace(/\D/g, "");
   // strip leading 1 if user typed it

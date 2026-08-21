@@ -30,7 +30,7 @@ function showScreen(name) {
 
 function setHeaderSub(text) { $("header-sub").textContent = text; }
 
-function setStatusPill(state) {
+function setStatusPill(_state) {
   // Pill replaced with dynamic Header Avatar. 
 }
 
@@ -80,7 +80,7 @@ function startAuthPolling() {
 }
 
 const BTN_LABEL = '<svg width="14" height="14" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/><text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text></svg> Sign in with JobWatch';
-const BTN_LOADING = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
+const _BTN_LOADING = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
 
 $("btn-login").addEventListener("click", () => {
   // Just open the site — if already logged in, JW_AUTH fires and polling picks it up.

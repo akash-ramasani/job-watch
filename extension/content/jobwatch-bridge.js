@@ -34,17 +34,17 @@ window.addEventListener("message", (event) => {
     try {
       chrome.runtime.sendMessage(
         { type: "JW_AUTH", idToken: event.data.idToken, refreshToken: event.data.refreshToken, uid: event.data.uid, expiresIn: event.data.expiresIn },
-        () => { if (chrome.runtime.lastError) {} }
+        () => { void chrome.runtime.lastError; }
       );
-    } catch (e) {}
+    } catch {}
     return;
   }
 
   // ── Auth sync: web app logged out → clear extension session ───────────────
   if (type === "JW_LOGOUT") {
     try {
-      chrome.runtime.sendMessage({ type: "JW_LOGOUT" }, () => { if (chrome.runtime.lastError) {} });
-    } catch (e) {}
+      chrome.runtime.sendMessage({ type: "JW_LOGOUT" }, () => { void chrome.runtime.lastError; });
+    } catch {}
     return;
   }
 
@@ -55,7 +55,7 @@ window.addEventListener("message", (event) => {
         if (chrome.runtime.lastError) return;
         window.postMessage({ type: "JW_PONG", loggedIn: response?.loggedIn ?? false }, window.location.origin);
       });
-    } catch (e) {}
+    } catch {}
     return;
   }
 });

@@ -1,27 +1,31 @@
 
-import React, { useEffect, useMemo, useState } from "react";
-import { onAuthStateChanged, onIdTokenChanged, signOut } from "firebase/auth";
+import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { onIdTokenChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { auth, db } from "./firebase";
 
+// Shell components render on every route, so they stay in the main bundle.
 import TopBar from "./components/TopBar.jsx";
 import SessionEjectedModal from "./components/SessionEjectedModal.jsx";
-
-import Login from "./pages/Login.jsx";
-import Signup from "./pages/Signup.jsx";
-import ForgotPassword from "./pages/ForgotPassword.jsx";
-import LandingPage from "./pages/LandingPage.jsx";
-import Home from "./pages/Home.jsx";
-import Jobs from "./pages/Jobs.jsx";
-import Feeds from "./pages/Feeds.jsx";
-import Profile from "./pages/Profile.jsx";
-import FetchHistory from "./pages/FetchHistory.jsx";
-import AdminUsers from "./pages/AdminUsers.jsx";
-import ExtensionAuth from "./pages/ExtensionAuth.jsx";
 import Footer from "./components/Footer.jsx";
-import ChatAssistant from "./components/ChatAssistant/ChatAssistant.jsx";
+
+// Route-level components are code-split: heavy dependencies (leaflet, recharts,
+// react-markdown, jspdf) load only when a route that needs them is visited,
+// keeping the initial landing-page payload small.
+const Login = lazy(() => import("./pages/Login.jsx"));
+const Signup = lazy(() => import("./pages/Signup.jsx"));
+const ForgotPassword = lazy(() => import("./pages/ForgotPassword.jsx"));
+const LandingPage = lazy(() => import("./pages/LandingPage.jsx"));
+const Home = lazy(() => import("./pages/Home.jsx"));
+const Jobs = lazy(() => import("./pages/Jobs.jsx"));
+const Feeds = lazy(() => import("./pages/Feeds.jsx"));
+const Profile = lazy(() => import("./pages/Profile.jsx"));
+const FetchHistory = lazy(() => import("./pages/FetchHistory.jsx"));
+const AdminUsers = lazy(() => import("./pages/AdminUsers.jsx"));
+const ExtensionAuth = lazy(() => import("./pages/ExtensionAuth.jsx"));
+const ChatAssistant = lazy(() => import("./components/ChatAssistant/ChatAssistant.jsx"));
 
 import { ToastProvider } from "./components/Toast/ToastProvider.jsx";
 import { DataCacheProvider } from "./contexts/DataCacheContext.jsx";
@@ -31,6 +35,15 @@ import { identify as analyticsIdentify, reset as analyticsReset, trackPageView }
 import { identifyUserForErrors, clearUserForErrors } from "./lib/errorTracking.js";
 
 export const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+
+// Fallback shown while a lazily-loaded route chunk is fetched.
+function PageFallback() {
+  return (
+    <div className="flex flex-1 items-center justify-center py-24">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+    </div>
+  );
+}
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -266,7 +279,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
-  }, [loading, user, userMeta, location]);
+  }, [loading, user, userMeta, location, preferences]);
 
   return (
     <DataCacheProvider>
@@ -294,7 +307,7 @@ export default function App() {
                 transition={{ duration: 0.2 }}
                 className="h-full"
               >
-                {content}
+                <Suspense fallback={<PageFallback />}>{content}</Suspense>
               </motion.div>
             </AnimatePresence>
           </div>
@@ -310,13 +323,17 @@ export default function App() {
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {content}
+                    <Suspense fallback={<PageFallback />}>{content}</Suspense>
                   </motion.div>
                 </AnimatePresence>
               </div>
             </main>
             <Footer />
-            {preferences.aiScoringEnabled && userMeta?.aiAccess !== false && <ChatAssistant user={user} />}
+            {preferences.aiScoringEnabled && userMeta?.aiAccess !== false && (
+              <Suspense fallback={null}>
+                <ChatAssistant user={user} />
+              </Suspense>
+            )}
           </>
         )}
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Dialog, DialogBackdrop, DialogPanel, DialogTitle } from "@headlessui/react";
 import { CheckIcon, ClipboardDocumentIcon, TrashIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { collection, getDocs, doc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
@@ -400,12 +400,7 @@ export default function AdminUsers({ user }) {
   const [deletingInvite, setDeletingInvite] = useState(false);
   const { showToast } = useToast();
 
-  useEffect(() => {
-    if (user.uid !== ADMIN_UID) return;
-    fetchData();
-  }, [user.uid]);
-
-  async function fetchData() {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const getAdminUsersList = httpsCallable(functions, "getAdminUsersList");
@@ -422,7 +417,12 @@ export default function AdminUsers({ user }) {
     } finally {
       setLoading(false);
     }
-  }
+  }, [showToast]);
+
+  useEffect(() => {
+    if (user.uid !== ADMIN_UID) return;
+    fetchData();
+  }, [user.uid, fetchData]);
 
   async function copyInvite(invite) {
     const message = buildInviteMessage(invite);

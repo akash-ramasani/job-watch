@@ -67,6 +67,7 @@ export function DataCacheProvider({ children }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useDataCache() {
   const ctx = useContext(DataCacheContext);
   if (!ctx) throw new Error("useDataCache must be used within DataCacheProvider");

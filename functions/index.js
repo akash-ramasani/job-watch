@@ -155,7 +155,7 @@ async function verifyToken(req) {
  */
 
 exports.createExtensionCode = onRequest(
-  { region: REGION, cors: CORS_ORIGINS },
+  { region: REGION, maxInstances: 10, cors: CORS_ORIGINS },
   async (req, res) => {
     try {
       const decoded = await verifyToken(req);
@@ -180,7 +180,7 @@ exports.createExtensionCode = onRequest(
 );
 
 exports.exchangeExtensionCode = onRequest(
-  { region: REGION, cors: true }, // extension calls this — allow any origin
+  { region: REGION, maxInstances: 10, cors: true }, // extension calls this — allow any origin
   async (req, res) => {
     try {
       const { code } = req.body;
@@ -245,7 +245,7 @@ exports.exchangeExtensionCode = onRequest(
  *   Layer 5: Session audit log → full history in users/{uid}/sessionHistory
  */
 exports.registerSession = onRequest(
-  { region: REGION, cors: CORS_ORIGINS },
+  { region: REGION, maxInstances: 10, cors: CORS_ORIGINS },
   async (req, res) => {
     if (req.method !== "POST") {
       return res.status(405).json({ ok: false, error: "POST only" });
@@ -459,6 +459,7 @@ exports.syncRecentJobsHourly = onSchedule(
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
     memory: "1GiB",
+    maxInstances: 3,
     secrets: [OPENAI_API_KEY],
   },
   async () => {
@@ -554,7 +555,7 @@ exports.syncRecentJobsHourly = onSchedule(
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
  */
 exports.runSyncNow = onRequest(
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 3, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     let decodedToken;
     try {
@@ -1899,7 +1900,7 @@ async function sendPushNotification(userId, summary, durationMs) {
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
 exports.askAssistant = onRequest(
-  { region: REGION, timeoutSeconds: 300, memory: "1GiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 300, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     try {
       let decodedToken;
@@ -2107,7 +2108,7 @@ exports.askAssistant = onRequest(
  * Returns: { ok: true, parsed: { summary, skills, roles, education, projects, certifications, rawText } }
  */
 exports.parseResume = onRequest(
-  { region: REGION, timeoutSeconds: 120, memory: "512MiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 120, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed. Use POST." });
@@ -2453,6 +2454,7 @@ exports.mapFormFields = onCall(
     region: REGION,
     timeoutSeconds: 30,
     memory: "256MiB",
+    maxInstances: 10,
     secrets: [OPENAI_API_KEY],
   },
   async (request) => {
@@ -2817,11 +2819,24 @@ ${fieldList}`;
 
 // ── Generate name pronunciation ─────────────────────────────────────────────
 exports.generateNamePronunciation = onRequest(
-  { region: REGION, timeoutSeconds: 15, memory: "128MiB", cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 15, memory: "128MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+
+    // Verify Firebase ID token before spending any OpenAI credits.
+    try {
+      await verifyToken(req);
+    } catch (err) {
+      return res.status(err.statusCode || 401).json({ error: err.message });
+    }
+
     const { name } = req.body || {};
-    if (!name) return res.status(400).json({ error: "name required" });
+    if (typeof name !== "string" || !name.trim()) {
+      return res.status(400).json({ error: "name required" });
+    }
+    if (name.length > 100) {
+      return res.status(400).json({ error: "name too long" });
+    }
     try {
       const client = requireOpenAI();
       const completion = await client.chat.completions.create({
@@ -2840,7 +2855,7 @@ exports.generateNamePronunciation = onRequest(
   }
 );
 
-exports.getAdminUsersList = onCall({ region: REGION, enforceAppCheck: false }, async (request) => {
+exports.getAdminUsersList = onCall({ region: REGION, maxInstances: 3, enforceAppCheck: false }, async (request) => {
   if (!request.auth || request.auth.uid !== "7Tojjo8l5PZIYctPmdwncf7PC133") {
     throw new HttpsError("permission-denied", "Only the admin can fetch the users list.");
   }
@@ -2903,6 +2918,7 @@ exports.dailyAggregationReconciliation = onSchedule(
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 300,
     memory: "512MiB",
+    maxInstances: 1,
   },
   async () => {
     const userIds = await listUserIdsToProcess();

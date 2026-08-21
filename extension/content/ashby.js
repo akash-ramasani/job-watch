@@ -354,7 +354,7 @@
   }
 
   // ─── Read Ashby's validation error list ──────────────────────────────────
-  function scrapeFormErrors(form) {
+  function scrapeFormErrors(_form) {
     const container = document.querySelector(
       "._errorsContainer_135ul_78, [class*='_errorsContainer_'], [role='alert'][aria-live]"
     );
@@ -956,7 +956,7 @@
             || nextData?.props?.pageProps?.jobPosting?.locationName
             || nextData?.props?.pageProps?.job?.locationName
             || null;
-        } catch (e) { }
+        } catch { }
 
         if (!pageJobLocation) {
           try {
@@ -971,7 +971,7 @@
                 break;
               }
             }
-          } catch (e) { }
+          } catch { }
         }
 
         // Just in case it's literally just embedded anywhere as locationName:"..."
@@ -1007,7 +1007,7 @@
         }
 
         // Check if this field has a custom calendar widget (Ashby's date picker)
-        const calendarTrigger = entry.querySelector("[data-testid='date-picker'], [class*='datePicker'], [class*='DatePicker'], [class*='calendar'], button[aria-label*='calendar']")
+        const _calendarTrigger = entry.querySelector("[data-testid='date-picker'], [class*='datePicker'], [class*='DatePicker'], [class*='calendar'], button[aria-label*='calendar']")
           || entry.querySelector("input[readonly]")  // Ashby uses readonly inputs for calendar triggers
           || entry.querySelector("button svg")?.closest("button"); // calendar icon button
 
@@ -1215,11 +1215,6 @@
 
   // ─── Overlay UI ──────────────────────────────────────────────────────────
   // ─── Premium Toast Notification ──────────────────────────────────────────
-  const TOAST_ICONS = {
-    "⏳": "⏳", "✍️": "✍️", "🔍": "🔍", "🤖": "🤖",
-    "🚀": "🚀", "🔄": "🔄", "✅": "✅", "⚠️": "⚠️", "❌": "❌"
-  };
-
   function showOverlay(text, type = "info") {
     // Inject styles once
     if (!document.getElementById("jw-toast-styles")) {

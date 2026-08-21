@@ -9,18 +9,38 @@ service cloud.firestore {
       allow read, write: if request.auth != null && (request.auth.uid == userId || request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
       
       // Public read for the admin's mapClusters aggregation only — used by the
-      // landing-page hero map. Contains only aggregated city/lat/lng/count data.
+      // landing-page hero map (shown to signed-out visitors). Contains only
+      // aggregated city/lat/lng/count data.
       match /aggregations/mapClusters {
         allow read: if userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
       }
 
-      // 2. Nested Collections (feeds, companies, fetchRuns)
-      // Standard rules for sub-collections inside a user document
+      // 2. Owner access to all of their own subcollections (recursive).
+      // This is the ONLY rule that exposes personal collections such as
+      // sessions, sessionHistory, settings, and resume — restricted to the
+      // owner so session tokens, IPs, and resume data never leak cross-user.
       match /{allSubcollections=**} {
-        // Admin's feeds, jobs, and companies are readable by everyone authenticated
-        allow read: if request.auth != null && (userId == "7Tojjo8l5PZIYctPmdwncf7PC133" || request.auth.uid == userId);
-        // Only the user themselves can write to their subcollections
-        allow write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+
+      // 3. Shared job corpus (admin-owned, read-only to any signed-in user).
+      // Explicitly enumerated instead of a wildcard so that adding a new
+      // subcollection later can't accidentally expose it. Writes stay
+      // owner-only via the recursive rule above.
+      match /jobs/{jobId} {
+        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      }
+      match /feeds/{feedId} {
+        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      }
+      match /companies/{companyId} {
+        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      }
+      match /syncRuns/{runId} {
+        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
+      }
+      match /aggregations/{aggId} {
+        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
       }
     }
 

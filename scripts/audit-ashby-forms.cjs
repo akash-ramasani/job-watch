@@ -41,7 +41,7 @@ const db = admin.firestore();
 /** Sanitize a string for use as a filename */
 function safe(str) {
   return String(str || "unknown")
-    .replace(/[^a-zA-Z0-9_\-\.]/g, "_")
+    .replace(/[^a-zA-Z0-9_.-]/g, "_")
     .substring(0, 60);
 }
 

@@ -18,6 +18,9 @@ export default function SessionEjectedModal({ open, deviceInfo, onSignInAgain })
   // Auto-redirect countdown
   useEffect(() => {
     if (!open) {
+      // Reset the countdown when the modal is dismissed so it starts fresh
+      // next time it opens. This is a deliberate sync with the `open` prop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCountdown(10);
       return;
     }
