@@ -35,6 +35,28 @@ function countryVariants(value) {
   return group ? group : [v];
 }
 
+// US state full name <-> two-letter abbreviation. Lets "California" match a
+// dropdown that only offers "CA" (and vice versa). Factual equivalence, not a guess.
+const US_STATES = {
+  alabama: "al", alaska: "ak", arizona: "az", arkansas: "ar", california: "ca",
+  colorado: "co", connecticut: "ct", delaware: "de", florida: "fl", georgia: "ga",
+  hawaii: "hi", idaho: "id", illinois: "il", indiana: "in", iowa: "ia", kansas: "ks",
+  kentucky: "ky", louisiana: "la", maine: "me", maryland: "md", massachusetts: "ma",
+  michigan: "mi", minnesota: "mn", mississippi: "ms", missouri: "mo", montana: "mt",
+  nebraska: "ne", nevada: "nv", "new hampshire": "nh", "new jersey": "nj",
+  "new mexico": "nm", "new york": "ny", "north carolina": "nc", "north dakota": "nd",
+  ohio: "oh", oklahoma: "ok", oregon: "or", pennsylvania: "pa", "rhode island": "ri",
+  "south carolina": "sc", "south dakota": "sd", tennessee: "tn", texas: "tx",
+  utah: "ut", vermont: "vt", virginia: "va", washington: "wa", "west virginia": "wv",
+  wisconsin: "wi", wyoming: "wy", "district of columbia": "dc",
+};
+function regionVariants(value) {
+  const v = norm(value);
+  if (US_STATES[v]) return [v, US_STATES[v]];
+  const full = Object.keys(US_STATES).find((k) => US_STATES[k] === v);
+  return full ? [v, full] : [v];
+}
+
 /** Find the select option whose label matches `desired` (case-insensitive).
  *  Returns the option's stored value, or null if there is no exact match.
  *  We never fuzzy-pick a "close" option — a wrong compliance pick is the exact
@@ -58,8 +80,18 @@ function classify(label) {
   if (has("authorized", "work") || has("legally", "work") || has("work", "authorization")) return "workAuthorized";
   if (any("export control") || has("u.s. person") || has("us person")) return "usPersonExportControl";
   if (any("employment agreement", "non-compete", "noncompete", "post-employment", "restrictive covenant")) return "employmentAgreements";
+  if (has("worked", "before") || has("previously", "worked") || has("consult", "before") || /have you (ever )?worked (at|for)/.test(l) || /worked (here|at this company)/.test(l)) return "workedHereBefore";
+  if (/related to (a |an )?.*(employee|staff)/.test(l) || has("relative", "work here")) return "relatedToEmployee";
+  if (any("sms", "whatsapp", "text message") && any("contact", "consent", "opt")) return "smsConsent";
   if (has("worked", "before") || has("previously", "worked") || has("consult", "before")) return "workedHereBefore";
-  if (any("country of residence") || has("current", "country")) return "country";
+  if (any("country of residence") || has("current", "country") || l === "country" || l === "country:") return "country";
+  // Address / location (guard against look-alikes: citizenship, employment status).
+  if (/\bcity\b/.test(l) && !l.includes("citizen")) return "city";
+  if ((/\bstate\b|\bprovince\b/.test(l)) && !l.includes("united states") && !l.includes("status")) return "region";
+  if (any("postal", "zip", "pincode", "pin code")) return "postalCode";
+  if (has("address", "line 2") || any("apartment", "apt", "unit", "suite")) return "addressLine2";
+  if (any("address line 1", "street address") || (l.includes("address") && !l.includes("email") && !l.includes("ip"))) return "addressLine1";
+  if (any("how did you hear", "how you hear", "hear about", "referral source")) return "heardAboutUs";
   if (l.includes("linkedin")) return "linkedin";
   if (l.includes("github")) return "github";
   if (any("portfolio", "website", "personal site")) return "portfolio";
@@ -126,10 +158,17 @@ export function answerQuestion(q, profile, ai) {
     usPersonExportControl: profile.usPersonExportControl,
     employmentAgreements: profile.employmentAgreements,
     country: profile.country,
+    city: profile.city,
+    region: profile.region || profile.state,
+    postalCode: profile.postalCode || profile.zip,
+    addressLine1: profile.addressLine1,
+    addressLine2: profile.addressLine2,
+    heardAboutUs: profile.heardAboutUs,
+    smsConsent: profile.smsConsent,
     linkedin: profile.linkedin,
     github: profile.github,
     portfolio: profile.portfolio,
-    preferredName: profile.firstName,
+    preferredName: profile.preferredName || profile.firstName,
     pronouns: profile.pronouns,
     eeoGender: profile.eeoGender,
     eeoEthnicity: profile.eeoEthnicity,
@@ -141,21 +180,24 @@ export function answerQuestion(q, profile, ai) {
     salaryExpectation: profile.salaryExpectation,
   };
 
-  if (key === "workedHereBefore") {
-    // Almost always "No" for a new applicant; still a deterministic rule, not AI.
+  if (key === "workedHereBefore" || key === "relatedToEmployee") {
+    // "No" for a new applicant with no relative at the company; a deterministic
+    // rule, not AI.
+    const why = key === "relatedToEmployee" ? "assumed no relative at the company" : "assumed not a prior employee";
     if (isSelect) {
       const m = matchOption(primary, "No");
-      return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, "assumed not a prior employee")
+      return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, why)
         : unanswered('select has no "No" option');
     }
-    return out([{ name, value: "No" }], SOURCE.RULE, 0.9);
+    return out([{ name, value: "No" }], SOURCE.RULE, 0.9, why);
   }
 
   if (key && key in profileMap) {
     const desired = profileMap[key];
     if (!desired) return unanswered(`profile has no value for ${key}`);
     if (isSelect) {
-      const opts = key === "country" ? { synonyms: countryVariants(desired) } : {};
+      const opts = key === "country" ? { synonyms: countryVariants(desired) }
+        : key === "region" ? { synonyms: regionVariants(desired) } : {};
       const m = matchOption(primary, desired, opts);
       return m
         ? out([{ name, value: m.value }], SOURCE.PROFILE, 1)
@@ -167,8 +209,9 @@ export function answerQuestion(q, profile, ai) {
   // ── Free-text, non-compliance → AI (if available), else review ─────────────
   const isFreeText = kinds.some((k) => ["text", "longtext"].includes(k));
   if (isFreeText && !isSelect) {
-    if (ai && typeof ai.answerFreeText === "function") {
-      // Caller supplies a sync-resolved cache; see apply-greenhouse.mjs.
+    if (ai && typeof ai.get === "function") {
+      // Caller pre-computes AI answers and passes a { get(label) } cache so this
+      // stays synchronous. See apply-flow.mjs (two-pass).
       const cached = ai.get(label);
       if (cached) return out([{ name, value: cached }], SOURCE.AI, 0.7, "AI free-text");
     }

@@ -16,6 +16,13 @@ export function parseGreenhouseUrl(url) {
   return { token: m[1], id: m[2] };
 }
 
+/** Parse the board token from a stored feed URL, e.g.
+ *  https://boards-api.greenhouse.io/v1/boards/sidlee/jobs?content=true -> "sidlee". */
+export function parseBoardToken(feedUrl) {
+  const m = String(feedUrl || "").match(/\/boards\/([^/?]+)\/jobs/);
+  return m ? m[1] : null;
+}
+
 /** List jobs for a board token (used for discovery/testing). */
 export async function listJobs(token) {
   const res = await fetch(`${BASE}/${token}/jobs`);
