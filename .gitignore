@@ -45,3 +45,6 @@ scratch/
 ashby_html_files/
 # Auto-apply worker: commit the example, never the real profile
 !worker/profile.example.json
+
+# Auto-apply worker: generated docs (contain personal data) and env
+worker/out/

@@ -20,6 +20,8 @@ eq("style: keeps contraction apostrophe", sanitizeText("I don't quit"), "I don't
 eq("style: removes parens and quotes", sanitizeText('I used React (a library) and "hooks"'), "I used React a library and hooks.");
 eq("style: kills AI tell 'leverage'", sanitizeText("I leverage data to delve into problems"), "I use data to look at problems.");
 eq("style: block keeps paragraph breaks", sanitizeBlock("Para one; done\n\nPara two — end"), "Para one. done.\n\nPara two, end.");
+eq("style: preserves Node.js token", sanitizeText("I use Node.js daily"), "I use Node.js daily.");
+eq("style: preserves 3.5 and spaces sentences", sanitizeText("scaled 3.5x. It worked"), "scaled 3.5x. It worked.");
 
 // ── fieldkind: select vs text vs file ────────────────────────────────────────
 eq("kind: greenhouse input_text", fieldKind({ type: "input_text" }), "text");

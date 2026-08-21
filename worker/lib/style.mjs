@@ -59,7 +59,11 @@ export function sanitizeText(input) {
 
   s = s
     .replace(/\s+([,.])/g, "$1") // no space before comma/period
-    .replace(/([,.])(?=[^\s])/g, "$1 ") // one space after
+    .replace(/,(?=\S)/g, ", ") // one space after a comma
+    // Space after a period only at a real sentence boundary (lowercase/digit,
+    // then period, then a capital). This preserves tokens like Node.js, 3.5,
+    // and U.S. instead of splitting them into "Node. js".
+    .replace(/(?<=[a-z0-9])\.(?=[A-Z])/g, ". ")
     .replace(/\.\s*\.\s*(\.\s*)+/g, ". ") // collapse repeated periods
     .replace(/,\s*,+/g, ", ") // collapse repeated commas
     .replace(/\s{2,}/g, " ") // collapse runs of spaces
