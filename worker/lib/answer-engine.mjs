@@ -76,7 +76,15 @@ function classify(label) {
   const has = (...words) => words.every((w) => l.includes(w));
   const any = (...words) => words.some((w) => l.includes(w));
 
-  if (any("sponsor", "visa sponsorship") || has("require", "visa")) return "requiresSponsorship";
+  // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
+  // need. Must be resolved from both fields, never from workAuthorized alone.
+  if (has("authorized", "work") && l.includes("without") && (l.includes("sponsor") || l.includes("visa"))) return "authorizedWithoutSponsorship";
+  // "Will you require/need sponsorship" -> requiresSponsorship. Deliberately does
+  // NOT match "currently in a sponsored status" (a different, status question).
+  if (/(require|need).{0,20}sponsor/.test(l) || /sponsorship.{0,20}(visa|now|future|employment)/.test(l) || has("will you", "sponsorship")) return "requiresSponsorship";
+  // Specific current-visa-status questions cannot be answered from the generic
+  // profile. Route to a status key that parks unless profile.visaStatus is set.
+  if (/currently.{0,20}(status|visa)/.test(l) || l.includes("o-1") || l.includes("h1b") || l.includes("h-1b") || l.includes("f-1") || l.includes("opt") || l.includes("cpt") || (l.includes("student") && l.includes("status"))) return "currentVisaStatus";
   if (has("authorized", "work") || has("legally", "work") || has("work", "authorization")) return "workAuthorized";
   if (any("export control") || has("u.s. person") || has("us person")) return "usPersonExportControl";
   if (any("employment agreement", "non-compete", "noncompete", "post-employment", "restrictive covenant")) return "employmentAgreements";
@@ -95,6 +103,8 @@ function classify(label) {
   if (l.includes("linkedin")) return "linkedin";
   if (l.includes("github")) return "github";
   if (any("portfolio", "website", "personal site")) return "portfolio";
+  if (has("legal", "first name") || has("legal", "given name")) return "legalFirstName";
+  if (has("legal", "last name") || has("legal", "family name") || has("legal", "surname")) return "legalLastName";
   if (has("preferred", "name") || has("name", "prefer")) return "preferredName";
   if (any("pronoun")) return "pronouns";
   if (has("gender") || l.includes("gender identity")) return "eeoGender";
@@ -149,7 +159,11 @@ export function answerQuestion(q, profile, ai) {
   }
 
   // ── Custom questions routed by label ───────────────────────────────────────
-  const key = classify(label);
+  let key = classify(label);
+  // A textarea/paragraph field must never get a yes/no or single-value profile
+  // answer, even if its label contains a matching keyword (e.g. "office
+  // preferences or geographic flexibility"). Route it to free text instead.
+  if (kinds[0] === "longtext") key = null;
 
   // High-stakes compliance & identity → PROFILE ONLY, never AI.
   const profileMap = {
@@ -169,6 +183,8 @@ export function answerQuestion(q, profile, ai) {
     github: profile.github,
     portfolio: profile.portfolio,
     preferredName: profile.preferredName || profile.firstName,
+    legalFirstName: profile.firstName,
+    legalLastName: profile.lastName,
     pronouns: profile.pronouns,
     eeoGender: profile.eeoGender,
     eeoEthnicity: profile.eeoEthnicity,
@@ -190,6 +206,43 @@ export function answerQuestion(q, profile, ai) {
         : unanswered('select has no "No" option');
     }
     return out([{ name, value: "No" }], SOURCE.RULE, 0.9, why);
+  }
+
+  // Authorized to work without sponsorship: resolve from BOTH fields.
+  if (key === "authorizedWithoutSponsorship") {
+    const req = norm(profile.requiresSponsorship);
+    const auth = norm(profile.workAuthorized);
+    let ans = null;
+    if (req === "yes") ans = "No"; // needs sponsorship -> not authorized without it
+    else if (req === "no" && auth === "yes") ans = "Yes";
+    if (!ans) return unanswered("cannot resolve authorized-without-sponsorship from profile");
+    if (isSelect) { const m = matchOption(primary, ans); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.PROFILE, 1);
+  }
+
+  // Specific current-visa-status questions (O-1/H1B/F-1/OPT ...). Only answerable
+  // if profile.visaStatus explicitly encodes it; otherwise PARK, never guess.
+  if (key === "currentVisaStatus") {
+    const vs = profile.visaStatus || {};
+    const ll = norm(label);
+    const isStudent = /f-1|opt|cpt|student|trainee|j1|j-1/.test(ll);
+    const isSponsored = /o-1|h1b|h-1b|tn|e3|e-3|sponsored status/.test(ll);
+    let ans = null;
+    if (isStudent && vs.student != null) ans = vs.student ? "Yes" : "No";
+    else if (isSponsored && vs.sponsored != null) ans = vs.sponsored ? "Yes" : "No";
+    if (!ans) return unanswered("current visa status question needs your input");
+    if (isSelect) { const m = matchOption(primary, ans); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.PROFILE, 1);
+  }
+
+  // How did you hear: try the profile value, else the honest "Other" option.
+  if (key === "heardAboutUs") {
+    if (isSelect) {
+      let m = profile.heardAboutUs ? matchOption(primary, profile.heardAboutUs) : null;
+      if (!m) m = matchOption(primary, "Other");
+      return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, "how-you-heard best match") : unanswered("no matching option");
+    }
+    return out([{ name, value: profile.heardAboutUs || "Other" }], SOURCE.RULE, 0.85);
   }
 
   if (key && key in profileMap) {
@@ -217,6 +270,15 @@ export function answerQuestion(q, profile, ai) {
     }
     // No AI answer available → park (never submit a blank required free-text).
     return q.required ? unanswered("free-text needs AI/manual answer") : out([], SOURCE.NONE, 0, "optional free-text skipped");
+  }
+
+  // A required select with exactly one option (a mandatory acknowledgement)
+  // has only one valid answer, so selecting it is not a guess.
+  if (isSelect) {
+    const opts = primary.values || primary.options || [];
+    if (opts.length === 1) {
+      return out([{ name, value: opts[0].value }], SOURCE.RULE, 0.9, "single-option acknowledgement");
+    }
   }
 
   // Unknown select we can't safely map → review.
