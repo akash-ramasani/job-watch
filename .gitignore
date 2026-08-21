@@ -43,3 +43,5 @@ mcp-server/node_modules/
 # Scratch / temp research files
 scratch/
 ashby_html_files/
+# Auto-apply worker: commit the example, never the real profile
+!worker/profile.example.json

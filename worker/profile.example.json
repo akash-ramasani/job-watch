@@ -1,0 +1,34 @@
+{
+  "_comment": "Mirrors the Firestore users/{uid} doc + resume/profile subdoc that mapFormFields already reads. Fill from your real Settings/Profile. The worker uses ONLY these values for compliance answers — AI never overrides them.",
+
+  "firstName": "Akash",
+  "lastName": "Ramasani",
+  "middleName": "",
+  "email": "you@example.com",
+  "phone": "+1 555 123 4567",
+
+  "linkedin": "https://linkedin.com/in/your-handle",
+  "github": "https://github.com/your-handle",
+  "portfolio": "https://akashramasani.com",
+
+  "country": "United States",
+  "city": "",
+  "region": "",
+  "pronouns": "",
+
+  "workAuthorized": "Yes",
+  "requiresSponsorship": "No",
+  "usPersonExportControl": "Yes",
+  "willingToRelocate": "No",
+  "willingToWorkHybrid": "Yes",
+  "availability": "Immediately",
+  "salaryExpectation": "",
+
+  "eeoGender": "Decline to self-identify",
+  "eeoEthnicity": "Decline to self-identify",
+  "eeoVeteran": "I am not a protected veteran",
+  "eeoDisability": "No, I don't have a disability",
+
+  "resumePath": "",
+  "_resumePath_note": "Local path to your master resume PDF (later: per-job tailored PDF). Required-resume forms are parked for review if this is empty."
+}

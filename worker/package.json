@@ -1,0 +1,16 @@
+{
+  "name": "job-watch-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless auto-apply worker (Greenhouse first). Runs on the always-on Linux box, no browser.",
+  "bin": {
+    "apply-greenhouse": "./apply-greenhouse.mjs"
+  },
+  "scripts": {
+    "dry-run": "node apply-greenhouse.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
