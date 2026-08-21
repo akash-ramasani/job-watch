@@ -9,6 +9,8 @@
 // Design rule for "no mistakes": when in doubt, DO NOT ANSWER. An unanswered
 // required field parks the whole job for manual review instead of guessing.
 
+import { fieldKind } from "./fieldkind.mjs";
+
 /** Answer sources, most→least trustworthy. */
 export const SOURCE = {
   PROFILE: "profile", // copied verbatim from saved settings — highest trust
@@ -82,7 +84,10 @@ export function answerQuestion(q, profile, ai) {
   const fields = q.fields || [];
   const primary = fields[0] || {};
   const label = q.label || primary.name || "";
-  const isSelect = fields.some((f) => (f.type || "").includes("select"));
+  // Centralized field-kind detection (see fieldkind.mjs). A question is a
+  // "select" if ANY of its fields offers fixed choices.
+  const kinds = fields.map(fieldKind);
+  const isSelect = kinds.some((k) => ["select", "multiselect", "boolean"].includes(k));
 
   const out = (answers, source, confidence, note) => ({
     label, required: !!q.required, source, confidence, note: note || "", answers,
@@ -160,7 +165,7 @@ export function answerQuestion(q, profile, ai) {
   }
 
   // ── Free-text, non-compliance → AI (if available), else review ─────────────
-  const isFreeText = fields.some((f) => (f.type || "").includes("text"));
+  const isFreeText = kinds.some((k) => ["text", "longtext"].includes(k));
   if (isFreeText && !isSelect) {
     if (ai && typeof ai.answerFreeText === "function") {
       // Caller supplies a sync-resolved cache; see apply-greenhouse.mjs.
