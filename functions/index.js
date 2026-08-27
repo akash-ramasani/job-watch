@@ -1792,10 +1792,11 @@ async function scoreNewJobsForUser(userId, newJobs) {
 
   // Write scoring status aggregation (frontend listens via onSnapshot)
   try {
-    const recentScores = computedResults
+    const allScores = computedResults
       .filter((r) => typeof r.score === "number")
-      .map((r) => ({ id: r.jobId, score: r.score, reason: r.reason || "" }))
-      .slice(0, 50);
+      .map((r) => ({ id: r.jobId, score: r.score, reason: r.reason || "" }));
+    // Status doc only shows recent activity — but ALL scores must reach jobScores.
+    const recentScores = allScores.slice(0, 50);
 
     if (recentScores.length > 0) {
       await db.collection("users").doc(userId).collection("aggregations").doc("scoringStatus").set({
@@ -1805,22 +1806,9 @@ async function scoreNewJobsForUser(userId, newJobs) {
         updatedAt: admin.firestore.Timestamp.now(),
       });
 
-      // Mirror the just-computed scores into the per-user jobScores collection
-      // and refresh /users/{userId}/aggregations/myJobScores. The Jobs page
-      // reads scores from there, NOT from the shared job docs, so each user
-      // (with AI enabled) gets their own personalized view.
-      try {
-        const { writeUserScores } = require("./lib/userJobScores.cjs");
-        await writeUserScores(userId, recentScores.map((s) => ({
-          jobId: s.id,
-          score: s.score,
-          reason: s.reason,
-        })));
-      } catch (err) {
-        logger.warn(`writeUserScores failed for ${userId}: ${err?.message}`);
-      }
-
-      // Refresh recentJobs/allJobs (shared metadata) so any new jobs appear too.
+      // Refresh recentJobs/allJobs (shared metadata) FIRST so the just-synced
+      // jobs are present in the job aggregations. The myJobScores rollup below
+      // is keyed off those aggregations' job ids, so order matters.
       // Only admin owns these docs — non-admin runs never touch admin's data.
       if (isAdmin) {
         try {
@@ -1830,6 +1818,22 @@ async function scoreNewJobsForUser(userId, newJobs) {
         } catch (err) {
           logger.warn(`recentJobs/allJobs rebuild after scoring failed: ${err?.message}`);
         }
+      }
+
+      // Mirror the just-computed scores into the per-user jobScores collection
+      // and refresh /users/{userId}/aggregations/myJobScores. The Jobs page
+      // reads scores from there, NOT from the shared job docs, so each user
+      // (with AI enabled) gets their own personalized view. Failed scores (-1)
+      // are kept out of the mirror — they retry on the next sync anyway.
+      try {
+        const { writeUserScores } = require("./lib/userJobScores.cjs");
+        await writeUserScores(userId, allScores.filter((s) => s.score >= 0).map((s) => ({
+          jobId: s.id,
+          score: s.score,
+          reason: s.reason,
+        })));
+      } catch (err) {
+        logger.warn(`writeUserScores failed for ${userId}: ${err?.message}`);
       }
     }
   } catch (err) {

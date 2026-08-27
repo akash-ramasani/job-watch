@@ -93,12 +93,23 @@ async function rebuildAggregations(userId, dbInstance) {
     console.warn(`recentJobs/allJobs rebuild failed for ${userId}: ${err && err.message}`);
   }
 
+  // Refresh the per-user score rollup from the (just-rebuilt) job aggregations
+  // so live jobs whose scores predate the current window regain their scores.
+  let scoreCount = 0;
+  try {
+    const { rebuildUserJobScores } = require("./userJobScores.cjs");
+    scoreCount = await rebuildUserJobScores(userId, db);
+  } catch (err) {
+    console.warn(`myJobScores rebuild failed for ${userId}: ${err && err.message}`);
+  }
+
   return {
     totalJobs,
     cities: Object.keys(clusters).length,
     companies: Object.keys(companies).length,
     recentJobs: recentCount,
     allJobs: allCount,
+    jobScores: scoreCount,
   };
 }
 
