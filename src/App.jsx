@@ -1,5 +1,5 @@
 
-import React, { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { onIdTokenChanged, signOut } from "firebase/auth";
 import { doc, onSnapshot, updateDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
@@ -58,6 +58,9 @@ export default function App() {
   // ── Single-session enforcement ──
   const { ejected, ejectedDeviceInfo, handleEjectedSignOut } = useSessionGuard(user);
 
+  // True once this tab has seen a signed-in user (guards JW_LOGOUT sync)
+  const hadUserRef = useRef(false);
+
   // Detect extension — runs once on mount, retries briefly to handle timing
   useEffect(() => {
     const check = () => {
@@ -78,6 +81,7 @@ export default function App() {
   const syncToExtension = async (u) => {
     if (!window.__JW_EXTENSION_INSTALLED__) return;
     if (u) {
+      hadUserRef.current = true;
       try {
         const result = await u.getIdTokenResult();
         const expiresIn = Math.max(300, Math.floor((new Date(result.expirationTime) - Date.now()) / 1000));
@@ -85,7 +89,11 @@ export default function App() {
       } catch (e) {
         console.warn("[JobWatch] Could not sync auth to extension:", e.message);
       }
-    } else {
+    } else if (hadUserRef.current) {
+      // Only clear extension auth on a real logout in THIS tab. Firebase fires
+      // an initial null on every page load in a logged-out tab, and forwarding
+      // that as JW_LOGOUT silently wipes the extension's auth mid auto-apply.
+      hadUserRef.current = false;
       window.postMessage({ type: "JW_LOGOUT" }, "*");
     }
   };

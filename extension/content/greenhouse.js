@@ -37,12 +37,52 @@
 
   // ── Find the rendered field element for a given answer label ──────────────
   // Greenhouse gives each field a wrapper; the label text is in a <label>.
+  // Space-insensitive compare: the form API says "VeteranStatus" while the
+  // page renders "Veteran Status".
+  const squash = (s) => norm(s).replace(/\s+/g, "");
+
   function findFieldByLabel(label) {
     const want = norm(label);
+    const wantSquashed = squash(label);
     const labels = [...document.querySelectorAll("label")];
     for (const lab of labels) {
-      if (norm(lab.textContent) !== want) continue;
+      if (norm(lab.textContent) !== want && squash(lab.textContent) !== wantSquashed) continue;
       // the control is referenced by "for", or sits inside/next to the label
+      const forId = lab.getAttribute("for");
+      if (forId) {
+        const el = document.getElementById(forId);
+        if (el) return el;
+      }
+      const wrap = lab.closest("div");
+      const ctrl = wrap && wrap.querySelector("input, textarea, select, [role=combobox]");
+      if (ctrl) return ctrl;
+    }
+    return null;
+  }
+
+  // Prefix variant — the location field renders as "Location (City)" while the
+  // form JSON labels it "Location".
+  function findFieldByLabelPrefix(prefix) {
+    const want = norm(prefix);
+    for (const lab of [...document.querySelectorAll("label")]) {
+      if (!norm(lab.textContent).startsWith(want)) continue;
+      const forId = lab.getAttribute("for");
+      if (forId) {
+        const el = document.getElementById(forId);
+        if (el) return el;
+      }
+      const wrap = lab.closest("div");
+      const ctrl = wrap && wrap.querySelector("input, textarea, select, [role=combobox]");
+      if (ctrl) return ctrl;
+    }
+    return null;
+  }
+
+  // Containment variant for EEO fills: "race" finds "Please identify your race".
+  function findFieldByLabelContains(token) {
+    const want = norm(token);
+    for (const lab of [...document.querySelectorAll("label")]) {
+      if (!norm(lab.textContent).includes(want)) continue;
       const forId = lab.getAttribute("for");
       if (forId) {
         const el = document.getElementById(forId);
@@ -57,22 +97,33 @@
 
   const isCombobox = (el) => el.getAttribute && (el.getAttribute("role") === "combobox" || el.getAttribute("aria-haspopup") === "listbox");
 
-  // ── Fillers (route through MAIN world) ────────────────────────────────────
+  // ── Fillers (route through MAIN world). Each returns the MAIN-world result
+  // object ({ ok, error?, seen? }) so failures can be logged with details. ──
   async function fillText(el, value) {
     const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: el.id, value });
-    return r?.result?.ok !== false;
+    return r?.result || { ok: false, error: "no result" };
   }
   async function fillCombobox(el, value) {
     const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghSelectCombobox", id: el.id, value });
-    return r?.result?.ok === true;
+    return r?.result || { ok: false, error: "no result" };
   }
   async function checkBox(el) {
     const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCheck", id: el.id });
-    return r?.result?.ok === true;
+    return r?.result || { ok: false, error: "no result" };
   }
   async function uploadFile(el, b64, name) {
-    await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setFile", id: el.id, b64Data: b64, fileName: name });
-    return true;
+    // el may be null: the resume widget has no <label>, so the MAIN-world side
+    // locates the file input itself when the id is empty.
+    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setFile", id: el?.id || "", b64Data: b64, fileName: name });
+    return r?.result || { ok: false, error: "no result" };
+  }
+  async function fillLocation(el, city, match) {
+    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghLocation", id: el.id, value: city, match });
+    return r?.result || { ok: false, error: "no result" };
+  }
+  async function pasteCoverLetter(text) {
+    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCoverText", id: "", value: text });
+    return r?.result || { ok: false, error: "no result" };
   }
 
   // ── Main ──────────────────────────────────────────────────────────────────
@@ -87,27 +138,55 @@
     log(`computed: ready=${data.ready}, ${data.fills.length} fields, resume=${data.resumeB64 ? "yes" : "no"}`);
     if (!data.ready) warn("gate parked this job:", data.reasons);
 
-    let ok = 0, miss = 0, fail = 0;
-    for (const f of data.fills) {
-      const el = findFieldByLabel(f.label);
-      if (!el) { miss++; warn("no field for label:", f.label); continue; }
-      try {
-        let done = false;
-        if (f.kind === "file") {
-          if (data.resumeB64) done = await uploadFile(el, data.resumeB64, data.resumeName);
-        } else if (f.kind === "select" || f.kind === "multiselect" || f.kind === "boolean" || isCombobox(el)) {
-          done = await fillCombobox(el, f.value);
-        } else {
-          done = await fillText(el, f.value);
-        }
-        if (done) { ok++; log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.value); }
-        else { fail++; warn("fill failed:", f.label); }
-      } catch (e) { fail++; warn("fill error:", f.label, e.message); }
-      await sleep(120);
+    // Attempt one fill; returns the MAIN-world result ({ ok, error?, seen? }).
+    async function fillOne(f) {
+      let el = findFieldByLabel(f.label);
+      if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
+      if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
+      // File and cover-text fills locate their targets in the MAIN world.
+      if (!el && f.kind !== "file" && f.kind !== "cover-text") return { ok: false, error: "no field for label" };
+      if (f.kind === "file") {
+        return data.resumeB64 ? uploadFile(el, data.resumeB64, data.resumeName) : { ok: false, error: "no resume bytes" };
+      }
+      if (f.kind === "cover-text") return pasteCoverLetter(f.value);
+      if (f.kind === "location") return fillLocation(el, f.value, f.match);
+      if (el.type === "checkbox") return checkBox(el);
+      if (f.kind === "select" || f.kind === "multiselect" || f.kind === "boolean" || isCombobox(el)) {
+        return fillCombobox(el, f.value);
+      }
+      return fillText(el, f.value);
     }
 
-    log(`DONE — filled ${ok}, missed ${miss}, failed ${fail}. Review the form, solve any CAPTCHA, then click Submit.`);
-    banner(`JobWatch filled ${ok}/${data.fills.length} fields. Check the form, solve the CAPTCHA, then Submit.`);
+    // Fill in multiple passes: anything missed or failed (field not mounted
+    // yet, slow option list, ...) is retried up to 2 more times.
+    const MAX_PASSES = 3;
+    let ok = 0;
+    let pending = data.fills;
+    for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
+      if (pass > 1) {
+        log(`pass ${pass}: retrying ${pending.length} unfilled field(s)...`);
+        await sleep(1200);
+      }
+      const stillFailing = [];
+      for (const f of pending) {
+        try {
+          const res = await fillOne(f);
+          if (res.ok) { ok++; log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value); }
+          else {
+            stillFailing.push(f);
+            warn(`fill failed (pass ${pass}):`, f.label, "—", res.error || "unknown", res.seen ? "| options seen: " + JSON.stringify(res.seen) : "");
+          }
+        } catch (e) { stillFailing.push(f); warn(`fill error (pass ${pass}):`, f.label, e.message); }
+        await sleep(120);
+      }
+      pending = stillFailing;
+    }
+
+    if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
+    log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
+    banner(pending.length
+      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit.`
+      : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then Submit.`);
   }
 
   function banner(text) {

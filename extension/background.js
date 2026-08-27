@@ -89,6 +89,7 @@ function fsValue(val) {
   if (typeof val === "string") return { stringValue: val };
   if (typeof val === "number") return { integerValue: String(val) };
   if (typeof val === "boolean") return { booleanValue: val };
+  if (val instanceof Date) return { timestampValue: val.toISOString() };
   if (val instanceof Array) return { arrayValue: { values: val.map(fsValue) } };
   if (typeof val === "object") {
     return { mapValue: { fields: Object.fromEntries(Object.entries(val).map(([k, v]) => [k, fsValue(v)])) } };
@@ -134,12 +135,15 @@ async function fsPatch(path, data, idToken) {
 }
 
 // Run a Firestore structured query under a parent document path
+// (empty filters = list the whole collection)
 async function fsQuery(parentPath, collectionId, filters, idToken, limit = null) {
   const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${parentPath}:runQuery`;
-  const where = filters.length === 1 ? filters[0] : {
-    compositeFilter: { op: "AND", filters },
-  };
-  const structuredQuery = { from: [{ collectionId }], where };
+  const structuredQuery = { from: [{ collectionId }] };
+  if (filters && filters.length) {
+    structuredQuery.where = filters.length === 1 ? filters[0] : {
+      compositeFilter: { op: "AND", filters },
+    };
+  }
   if (limit) structuredQuery.limit = limit;
   const res = await fetch(url, {
     method: "POST",
@@ -234,6 +238,135 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
   })();
 });
+
+// ─── Form capture (observe high-score jobs) ──────────────────────────────────
+// Driven by scripts/form-capture-server.mjs: GET /jobs for the pending list,
+// open each apply page in a background tab, scrape the rendered form DOM, and
+// POST each capture back so it lands in the observations folder. Collect-only:
+// nothing is filled or submitted.
+
+const CAPTURE_SERVER = "http://127.0.0.1:8899";
+let captureAbort = false;
+
+function navigateTab(tabId, url) {
+  return new Promise((resolve) => {
+    const listener = (id, info) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.update(tabId, { url });
+    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 20000);
+  });
+}
+
+// Injected into the apply page (and every iframe); must stay self-contained.
+function collectFormsFromPage() {
+  const cap = (s, n) => (s && s.length > n ? s.slice(0, n) : s || "");
+  const labelFor = (el) => {
+    if (el.labels && el.labels.length) return el.labels[0].textContent.trim();
+    const aria = el.getAttribute("aria-label");
+    if (aria) return aria;
+    const lb = el.getAttribute("aria-labelledby");
+    if (lb) {
+      const t = lb.split(/\s+/).map((id) => document.getElementById(id)?.textContent || "").join(" ").trim();
+      if (t) return t;
+    }
+    if (el.id) {
+      try {
+        const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+        if (l) return l.textContent.trim();
+      } catch { /* bad id for selector */ }
+    }
+    const wrap = el.closest("label");
+    if (wrap) return wrap.textContent.trim();
+    return "";
+  };
+  const fieldOf = (el) => ({
+    tag: el.tagName.toLowerCase(),
+    type: el.type || null,
+    name: el.name || null,
+    id: el.id || null,
+    required: !!el.required || el.getAttribute("aria-required") === "true",
+    placeholder: el.placeholder || null,
+    autocomplete: el.getAttribute("autocomplete") || null,
+    role: el.getAttribute("role") || null,
+    label: cap(labelFor(el), 300),
+    options: el.tagName === "SELECT"
+      ? [...el.options].slice(0, 200).map((o) => ({ value: o.value, text: cap(o.text, 120) }))
+      : null,
+  });
+  const forms = [...document.querySelectorAll("form")].map((f) => ({
+    action: f.getAttribute("action") || null,
+    method: f.getAttribute("method") || null,
+    id: f.id || null,
+    fields: [...f.querySelectorAll("input, select, textarea, button")].map(fieldOf),
+    html: cap(f.outerHTML, 500000),
+  }));
+  // React apps often render controls without a <form> wrapper
+  const orphanFields = [...document.querySelectorAll("input, select, textarea")]
+    .filter((el) => !el.closest("form"))
+    .map(fieldOf);
+  return {
+    url: location.href,
+    title: document.title,
+    forms,
+    orphanFields,
+    hasFileInput: !!document.querySelector('input[type="file"]'),
+    bodyTextSample: cap(document.body?.innerText || "", 5000),
+  };
+}
+
+async function runFormCapture() {
+  const setState = (s) => chrome.storage.session.set({ captureState: s });
+  captureAbort = false;
+
+  const listRes = await fetch(`${CAPTURE_SERVER}/jobs`);
+  if (!listRes.ok) throw new Error(`capture server error HTTP ${listRes.status}`);
+  const jobs = await listRes.json();
+  if (!jobs.length) {
+    await setState({ phase: "done", done: 0, failed: 0, total: 0 });
+    return;
+  }
+
+  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
+  let done = 0, failed = 0;
+  try {
+    for (const job of jobs) {
+      if (captureAbort) break;
+      await setState({
+        phase: "capturing", done, failed, total: jobs.length,
+        current: `${job.companyName} — ${job.title}`,
+      });
+      const payload = { job, capturedAt: new Date().toISOString(), frames: [], error: null };
+      try {
+        await navigateTab(tab.id, job.applyUrl);
+        await new Promise((r) => setTimeout(r, 3500)); // let the SPA render the form
+        const results = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          func: collectFormsFromPage,
+        });
+        payload.frames = results
+          .map((r) => ({ frameId: r.frameId, ...(r.result || {}) }))
+          .filter((f) => f.url);
+        done++;
+      } catch (e) {
+        payload.error = e.message;
+        failed++;
+      }
+      await fetch(`${CAPTURE_SERVER}/capture`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).catch((e) => console.warn("[JobWatch] capture POST failed:", e.message));
+    }
+  } finally {
+    chrome.tabs.remove(tab.id).catch(() => {});
+  }
+  await setState({ phase: captureAbort ? "stopped" : "done", done, failed, total: jobs.length });
+}
 
 // ─── Message handler ──────────────────────────────────────────────────────────
 
@@ -376,6 +509,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── Ashby: fetch the authoritative form schema via public GraphQL ────
+      // The application page's __appData no longer embeds fieldEntries (form
+      // audit 2026-08-26), so the schema must come from this endpoint.
+      if (message.type === "GET_ASHBY_SCHEMA") {
+        const { org, id } = message;
+        const QUERY = "query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) { jobPosting(organizationHostedJobsPageName: $organizationHostedJobsPageName, jobPostingId: $jobPostingId) { applicationForm { sections { fieldEntries { field isRequired } } } } }";
+        const res = await fetch("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiJobPosting", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            operationName: "ApiJobPosting",
+            variables: { organizationHostedJobsPageName: org, jobPostingId: id },
+            query: QUERY,
+          }),
+        });
+        const json = await res.json();
+        const sections = json.data?.jobPosting?.applicationForm?.sections || [];
+        const entries = [];
+        for (const s of sections) {
+          for (const e of s.fieldEntries || []) {
+            const f = e.field || {};
+            entries.push({
+              path: f.path || "",
+              type: f.type || "String",
+              title: f.title || "",
+              required: !!e.isRequired,
+              options: (f.selectableValues || []).map(o => ({ label: o.label || o.value || "", id: o.value ?? o.label ?? "" })),
+            });
+          }
+        }
+        sendResponse({ ok: true, entries });
+        return;
+      }
+
       // ── Greenhouse: compute the full application for the content script ──
       if (message.type === "GET_GH_FILL_DATA") {
         try {
@@ -390,11 +557,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // ── 3. Execute script in MAIN world (bypasses CSP) ─────────────────
       if (message.type === "EXEC_MAIN_WORLD") {
-        const { action, id, value, b64Data, fileName } = message;
+        const { action, id, value, b64Data, fileName, match } = message;
 
         const setReactValue = async (fieldId, val) => {
           const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
-          const node = entry?.querySelector("input:not([type=file]):not([type=radio]):not([type=checkbox]), textarea");
+          let node = entry?.querySelector("input:not([type=file]):not([type=radio]):not([type=checkbox]), textarea");
+
+          // Greenhouse: fieldId is the control's own DOM id (no data-field-path wrappers).
+          if (!node) {
+            const byId = document.getElementById(fieldId);
+            if (byId && (byId.tagName === "INPUT" || byId.tagName === "TEXTAREA")) node = byId;
+          }
 
           if (!node) return { ok: false, actual: "", error: "input not found" };
 
@@ -467,7 +640,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         const setReactFile = async (fieldId, b64, name) => {
           const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
-          const node = entry ? entry.querySelector("input[type=file]") : null;
+          let node = entry ? entry.querySelector("input[type=file]") : null;
+
+          // Greenhouse: fieldId is a DOM id — either the file input itself or a wrapper.
+          if (!node && fieldId) {
+            const byId = document.getElementById(fieldId);
+            if (byId) node = byId.matches("input[type=file]") ? byId : byId.querySelector("input[type=file]");
+          }
+          // Last resort on Greenhouse: the resume widget has no <label>, so
+          // find its file input directly — by attributes, then by nearby text.
+          if (!node) {
+            const inputs = [...document.querySelectorAll("input[type=file]")];
+            node = inputs.find(i => /resume|\bcv\b/i.test(`${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("data-qa") || ""}`))
+              || inputs.find(i => {
+                let p = i.parentElement;
+                for (let k = 0; k < 4 && p; k++, p = p.parentElement) {
+                  const t = p.textContent || "";
+                  if (t.length < 300 && /resume|\bcv\b/i.test(t)) return true;
+                }
+                return false;
+              })
+              || (inputs.length === 1 ? inputs[0] : null);
+          }
+
           if (!node) return { ok: false, error: "file input not found" };
 
           const ext = (name || "resume.pdf").split(".").pop().toLowerCase();
@@ -613,34 +808,136 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
 
         // Greenhouse custom combobox: open it, then pick the option by text.
+        // New job-boards forms use a react-select style widget: the menu opens
+        // on mousedown on the styled CONTROL wrapper (or ArrowDown), not on a
+        // plain click of the inner input.
         const ghSelectCombobox = async (fieldId, value) => {
           const wait = (ms) => new Promise(r => setTimeout(r, ms));
           const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
-          const el = document.getElementById(fieldId);
+          let el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "combobox not found: " + fieldId };
+          // If the label pointed at a wrapper, use the interactive control inside.
+          if (!el.matches("input, button, select, [role=combobox]")) {
+            el = el.querySelector("select, [role=combobox], input, button") || el;
+          }
           const want = nrm(value);
-          el.focus();
-          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          el.click();
-          await wait(300);
+
+          // Older Greenhouse boards render a real <select> (select2 UI on top):
+          // set its value directly and fire change so the UI layer follows.
+          if (el.tagName === "SELECT") {
+            const options = [...el.options];
+            const opt = options.find(o => nrm(o.textContent) === want)
+              || options.find(o => nrm(o.textContent).startsWith(want))
+              || options.find(o => nrm(o.textContent).includes(want));
+            if (!opt) return { ok: false, error: "option not found (native select)", want, seen: options.slice(0, 12).map(o => o.textContent.trim()) };
+            el.value = opt.value;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+            return { ok: true, picked: opt.textContent.trim() };
+          }
+          const control = el.closest("[class*='select__control'], [class*='control']") || el.parentElement || el;
           const collect = () => [...document.querySelectorAll('[role=option], ul[role=listbox] li, [id$="-listbox"] li, [class*="option"]')].filter(o => o.offsetParent !== null);
+
+          el.focus();
+          for (const target of [el, control]) {
+            target.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+            target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+            target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+            target.click();
+            await wait(200);
+            if (collect().length) break;
+          }
+          if (!collect().length) {
+            el.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+            await wait(300);
+          }
+
           let opts = collect();
           let match = opts.find(o => nrm(o.textContent) === want);
           if (!match) {
-            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+            // Type the value so filter-as-you-type comboboxes narrow the list.
+            // Poll up to ~2.5s: async lists (e.g. School) load from the network.
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
             try { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); } catch (e) { /* not a text combobox */ }
-            await wait(400);
-            opts = collect();
-            match = opts.find(o => nrm(o.textContent) === want)
-              || opts.find(o => nrm(o.textContent).startsWith(want))
-              || opts.find(o => nrm(o.textContent).includes(want));
+            for (let i = 0; i < 7 && !match; i++) {
+              await wait(350);
+              opts = collect();
+              match = opts.find(o => nrm(o.textContent) === want)
+                || opts.find(o => nrm(o.textContent).startsWith(want))
+                || opts.find(o => nrm(o.textContent).includes(want));
+            }
           }
           if (!match) return { ok: false, error: "option not found", want, seen: opts.slice(0, 12).map(o => o.textContent.trim()) };
           match.scrollIntoView({ block: "nearest" });
+          match.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
           match.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          match.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
           match.click();
           await wait(200);
           return { ok: true, picked: match.textContent.trim() };
+        };
+
+        // Greenhouse location typeahead: type the city, wait for the geocoder's
+        // suggestions, pick the one matching "City, FullStateName". Clicking the
+        // suggestion also fills the hidden latitude/longitude fields.
+        const ghLocationPick = async (fieldId, city, matchPrefix) => {
+          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+          const el = document.getElementById(fieldId);
+          if (!el) return { ok: false, error: "location input not found: " + fieldId };
+          el.focus();
+          el.click();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+          if (setter) setter.call(el, city); else el.value = city;
+          el.dispatchEvent(new Event("input", { bubbles: true }));
+          const collect = () => [...document.querySelectorAll("[role=option], ul[role=listbox] li, [class*='option']")].filter(o => o.offsetParent !== null);
+          const want = nrm(matchPrefix || city);
+          let pick = null, opts = [];
+          for (let i = 0; i < 12 && !pick; i++) {
+            await wait(300);
+            opts = collect();
+            pick = opts.find(o => nrm(o.textContent).startsWith(want))
+              || opts.find(o => nrm(o.textContent).includes(want));
+          }
+          // Fall back to the first suggestion for the right city (e.g. no state).
+          if (!pick) pick = opts.find(o => nrm(o.textContent).startsWith(nrm(city)));
+          if (!pick) return { ok: false, error: "no matching location option", want, seen: opts.slice(0, 8).map(o => o.textContent.trim()) };
+          pick.scrollIntoView({ block: "nearest" });
+          pick.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+          pick.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          pick.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+          pick.click();
+          await wait(300);
+          return { ok: true, picked: pick.textContent.trim() };
+        };
+
+        // Paste the generated cover letter: Greenhouse's cover-letter widget
+        // offers Attach / Dropbox / ... / "enter manually" — click the manual
+        // toggle, then fill the revealed textarea.
+        const ghCoverText = async (_id, text) => {
+          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const heads = [...document.querySelectorAll("label, legend, h1, h2, h3, h4, strong, span")]
+            .filter(n => /cover letter/i.test(n.textContent || "") && (n.textContent || "").trim().length < 40);
+          if (!heads.length) return { ok: false, error: "cover letter section not found" };
+          // Walk up until the container holds the textarea or the manual toggle.
+          let root = heads[0];
+          for (let k = 0; k < 6 && root.parentElement; k++) {
+            root = root.parentElement;
+            if (root.querySelector("textarea") ||
+              [...root.querySelectorAll("button, a")].some(b => /enter manually|paste|write/i.test(b.textContent || ""))) break;
+          }
+          let ta = root.querySelector("textarea");
+          if (!ta) {
+            const toggle = [...root.querySelectorAll("button, a")].find(b => /enter manually|paste|write/i.test(b.textContent || ""));
+            if (toggle) { toggle.click(); await wait(400); ta = root.querySelector("textarea") || document.getElementById("cover_letter_text"); }
+          }
+          if (!ta) return { ok: false, error: "cover letter textarea not found" };
+          ta.focus();
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+          if (setter) setter.call(ta, text); else ta.value = text;
+          ta.dispatchEvent(new Event("input", { bubbles: true }));
+          ta.dispatchEvent(new Event("change", { bubbles: true }));
+          return { ok: true };
         };
 
         // Check a consent/agreement checkbox.
@@ -658,11 +955,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
         if (action === "clickRadio") { funcToRun = setReactRadio; argsToRun = [id, value]; }
         if (action === "ghSelectCombobox") { funcToRun = ghSelectCombobox; argsToRun = [id, value]; }
+        if (action === "ghLocation") { funcToRun = ghLocationPick; argsToRun = [id, value, match]; }
+        if (action === "ghCoverText") { funcToRun = ghCoverText; argsToRun = [id, value]; }
         if (action === "ghCheck") { funcToRun = ghCheck; argsToRun = [id]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({
-          target: { tabId: sender.tab.id },
+          // Target the frame the request came from — Greenhouse forms are often
+          // embedded in an iframe on the company's own careers page.
+          target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] },
           world: "MAIN",
           func: funcToRun,
           args: argsToRun
@@ -821,6 +1122,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── 9c. Popup: capture rendered forms for observed high-score jobs ───
+      if (message.type === "START_FORM_CAPTURE") {
+        let jobsCount;
+        try {
+          const probe = await fetch(`${CAPTURE_SERVER}/jobs`);
+          if (!probe.ok) throw new Error(`HTTP ${probe.status}`);
+          jobsCount = (await probe.json()).length;
+        } catch {
+          sendResponse({ ok: false, error: "Capture server not running — start scripts/form-capture-server.mjs first." });
+          return;
+        }
+        await chrome.storage.session.set({ captureState: { phase: "capturing", done: 0, failed: 0, total: jobsCount } });
+        sendResponse({ ok: true, total: jobsCount });
+        runFormCapture().catch(async (e) => {
+          console.warn("[JobWatch] Form capture failed:", e.message);
+          await chrome.storage.session.set({ captureState: { phase: "error", error: e.message } });
+        });
+        return;
+      }
+
+      if (message.type === "STOP_FORM_CAPTURE") {
+        captureAbort = true;
+        sendResponse({ ok: true });
+        return;
+      }
+
       // ── 9b. Popup: get live eligible + applied counts from Firestore ──────
       if (message.type === "GET_ELIGIBLE_COUNT") {
         const { idToken, uid } = await getFreshToken();
@@ -844,127 +1171,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         sendResponse({ ok: true, total: ashbyEligible.length, applied, remaining });
         return;
-      }
-
-      // ── 10b. Popup: audit Ashby forms → download txt ─────────────────────
-      if (message.type === "AUDIT_ASHBY_FORMS") {
-        const HOURS = message.hours || 24;
-        const TIMEOUT_MS = message.timeout || 12_000;  // skip after 12s
-        const cutoffMs = Date.now() - HOURS * 60 * 60 * 1000;
-
-        const { idToken, uid } = await getFreshToken();
-
-        // 1. Query Firestore for recent Ashby jobs
-        const rows = await fsQuery(`users/${uid}`, "jobs", [
-          {
-            fieldFilter: {
-              field: { fieldPath: "source" },
-              op: "EQUAL",
-              value: { stringValue: "ashbyhq" },
-            },
-          },
-        ], idToken, 500);
-
-        const jobs = rows.filter(j => {
-          // parseFs returns timestampValue as ISO string e.g. "2026-05-11T23:00:00Z"
-          const raw = j.createdAt || j.sourceUpdatedTs || j.sourceUpdatedIso;
-          if (!raw) return true; // include if no date field at all
-          const ms = new Date(raw).getTime();
-          return !isNaN(ms) && ms >= cutoffMs;
-        });
-
-        // Report back job count immediately
-        await chrome.storage.session.set({
-          auditState: { phase: "fetching", total: jobs.length, done: 0, errors: 0 }
-        });
-        sendResponse({ ok: true, total: jobs.length });
-
-        // 2. Fetch each form page and build the combined text
-        const lines = [
-          `ASHBY FORM AUDIT — ${new Date().toISOString()}`,
-          `Jobs scraped : ${jobs.length}  (total ashbyhq in db: ${rows.length})`,
-          `Look-back   : last ${HOURS}h`,
-          `Generated by: JobWatch Extension`,
-          `${"=".repeat(80)}`,
-          "",
-        ];
-
-        let done = 0;
-        let errors = 0;
-
-        for (const j of jobs) {
-          const applyUrl = j.jobUrl ? `${j.jobUrl.replace(/\/$/, "")}/application` : null;
-
-          lines.push(`${"=".repeat(80)}`);
-          lines.push(`JOB:     ${j.title || "Unknown Title"}`);
-          lines.push(`COMPANY: ${j.companyKey || "unknown"}`);
-          lines.push(`URL:     ${applyUrl || "—"}`);
-          lines.push(`DOC_ID:  ${j._docId || ""}`);
-          lines.push(`CREATED: ${j.createdAt?.seconds ? new Date(j.createdAt.seconds * 1000).toISOString() : ""}`);
-          lines.push(`${"=".repeat(80)}`);
-
-          if (!applyUrl) {
-            lines.push("[SKIPPED: no jobUrl]");
-            lines.push("");
-            errors++;
-          } else {
-            try {
-              const ctrl = new AbortController();
-              const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
-
-              const res = await fetch(applyUrl, {
-                signal: ctrl.signal,
-                headers: {
-                  "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-                  "Accept": "text/html,application/xhtml+xml,*/*;q=0.9",
-                  "Accept-Language": "en-US,en;q=0.9",
-                },
-              });
-              clearTimeout(timer);
-
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              const html = await res.text();
-              lines.push(html);
-              lines.push("");
-              done++;
-            } catch (err) {
-              lines.push(`[ERROR: ${err.message}]`);
-              lines.push("");
-              errors++;
-            }
-          }
-
-          await chrome.storage.session.set({
-            auditState: { phase: "fetching", total: jobs.length, done, errors }
-          });
-        }
-
-        // 3. Build file and trigger download
-        const content = lines.join("\n");
-        const bytes = new TextEncoder().encode(content);
-        const b64 = (() => {
-          let binary = "";
-          const chunkSize = 8192;
-          for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode(...bytes.slice(i, i + chunkSize));
-          }
-          return btoa(binary);
-        })();
-
-        const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-        const filename = `ashby_forms_${ts}.txt`;
-
-        await chrome.downloads.download({
-          url: `data:text/plain;charset=utf-8;base64,${b64}`,
-          filename,
-          saveAs: false,
-        });
-
-        await chrome.storage.session.set({
-          auditState: { phase: "done", total: jobs.length, done, errors, filename }
-        });
-
-        return; // sendResponse already called above
       }
 
       // ── 10. Popup: enterprise sign in via web app ─────────────────────────

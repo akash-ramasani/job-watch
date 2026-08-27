@@ -118,19 +118,6 @@ function renderProfile(userDoc) {
 
 
 
-  // Detect Ashby application page
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    const url = tabs[0]?.url || "";
-    const noticeEl = $("status-text");
-    if (url.includes("ashbyhq.com") && url.includes("/application")) {
-      noticeEl.innerHTML = '<span>🚀</span><span>Ashby application detected! Auto-fill is active.</span>';
-      noticeEl.className = "status-notice detected";
-    } else {
-      noticeEl.innerHTML = '<span>ℹ️</span><span>Open a job application page from JobWatch to auto-fill.</span>';
-      noticeEl.className = "status-notice";
-    }
-  });
-
   // Load live stats from Firestore + refresh every 30s
   loadEligibleStats();
   if (window._statsPoller) clearInterval(window._statsPoller);
@@ -284,58 +271,49 @@ $("btn-stop").addEventListener("click", () => {
   });
 });
 
-// ── Audit Forms button ─────────────────────────────────────────────────────────
-let auditPoller = null;
+// ── Capture rendered application forms → scripts/form-capture-server.mjs ──────
+$("btn-capture").addEventListener("click", () => {
+  const btn = $("btn-capture");
+  const st = $("capture-status");
 
-$("btn-audit").addEventListener("click", () => {
-  const btn = $("btn-audit");
-  btn.disabled = true;
-  btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Starting…`;
+  // Second click while running = stop
+  if (btn.dataset.running === "1") {
+    chrome.runtime.sendMessage({ type: "STOP_FORM_CAPTURE" });
+    st.textContent = "Stopping after current job…";
+    return;
+  }
 
-  $("audit-progress").style.display = "block";
-  $("audit-label").textContent = "Querying jobs…";
-  $("audit-count").textContent = "…";
-  $("audit-bar").style.width   = "0%";
-  $("audit-status").textContent = "";
+  btn.dataset.running = "1";
+  btn.textContent = "⏹ Stop Capture";
+  st.style.display = "block";
+  st.textContent = "Starting…";
 
-  chrome.runtime.sendMessage({ type: "AUDIT_ASHBY_FORMS", hours: 24, timeout: 12000 }, (res) => {
+  chrome.runtime.sendMessage({ type: "START_FORM_CAPTURE" }, (res) => {
     if (chrome.runtime.lastError || !res?.ok) {
-      $("audit-label").textContent  = "❌ Failed to start";
-      $("audit-status").textContent = chrome.runtime.lastError?.message || "Unknown error";
-      btn.disabled = false;
-      btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 17H5a2 2 0 0 0-2 2"/><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v14"/><rect x="9" y="11" width="13" height="10" rx="1"/></svg> Audit Forms (24h)`;
-      return;
+      st.textContent = "❌ " + (chrome.runtime.lastError?.message || res?.error || "Failed to start");
+      btn.dataset.running = "";
+      btn.textContent = "🧾 Capture Forms → observations";
     }
-
-    const total = res.total;
-    $("audit-label").textContent  = `Scraping ${total} forms…`;
-    $("audit-count").textContent  = `0 / ${total}`;
-    $("audit-status").textContent = "Fetching application pages…";
-
-    // Poll progress from storage every 1.5s
-    if (auditPoller) clearInterval(auditPoller);
-    auditPoller = setInterval(() => {
-      chrome.storage.session.get("auditState", ({ auditState }) => {
-        if (!auditState) return;
-        const { phase, total: tot, done, errors, filename } = auditState;
-
-        const pct = tot > 0 ? Math.round(((done + errors) / tot) * 100) : 0;
-        $("audit-bar").style.width   = pct + "%";
-        $("audit-count").textContent = `${done + errors} / ${tot}`;
-        $("audit-status").textContent = errors > 0 ? `✅ ${done} saved · ❌ ${errors} skipped` : `✅ ${done} saved`;
-
-        if (phase === "done") {
-          clearInterval(auditPoller);
-          auditPoller = null;
-          $("audit-label").textContent  = "✅ Done! File saved to Downloads";
-          $("audit-bar").style.width    = "100%";
-          $("audit-status").textContent = `📁 ${filename || "ashby_forms.txt"}`;
-          btn.disabled = false;
-          btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 17H5a2 2 0 0 0-2 2"/><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v14"/><rect x="9" y="11" width="13" height="10" rx="1"/></svg> Audit Forms (24h)`;
-        }
-      });
-    }, 1500);
   });
+
+  if (window._capturePoller) clearInterval(window._capturePoller);
+  window._capturePoller = setInterval(() => {
+    chrome.storage.session.get("captureState", ({ captureState }) => {
+      if (!captureState) return;
+      const { phase, done, failed, total, current, error } = captureState;
+      if (phase === "done" || phase === "stopped" || phase === "error") {
+        clearInterval(window._capturePoller);
+        window._capturePoller = null;
+        btn.dataset.running = "";
+        btn.textContent = "🧾 Capture Forms → observations";
+        st.textContent = phase === "error"
+          ? "❌ " + (error || "Capture failed")
+          : `${phase === "stopped" ? "⏹ Stopped" : "✅ Done"}: ${done}/${total} captured, ${failed} failed → forms-dom/`;
+      } else {
+        st.textContent = `${done + failed}/${total} — ${current || "…"}`;
+      }
+    });
+  }, 800);
 });
 
 // ── CSS keyframe for spinner ───────────────────────────────────────────────────

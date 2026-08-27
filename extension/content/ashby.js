@@ -5,10 +5,26 @@
 
 (async function () {
 
-  // ─── Extract Ashby form schema from window.__appData (MAIN world) ────────
+  // ─── Extract Ashby form schema ────────────────────────────────────────────
   // Returns a Map<fieldPath, { type, title, required, options }>
+  // Primary source: Ashby's public GraphQL endpoint (the page's __appData no
+  // longer embeds fieldEntries — form audit 2026-08-26). Falls back to the
+  // legacy MAIN-world __appData extraction, then to pure DOM scraping.
   async function extractAshbySchema() {
     const schemaMap = new Map();
+    try {
+      const m = location.href.match(/ashbyhq\.com\/([^/]+)\/([0-9a-f-]{36})/i);
+      if (m) {
+        const res = await sendMsg({ type: "GET_ASHBY_SCHEMA", org: decodeURIComponent(m[1]), id: m[2] });
+        for (const entry of res?.entries || []) schemaMap.set(entry.path, entry);
+        if (schemaMap.size) {
+          console.log(`[JobWatch] Schema: ${schemaMap.size} fields via GraphQL`);
+          return schemaMap;
+        }
+      }
+    } catch (e) {
+      console.warn("[JobWatch] GraphQL schema fetch failed (trying __appData):", e.message);
+    }
     try {
       const res = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "extractSchema" });
       const entries = res?.result || [];
@@ -36,6 +52,7 @@
     Location: "location",
     Date: "date",
     Number: "number",
+    EducationHistory: "education",
   };
 
   // ─── Wait for form ────────────────────────────────────────────────────────
@@ -366,7 +383,39 @@
 
   // ─── Deterministic Text Rule Engine ────────────────────────────────────────
   // Instantly maps known text fields using regex — no AI needed.
-  function applyTextRules(fields, mappings, userDoc, resumeDoc = {}) {
+  // ─── Job location from the page (JSON-LD / __NEXT_DATA__ / embedded JSON) ──
+  // Used for every location-type answer so they stay consistent with the job's
+  // posted location, never the user's home city.
+  function getPageJobLocation(pendingJob) {
+    let loc = null;
+    try {
+      const nextData = JSON.parse(document.getElementById("__NEXT_DATA__")?.textContent || "{}");
+      loc = nextData?.props?.pageProps?.posting?.locationName
+        || nextData?.props?.pageProps?.jobPosting?.locationName
+        || nextData?.props?.pageProps?.job?.locationName
+        || null;
+    } catch { /* no __NEXT_DATA__ */ }
+    if (!loc) {
+      try {
+        for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+          const data = JSON.parse(script.textContent || "{}");
+          if (data["@type"] === "JobPosting" && data.jobLocation?.address?.addressLocality) {
+            loc = data.jobLocation.address.addressLocality;
+            if (data.jobLocation.address.addressRegion) loc += ", " + data.jobLocation.address.addressRegion;
+            break;
+          }
+        }
+      } catch { /* no JSON-LD */ }
+    }
+    if (!loc) {
+      const m = document.body.innerHTML.match(/"locationName":"([^"]+)"/);
+      if (m) loc = m[1];
+    }
+    if (loc) loc = loc.replace(/\s*-\s*US$/i, "").trim();
+    return loc || pendingJob?.locationName || "";
+  }
+
+  function applyTextRules(fields, mappings, userDoc, resumeDoc = {}, jobLocation = "") {
     const cityRegion = [userDoc.city, userDoc.region].filter(Boolean).join(", ");
 
     const RULES = [
@@ -475,8 +524,32 @@
       // ── Notice period ──────────────────────────────────────────────────
       {
         patterns: [/notice.{0,30}(period|give|employer|current)/i, /how.{0,20}notice/i,
-          /notice.*required/i, /required.*notice/i, /when.*start.*notice/i],
+          /notice.*required/i, /required.*notice/i, /when.*start.*notice/i,
+          /time ?line.{0,15}start/i, /when can you start/i, /how soon.{0,20}start/i],
         answer: () => userDoc.noticePeriod || "2 weeks"
+      },
+
+      // ── Where are you based / located → the JOB's posted location ─────
+      // (keeps text answers consistent with the location widget + radios)
+      {
+        patterns: [/where are you (currently )?(based|located)/i,
+          /where do you (currently )?(live|reside)/i,
+          /current location/i, /^location$/i, /what city.{0,20}(based|located|live)/i],
+        answer: () => jobLocation || [userDoc.city, userDoc.region].filter(Boolean).join(", ")
+      },
+
+      // ── Full / legal name variants (custom String fields) ─────────────
+      {
+        patterns: [/^(full|legal)\s?name$/i, /^name$/i],
+        answer: () => userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim()
+      },
+      {
+        patterns: [/^(preferred )?first name( \(if applicable\))?$/i, /^preferred name/i],
+        answer: () => userDoc.firstName || ""
+      },
+      {
+        patterns: [/^(last name|surname)([ /]+surname)?$/i],
+        answer: () => userDoc.lastName || ""
       },
 
       // ── Current Job Title ─────────────────────────────────────────────
@@ -621,6 +694,9 @@
           /based in.{0,20}(us|united states)/i,
           /currently in.{0,20}(us|united states)/i,
           /^do you currently reside in the us/i,
+          /are you.{0,15}located in.{0,15}(the\s+)?(united states|usa?\b|u\.?s\.?)/i,
+          /located in.{0,15}(the\s+)?(united states|usa\b)/i,
+          /physically.{0,15}(located|present|based).{0,20}(united states|usa?\b|u\.?s\.?)/i,
         ],
         answer: () => (userDoc.country === "United States" || !userDoc.country) ? "yes" : "no",
       },
@@ -700,6 +776,11 @@
         ],
         answer: () => "yes",
       },
+      // Prior government employment — NO for a private-sector applicant
+      {
+        patterns: [/government.{0,20}employ/i, /employed.{0,25}government/i],
+        answer: () => "no",
+      },
     ];
 
     const FIELD_TYPES_HANDLED = new Set(["yesno", "radio", "select"]);
@@ -762,6 +843,13 @@
     for (const field of fields) {
       const entry = form.querySelector(`[data-field-path="${CSS.escape(field.id)}"]`);
       if (!entry) continue;
+
+      // EDUCATION HISTORY — compound widget (school/degree/discipline pickers);
+      // not automated yet, so never let the generic text filler touch it.
+      if (field.type === "education") {
+        console.log("[JobWatch] Education section — complete manually:", field.label);
+        continue;
+      }
 
       // FILE
       if (field.type === "file") {
@@ -1329,7 +1417,8 @@
 
     // Apply deterministic rule engines BEFORE filling
     // This entirely overrides AI for standard questions (Phone, LinkedIn, Visa, Office)
-    applyTextRules(fields, mappings, userDoc, resumeDoc);
+    const jobLocation = getPageJobLocation(pendingJob);
+    applyTextRules(fields, mappings, userDoc, resumeDoc, jobLocation);
     applyYesNoRules(fields, mappings, userDoc);
 
     showOverlay("✍️ JobWatch: Filling form…");
@@ -1346,7 +1435,7 @@
       showOverlay(`🤖 AI filling ${preCheck.length} missing field(s)…`);
       try {
         const retry = await sendMsg({ type: "GET_FILL_DATA", fields: preCheck });
-        applyTextRules(preCheck, retry.mappings, userDoc, resumeDoc);
+        applyTextRules(preCheck, retry.mappings, userDoc, resumeDoc, jobLocation);
         applyYesNoRules(preCheck, retry.mappings, userDoc);
         await applyMappings(form, preCheck, retry.mappings, userDoc, pendingJob, resumeBase64, answersLog);
         await new Promise(r => setTimeout(r, 400));
@@ -1366,98 +1455,33 @@
       }
     }
 
-    // ── Find submit button ────────────────────────────────────────────────
-    const submitBtn =
-      document.querySelector(".ashby-application-form-submit-button") ||
-      form.closest("form")?.querySelector("[type=submit]") ||
-      document.querySelector("[type=submit]") ||
-      [...document.querySelectorAll("button")].find(b => /submit application|apply/i.test(b.textContent));
+    // ── NEVER auto-submit: you review the form and click Submit yourself. ──
+    console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
+    showOverlay("✅ Form filled — review it, then click Submit yourself.", "success");
 
-    if (!submitBtn) {
-      showOverlay("⚠️ Submit button not found — please submit manually.", "warning");
-      return;
-    }
-
-    // ── Submit loop with error-recovery (up to 2 retries) ────────────────
-    const MAX_RETRIES = 2;
-    let submitted = false;
-
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      showOverlay(attempt === 0 ? "🚀 JobWatch: Submitting…" : `🔄 Retrying submission (${attempt}/${MAX_RETRIES})…`);
-      console.log("[JobWatch] Submitting. answersLog:", JSON.stringify(answersLog, null, 2));
-      submitBtn.click();
-      
-      // Poll for success or errors over ~5 seconds
-      let formErrors = [];
-      for (let poll = 0; poll < 10; poll++) {
-        await new Promise(r => setTimeout(r, 500));
-        
-        // 1. Check for success (unmounted form, success URL, or success container)
-        const isSuccess = !document.querySelector(".ashby-application-form-container") || 
-                          window.location.href.includes("success") || 
-                          !!document.querySelector(".ashby-application-success, [class*='successContainer']");
-        
-        if (isSuccess) {
-          submitted = true;
-          break;
-        }
-
-        // 2. Check for validation errors
-        formErrors = scrapeFormErrors(form);
-        const hasIndicators = !!document.querySelector("[class*='_errorsContainer_'], [aria-invalid='true'], [class*='_error_']");
-        
-        if (formErrors.length > 0 || hasIndicators) {
-          break; // Stop polling, we have errors
-        }
+    // Watch for YOUR manual submission (up to 30 min) so the job is still
+    // logged as applied and the queue can advance.
+    const watchStart = Date.now();
+    const watch = setInterval(() => {
+      const isSuccess = !document.querySelector(".ashby-application-form-container") ||
+        window.location.href.includes("success") ||
+        !!document.querySelector(".ashby-application-success, [class*='successContainer']");
+      if (isSuccess) {
+        clearInterval(watch);
+        chrome.runtime.sendMessage({
+          type: "APPLICATION_DONE",
+          jobId: pendingJob?.id,
+          jobTitle: pendingJob?.title,
+          companyName: pendingJob?.companyName,
+          status: "submitted",
+          answersLog,  // ← full record of every question + answer
+        });
+        showOverlay("✅ Application submitted!", "success");
+        setTimeout(removeOverlay, 4000);
+      } else if (Date.now() - watchStart > 30 * 60 * 1000) {
+        clearInterval(watch);
       }
-
-      if (submitted) break;
-
-      if (attempt < MAX_RETRIES && formErrors.length) {
-        showOverlay(`🤖 AI resolving ${formErrors.length} error(s)…`, "ai");
-        console.warn("[JobWatch] Submission errors:", formErrors);
-
-        // Match error labels → fields
-        const errorLabels = formErrors
-          .map(e => e.replace(/missing entry for required field:/i, "").trim().toLowerCase())
-          .filter(Boolean);
-
-        const errorFields = errorLabels.length
-          ? fields.filter(f => errorLabels.some(lbl =>
-            f.label.toLowerCase().includes(lbl) || lbl.includes(f.label.toLowerCase())))
-          : fields.filter(f => f.required);
-
-        try {
-          const errRetry = await sendMsg({
-            type: "GET_FILL_DATA",
-            fields: errorFields,
-            errorContext: formErrors, // AI sees the exact error messages
-          });
-          await applyMappings(form, errorFields, errRetry.mappings, userDoc, pendingJob, resumeBase64, answersLog);
-          await fillEEOSurvey(userDoc, answersLog);
-          await new Promise(r => setTimeout(r, 500));
-        } catch (e) { console.warn("[JobWatch] Error-recovery retry failed:", e.message); }
-      }
-    }
-
-    if (!submitted) {
-      showOverlay("⚠️ Form has errors — please fix and resubmit manually.", "warning");
-      return;
-    }
-
-    // ── Success ───────────────────────────────────────────────────────────
-    showOverlay("✅ Application submitted!", "success");
-
-    chrome.runtime.sendMessage({
-      type: "APPLICATION_DONE",
-      jobId: pendingJob?.id,
-      jobTitle: pendingJob?.title,
-      companyName: pendingJob?.companyName,
-      status: "submitted",
-      answersLog,  // ← full record of every question + answer
-    });
-
-    setTimeout(removeOverlay, 4000);
+    }, 2000);
 
   } catch (err) {
     console.error("[JobWatch Extension]", err);
