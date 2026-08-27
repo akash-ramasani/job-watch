@@ -71,6 +71,8 @@ export function sanitizeText(input) {
     .trimEnd();
 
   // Ensure it ends with a single period if it ends mid-sentence.
+  // Drop a trailing comma first so "Dear Team," becomes "Dear Team." not "Team,.".
+  s = s.replace(/,$/, "");
   if (s && !/[.]$/.test(s)) s += ".";
   return s;
 }

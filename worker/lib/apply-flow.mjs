@@ -34,7 +34,13 @@ export async function runApplyFlow(profile, resume, job, outDir, { generateDocs 
     docs = await generateApplicationDocs(profile, resume, { ...job }, outDir);
   }
   // The resume field maps to the freshly tailored PDF.
-  const profileForJob = { ...profile, resumePath: docs?.resumePath || profile.resumePath || "" };
+  const profileForJob = {
+    ...profile,
+    resumePath: docs?.resumePath || profile.resumePath || "",
+    // Lets the engine resolve "are you based in / near this job's location"
+    // selects truthfully against the applicant's own location.
+    jobLocationName: job.locationName || "",
+  };
 
   const questions = job.questions || [];
 

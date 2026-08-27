@@ -35,16 +35,30 @@ async function main() {
 
   // Real company name from the job doc (fallback: cleaned board token).
   let companyName = args.company || null;
-  if (!companyName) {
+  let companyKey = null;
+  let locationName = "";
+  {
     const d = await db();
     const snap = await d.collection("users").doc(ADMIN_UID).collection("jobs").where("externalId", "==", id).limit(1).get();
-    companyName = snap.empty ? token.replace(/\d+$/, "") : (snap.docs[0].data().companyName || token);
+    if (!snap.empty) {
+      companyKey = snap.docs[0].data().companyKey || null;
+      locationName = snap.docs[0].data().locationName || "";
+    }
+    if (!companyName) companyName = snap.empty ? token.replace(/\d+$/, "") : (snap.docs[0].data().companyName || token);
+
+    // Have we applied to this company before? Feeds the "previously applied /
+    // interviewed before" questions factually instead of parking them.
+    if (companyKey) {
+      const prior = await d.collection("users").doc(ADMIN_UID).collection("jobs")
+        .where("companyKey", "==", companyKey).where("autoApplied", "==", true).limit(1).get();
+      profile.appliedToCompanyBefore = !prior.empty;
+    }
   }
 
   console.log(`\n${c.b}${form.title}${c.x}  ${c.d}at ${companyName} (${token}/${id})${c.x}`);
   console.log(`${c.d}applying as ${profile.email}${c.x}\n`);
 
-  const job = { title: form.title, companyName, questions: form.questions, descriptionHtml: form.descriptionHtml };
+  const job = { title: form.title, companyName, locationName, questions: form.questions, descriptionHtml: form.descriptionHtml };
   const result = await runApplyFlow(profile, resume, job, OUT); // real resume + cover letter
 
   for (const a of result.mapped.answers) {
