@@ -77,6 +77,22 @@ const URL_RULES = {
   },
 };
 
+const JOB_SOURCES = [
+  { id: "greenhouse", title: "Greenhouse" },
+  { id: "ashby", title: "AshbyHQ" },
+];
+
+function companyToSlug(name) {
+  return (name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+}
+
+function buildFeedUrl(source, slug) {
+  if (source === "ashby") {
+    return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
+  }
+  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
+}
+
 function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
@@ -186,7 +202,7 @@ export default function Feeds({ user }) {
   const [searchParams] = useSearchParams();
 
   const [company, setCompany] = useState(searchParams.get("company") || "");
-  const [url, setUrl] = useState(searchParams.get("url") || "");
+  const [source, setSource] = useState("greenhouse");
   const [feeds, setFeeds] = useState([]);
   const [busyArchiveId, setBusyArchiveId] = useState(null);
   const [busyRunNow, setBusyRunNow] = useState(false);
@@ -204,30 +220,19 @@ export default function Feeds({ user }) {
   const activeFeeds = useMemo(() => feeds.filter((f) => !f.archivedAt), [feeds]);
   const archivedFeeds = useMemo(() => feeds.filter((f) => !!f.archivedAt), [feeds]);
 
-  const feedStats = useMemo(() => {
-    const counts = { greenhouse: 0, ashby: 0, eightfold: 0 };
-    for (const f of activeFeeds) {
-      const src = f.source || detectSourceFromUrl(f.url);
-      if (src === "greenhouse") counts.greenhouse++;
-      else if (src === "ashby") counts.ashby++;
-      else counts.eightfold++; // eightfold + netflix + anything else
-    }
-    return [
-      { name: "Greenhouse", value: counts.greenhouse },
-      { name: "AshbyHQ", value: counts.ashby },
-      { name: "Eightfold.ai", value: counts.eightfold },
-    ];
-  }, [activeFeeds]);
-  const detectedSource = useMemo(() => detectSourceFromUrl(url), [url]);
-
   async function addFeed(e) {
     e.preventDefault();
     const cleanCompany = company.trim();
-    const rawUrl = url.trim();
-    if (!cleanCompany || !rawUrl) return;
+    if (!cleanCompany) return;
 
-    const source = detectSourceFromUrl(rawUrl);
-    const v = validateUrlForSource(source, rawUrl);
+    const slug = companyToSlug(cleanCompany);
+    if (!slug) {
+      showToast("Please enter a valid company name.", "error");
+      return;
+    }
+
+    const builtUrl = buildFeedUrl(source, slug);
+    const v = validateUrlForSource(source, builtUrl);
     if (!v.ok) {
       showToast(v.error, "error");
       return;
@@ -255,7 +260,6 @@ export default function Feeds({ user }) {
         "success"
       );
       setCompany("");
-      setUrl("");
     } catch (err) {
       console.error(err);
       showToast("Failed to add feed. Please try again.", "error");
@@ -379,27 +383,38 @@ export default function Feeds({ user }) {
                   value={company}
                   onChange={(e) => setCompany(e.target.value)}
                   className="input-standard mt-2"
-                  placeholder="e.g. OpenAI"
+                  placeholder="e.g. otter, stradahq, thetradedesk"
                 />
               </div>
 
               <div className="col-span-full">
-                <label className="block text-xs font-black uppercase tracking-widest text-gray-400">
-                  Job Board API Endpoint{" "}
-                  <span className="ml-2 text-[10px] font-black tracking-widest text-indigo-400">
-                    (Detected: {prettySourceLabel(detectedSource)})
-                  </span>
-                </label>
-                <input
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  className="input-standard mt-2"
-                  placeholder={
-                    detectedSource === "ashby"
-                      ? URL_RULES.ashby.placeholder
-                      : URL_RULES.greenhouse.placeholder
-                  }
-                />
+                <fieldset>
+                  <legend className="text-xs font-black uppercase tracking-widest text-gray-400">
+                    Job Board
+                  </legend>
+                  <div className="mt-3 space-y-6 sm:flex sm:items-center sm:space-y-0 sm:space-x-10">
+                    {JOB_SOURCES.map((jobSource) => (
+                      <div key={jobSource.id} className="flex items-center">
+                        <input
+                          checked={source === jobSource.id}
+                          onChange={() => setSource(jobSource.id)}
+                          id={jobSource.id}
+                          name="job-source"
+                          type="radio"
+                          className="relative size-4 appearance-none rounded-full border border-gray-300 bg-white before:absolute before:inset-1 before:rounded-full before:bg-white not-checked:before:hidden checked:border-indigo-600 checked:bg-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:border-gray-300 disabled:bg-gray-100 disabled:before:bg-gray-400 forced-colors:appearance-auto forced-colors:before:hidden"
+                        />
+                        <label htmlFor={jobSource.id} className="ml-3 block text-sm/6 font-medium text-gray-900">
+                          {jobSource.title}
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </fieldset>
+                <p className="mt-3 text-[11px] text-gray-400 leading-relaxed">
+                  {companyToSlug(company)
+                    ? buildFeedUrl(source, companyToSlug(company))
+                    : "The API endpoint is built automatically from the company name."}
+                </p>
               </div>
             </div>
 
@@ -413,19 +428,6 @@ export default function Feeds({ user }) {
             </div>
           </form>
         </div>
-      </div>
-
-      <div className="mt-16">
-        <dl className="grid grid-cols-1 gap-x-8 gap-y-10 text-center sm:grid-cols-3">
-          {feedStats.map((stat) => (
-            <div key={stat.name} className="mx-auto flex max-w-xs flex-col gap-y-2">
-              <dt className="text-sm text-gray-500">{stat.name}</dt>
-              <dd className="order-first text-4xl font-bold tracking-tight text-gray-900">
-                {stat.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
       </div>
 
       <div className="mt-16">
