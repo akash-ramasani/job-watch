@@ -198,6 +198,49 @@ async function callPrepareGreenhouse(token, id, idToken) {
   if (!res.ok || json.error) throw new Error(json.error?.message || "prepareGreenhouseApplication failed");
   return json.result;
 }
+// A stored pendingJob belongs to the page being filled only if it references
+// that page's Ashby job UUID (externalId, or inside its apply URL). A leftover
+// job from a previous application must never leak into this one — its
+// companyName/title would poison the AI's "Why <company>?" answers.
+function jobMatchesExternalId(job, externalId) {
+  if (!job || !externalId) return false;
+  const id = externalId.toLowerCase();
+  return [job.externalId, job.absolute_url, job.jobUrl, job.url]
+    .some((v) => typeof v === "string" && v.toLowerCase().includes(id));
+}
+
+// Authoritative job info straight from Ashby's public GraphQL — the fallback
+// when the job never entered Firestore (e.g. the apply page was opened from a
+// LinkedIn/external link rather than the JobWatch queue).
+async function fetchAshbyPostingInfo(org, jobPostingId) {
+  const gql = (op, query, variables) =>
+    fetch(`https://jobs.ashbyhq.com/api/non-user-graphql?op=${op}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ operationName: op, variables, query }),
+    }).then((r) => r.json());
+  const [posting, orgRes] = await Promise.all([
+    gql(
+      "ApiJobPosting",
+      "query ApiJobPosting($organizationHostedJobsPageName: String!, $jobPostingId: String!) { jobPosting(organizationHostedJobsPageName: $organizationHostedJobsPageName, jobPostingId: $jobPostingId) { title locationName workplaceType } }",
+      { organizationHostedJobsPageName: org, jobPostingId }
+    ),
+    gql(
+      "ApiOrganizationFromHostedJobsPageName",
+      "query ApiOrganizationFromHostedJobsPageName($organizationHostedJobsPageName: String!) { organization: organizationFromHostedJobsPageName(organizationHostedJobsPageName: $organizationHostedJobsPageName) { name } }",
+      { organizationHostedJobsPageName: org }
+    ),
+  ]);
+  const p = posting?.data?.jobPosting || {};
+  return {
+    externalId: jobPostingId,
+    title: p.title || "",
+    companyName: orgRes?.data?.organization?.name || "",
+    locationName: p.locationName || "",
+    workplaceType: p.workplaceType || "",
+  };
+}
+
 // ─── Proactive Ashby job prefetch ────────────────────────────────────────────
 // Fires as soon as any Ashby application page finishes loading.
 // Looks up the job in Firestore by externalId and caches it as pendingJob so
@@ -232,6 +275,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         console.log("[JobWatch] pendingJob pre-loaded:", job.title, "| location:", job.locationName);
       } else {
         console.warn("[JobWatch] No Firestore job found for externalId:", externalId);
+        // Don't leave a previous application's pendingJob lying around — it
+        // would be used to fill THIS page with the wrong company's answers.
+        const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
+        if (pendingJob && !jobMatchesExternalId(pendingJob, externalId)) {
+          await chrome.storage.session.remove("pendingJob");
+          console.warn("[JobWatch] Cleared stale pendingJob:", pendingJob.companyName, "|", pendingJob.title);
+        }
       }
     } catch (err) {
       console.warn("[JobWatch] Prefetch failed:", err.message);
@@ -239,133 +289,31 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   })();
 });
 
-// ─── Form capture (observe high-score jobs) ──────────────────────────────────
-// Driven by scripts/form-capture-server.mjs: GET /jobs for the pending list,
-// open each apply page in a background tab, scrape the rendered form DOM, and
-// POST each capture back so it lands in the observations folder. Collect-only:
-// nothing is filled or submitted.
+// ─── Add feed (popup → Firestore) ────────────────────────────────────────────
+// Feeds live under the admin user, same path the web app's Feeds page uses.
 
-const CAPTURE_SERVER = "http://127.0.0.1:8899";
-let captureAbort = false;
+const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
-function navigateTab(tabId, url) {
-  return new Promise((resolve) => {
-    const listener = (id, info) => {
-      if (id === tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-    chrome.tabs.update(tabId, { url });
-    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 20000);
-  });
+function companyToSlug(name) {
+  return (name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
 
-// Injected into the apply page (and every iframe); must stay self-contained.
-function collectFormsFromPage() {
-  const cap = (s, n) => (s && s.length > n ? s.slice(0, n) : s || "");
-  const labelFor = (el) => {
-    if (el.labels && el.labels.length) return el.labels[0].textContent.trim();
-    const aria = el.getAttribute("aria-label");
-    if (aria) return aria;
-    const lb = el.getAttribute("aria-labelledby");
-    if (lb) {
-      const t = lb.split(/\s+/).map((id) => document.getElementById(id)?.textContent || "").join(" ").trim();
-      if (t) return t;
-    }
-    if (el.id) {
-      try {
-        const l = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-        if (l) return l.textContent.trim();
-      } catch { /* bad id for selector */ }
-    }
-    const wrap = el.closest("label");
-    if (wrap) return wrap.textContent.trim();
-    return "";
-  };
-  const fieldOf = (el) => ({
-    tag: el.tagName.toLowerCase(),
-    type: el.type || null,
-    name: el.name || null,
-    id: el.id || null,
-    required: !!el.required || el.getAttribute("aria-required") === "true",
-    placeholder: el.placeholder || null,
-    autocomplete: el.getAttribute("autocomplete") || null,
-    role: el.getAttribute("role") || null,
-    label: cap(labelFor(el), 300),
-    options: el.tagName === "SELECT"
-      ? [...el.options].slice(0, 200).map((o) => ({ value: o.value, text: cap(o.text, 120) }))
-      : null,
-  });
-  const forms = [...document.querySelectorAll("form")].map((f) => ({
-    action: f.getAttribute("action") || null,
-    method: f.getAttribute("method") || null,
-    id: f.id || null,
-    fields: [...f.querySelectorAll("input, select, textarea, button")].map(fieldOf),
-    html: cap(f.outerHTML, 500000),
-  }));
-  // React apps often render controls without a <form> wrapper
-  const orphanFields = [...document.querySelectorAll("input, select, textarea")]
-    .filter((el) => !el.closest("form"))
-    .map(fieldOf);
-  return {
-    url: location.href,
-    title: document.title,
-    forms,
-    orphanFields,
-    hasFileInput: !!document.querySelector('input[type="file"]'),
-    bodyTextSample: cap(document.body?.innerText || "", 5000),
-  };
+function buildFeedUrl(source, slug) {
+  if (source === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
+  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
 }
 
-async function runFormCapture() {
-  const setState = (s) => chrome.storage.session.set({ captureState: s });
-  captureAbort = false;
-
-  const listRes = await fetch(`${CAPTURE_SERVER}/jobs`);
-  if (!listRes.ok) throw new Error(`capture server error HTTP ${listRes.status}`);
-  const jobs = await listRes.json();
-  if (!jobs.length) {
-    await setState({ phase: "done", done: 0, failed: 0, total: 0 });
-    return;
-  }
-
-  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
-  let done = 0, failed = 0;
-  try {
-    for (const job of jobs) {
-      if (captureAbort) break;
-      await setState({
-        phase: "capturing", done, failed, total: jobs.length,
-        current: `${job.companyName} — ${job.title}`,
-      });
-      const payload = { job, capturedAt: new Date().toISOString(), frames: [], error: null };
-      try {
-        await navigateTab(tab.id, job.applyUrl);
-        await new Promise((r) => setTimeout(r, 3500)); // let the SPA render the form
-        const results = await chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
-          func: collectFormsFromPage,
-        });
-        payload.frames = results
-          .map((r) => ({ frameId: r.frameId, ...(r.result || {}) }))
-          .filter((f) => f.url);
-        done++;
-      } catch (e) {
-        payload.error = e.message;
-        failed++;
-      }
-      await fetch(`${CAPTURE_SERVER}/capture`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }).catch((e) => console.warn("[JobWatch] capture POST failed:", e.message));
-    }
-  } finally {
-    chrome.tabs.remove(tab.id).catch(() => {});
-  }
-  await setState({ phase: captureAbort ? "stopped" : "done", done, failed, total: jobs.length });
+// POST to a collection → creates a document with an auto-generated ID
+async function fsAdd(parentPath, collectionId, data, idToken) {
+  const fields = Object.fromEntries(Object.entries(data).map(([k, v]) => [k, fsValue(v)]));
+  const url = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${parentPath}/${collectionId}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${idToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`Firestore ADD ${parentPath}/${collectionId} failed: ${res.status}`);
+  return res.json();
 }
 
 // ─── Message handler ──────────────────────────────────────────────────────────
@@ -391,33 +339,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           chrome.storage.session.get("pendingJob", r)
         );
 
+        // The job actually being filled is defined by the TAB URL, never by
+        // whatever happens to sit in session storage.
+        // Ashby URL pattern: /jobs.ashbyhq.com/{org}/{uuid}/application
+        const tabUrl = sender?.tab?.url || "";
+        const tabMatch = tabUrl.match(
+          /jobs\.ashbyhq\.com\/([^/]+)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i
+        );
+        const tabOrg = tabMatch ? tabMatch[1] : null;
+        const tabExternalId = tabMatch ? tabMatch[2] : null;
+
+        // Discard a pendingJob left over from a PREVIOUS application.
+        if (tabExternalId && pendingJob && !jobMatchesExternalId(pendingJob, tabExternalId)) {
+          console.warn("[JobWatch] pendingJob is for a different job — discarding:",
+            pendingJob.companyName, "|", pendingJob.title);
+          pendingJob = null;
+          chrome.storage.session.remove("pendingJob");
+        }
+
         // ── Fallback: service worker may have restarted, clearing session ──
-        // Extract the Ashby job UUID from the tab URL and query Firestore.
-        if (!pendingJob?.locationName) {
+        // Query Firestore by the tab's job UUID.
+        if (tabExternalId && !pendingJob?.locationName) {
           try {
-            const tabUrl = sender?.tab?.url || "";
-            // Ashby URL pattern: /jobs.ashbyhq.com/{org}/{uuid}/application
-            const uuidMatch = tabUrl.match(
-              /\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i
+            const { idToken: tok, uid: u } = await getFreshToken();
+            const jobs = await fsQuery(
+              `users/${u}`,
+              "jobs",
+              [{ fieldFilter: { field: { fieldPath: "externalId" }, op: "EQUAL", value: { stringValue: tabExternalId } } }],
+              tok,
+              1
             );
-            if (uuidMatch) {
-              const externalId = uuidMatch[1];
-              const { idToken: tok, uid: u } = await getFreshToken();
-              // Query jobs collection by externalId
-              const jobs = await fsQuery(
-                `users/${u}`,
-                "jobs",
-                [{ fieldFilter: { field: { fieldPath: "externalId" }, op: "EQUAL", value: { stringValue: externalId } } }],
-                tok,
-                1
-              );
-              if (jobs.length) {
-                pendingJob = { ...jobs[0], ...(pendingJob || {}) };
-                console.log("[JobWatch] Recovered pendingJob from Firestore:", pendingJob.locationName);
-              }
+            if (jobs.length) {
+              // Firestore is authoritative — it must win over session leftovers.
+              pendingJob = { ...(pendingJob || {}), ...jobs[0] };
+              console.log("[JobWatch] Recovered pendingJob from Firestore:", pendingJob.locationName);
             }
           } catch (lookupErr) {
             console.warn("[JobWatch] Job lookup from URL failed:", lookupErr.message);
+          }
+        }
+
+        // ── Last resort: job never entered Firestore (opened from an external
+        // link). Pull title/company/location straight from Ashby so the AI
+        // never writes about the wrong company — or no company at all.
+        if (tabOrg && tabExternalId && !pendingJob?.companyName) {
+          try {
+            const info = await fetchAshbyPostingInfo(tabOrg, tabExternalId);
+            if (info.companyName || info.title) {
+              pendingJob = { ...(pendingJob || {}), ...info };
+              console.log("[JobWatch] pendingJob from Ashby API:", info.companyName, "|", info.title);
+            }
+          } catch (e) {
+            console.warn("[JobWatch] Ashby posting lookup failed:", e.message);
           }
         }
 
@@ -1005,171 +978,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         await chrome.storage.session.remove("pendingJob");
 
-        // ── Advance auto-apply queue ──────────────────────────────────────
-        const q = await new Promise(r =>
-          chrome.storage.session.get(
-            ["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"],
-            r
-          )
-        );
-
-        if (q.autoApplyActive) {
-          const newDone = (q.autoApplyDone || 0) + 1;
-          const newIndex = (q.autoApplyIndex || 0) + 1;
-          await chrome.storage.session.set({ autoApplyDone: newDone, autoApplyIndex: newIndex });
-
-          // Close the current application tab after a short display delay
-          const tabId = sender.tab?.id;
-          setTimeout(async () => {
-            if (tabId) chrome.tabs.remove(tabId).catch(() => { });
-
-            if (newIndex < (q.autoApplyQueue || []).length) {
-              const next = q.autoApplyQueue[newIndex];
-              const applyUrl = (next.jobUrl || next.applyUrl || "").replace(/\/$/, "") + (!(next.jobUrl || next.applyUrl || "").includes("/application") ? "/application" : "");
-              await chrome.storage.session.set({
-                pendingJob: {
-                  id: next.id,
-                  title: next.title || next.jobTitle || "",
-                  companyName: next.companyName || "",
-                  absolute_url: next.jobUrl || next.applyUrl || "",
-                  source: next.source || "",
-                  companyKey: next.companyKey || "",
-                  externalId: next.externalId || "",
-                  locationName: next.locationName || "",
-                  workplaceType: next.workplaceType || null,
-                },
-              });
-              await chrome.tabs.create({ url: applyUrl });
-            } else {
-              // Queue exhausted
-              await chrome.storage.session.set({ autoApplyActive: false });
-            }
-          }, 3000);
-        }
-
         sendResponse({ ok: true });
         return;
       }
 
-      // ── 4. Popup: start auto-apply queue ────────────────────────────────
-      if (message.type === "START_AUTO_APPLY") {
-        const { idToken, uid } = await getFreshToken();
-
-        // Query jobs with relevanceScore > 40
-        const jobs = await fsQuery(`users/${uid}`, "jobs", [{
-          fieldFilter: {
-            field: { fieldPath: "relevanceScore" },
-            op: "GREATER_THAN",
-            value: { integerValue: "40" },
-          },
-        }], idToken);
-
-        // Filter: Ashby jobs not already auto-applied
-        const eligible = jobs.filter(j => {
-          const source = j.source || "";
-          return (source === "ashby" || source === "ashbyhq") && !j.autoApplied;
-        });
-
-        if (!eligible.length) {
-          sendResponse({ ok: true, total: 0 });
+      // ── 4. Popup: add a job board feed ──────────────────────────────────
+      if (message.type === "ADD_FEED") {
+        const company = (message.company || "").trim();
+        const source = message.source === "ashby" ? "ashby" : "greenhouse";
+        const slug = companyToSlug(company);
+        if (!company || !slug) {
+          sendResponse({ ok: false, error: "Please enter a valid company name." });
           return;
         }
 
-        await chrome.storage.session.set({
-          autoApplyQueue: eligible,
-          autoApplyIndex: 0,
-          autoApplyTotal: eligible.length,
-          autoApplyDone: 0,
-          autoApplyActive: true,
-        });
+        const { idToken } = await getFreshToken();
+        const url = buildFeedUrl(source, slug);
 
-        // Open first job
-        const first = eligible[0];
-        let firstApplyUrl = (first.jobUrl || first.applyUrl || "").replace(/\/$/, "");
-        if (!firstApplyUrl.includes("/application")) firstApplyUrl += "/application";
-        await chrome.storage.session.set({
-          pendingJob: {
-            id: first.id,
-            title: first.title || first.jobTitle || "",
-            companyName: first.companyName || "",
-            absolute_url: first.jobUrl || first.applyUrl || "",
-            source: first.source || "",
-            companyKey: first.companyKey || "",
-            externalId: first.externalId || "",
-            locationName: first.locationName || "",
-            workplaceType: first.workplaceType || null,
-          },
-        });
-        await chrome.tabs.create({ url: firstApplyUrl });
-        sendResponse({ ok: true, total: eligible.length });
-        return;
-      }
-
-      // ── 8. Popup: get auto-apply progress ───────────────────────────────
-      if (message.type === "GET_AUTO_APPLY_STATUS") {
-        const s = await new Promise(r =>
-          chrome.storage.session.get(["autoApplyActive", "autoApplyDone", "autoApplyTotal"], r)
-        );
-        sendResponse({ ok: true, active: !!s.autoApplyActive, done: s.autoApplyDone || 0, total: s.autoApplyTotal || 0 });
-        return;
-      }
-
-      // ── 9. Popup: stop auto-apply ────────────────────────────────────────
-      if (message.type === "STOP_AUTO_APPLY") {
-        await chrome.storage.session.remove(["autoApplyActive", "autoApplyQueue", "autoApplyIndex", "autoApplyDone", "autoApplyTotal"]);
-        await chrome.storage.session.remove("pendingJob");
-        sendResponse({ ok: true });
-        return;
-      }
-
-      // ── 9c. Popup: capture rendered forms for observed high-score jobs ───
-      if (message.type === "START_FORM_CAPTURE") {
-        let jobsCount;
-        try {
-          const probe = await fetch(`${CAPTURE_SERVER}/jobs`);
-          if (!probe.ok) throw new Error(`HTTP ${probe.status}`);
-          jobsCount = (await probe.json()).length;
-        } catch {
-          sendResponse({ ok: false, error: "Capture server not running — start scripts/form-capture-server.mjs first." });
+        const existing = await fsQuery(`users/${ADMIN_UID}`, "feeds", [], idToken);
+        if (existing.some((f) => (f.url || "").toLowerCase() === url.toLowerCase())) {
+          sendResponse({ ok: false, error: "This feed has already been added." });
           return;
         }
-        await chrome.storage.session.set({ captureState: { phase: "capturing", done: 0, failed: 0, total: jobsCount } });
-        sendResponse({ ok: true, total: jobsCount });
-        runFormCapture().catch(async (e) => {
-          console.warn("[JobWatch] Form capture failed:", e.message);
-          await chrome.storage.session.set({ captureState: { phase: "error", error: e.message } });
-        });
-        return;
-      }
 
-      if (message.type === "STOP_FORM_CAPTURE") {
-        captureAbort = true;
-        sendResponse({ ok: true });
-        return;
-      }
+        await fsAdd(`users/${ADMIN_UID}`, "feeds", {
+          company,
+          url,
+          source,
+          createdAt: new Date(),
+          archivedAt: null,
+          lastCheckedAt: null,
+          lastError: null,
+        }, idToken);
 
-      // ── 9b. Popup: get live eligible + applied counts from Firestore ──────
-      if (message.type === "GET_ELIGIBLE_COUNT") {
-        const { idToken, uid } = await getFreshToken();
-
-        // All jobs with relevanceScore > 40
-        const allEligible = await fsQuery(`users/${uid}`, "jobs", [{
-          fieldFilter: {
-            field: { fieldPath: "relevanceScore" },
-            op: "GREATER_THAN",
-            value: { integerValue: "40" },
-          },
-        }], idToken);
-
-        const ashbyEligible = allEligible.filter(j => {
-          const src = (j.source || "").toLowerCase();
-          return src === "ashby" || src === "ashbyhq";
-        });
-
-        const applied = ashbyEligible.filter(j => j.autoApplied).length;
-        const remaining = ashbyEligible.filter(j => !j.autoApplied).length;
-
-        sendResponse({ ok: true, total: ashbyEligible.length, applied, remaining });
+        sendResponse({ ok: true, url, source });
         return;
       }
 

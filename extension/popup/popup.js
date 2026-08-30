@@ -30,17 +30,13 @@ function showScreen(name) {
 
 function setHeaderSub(text) { $("header-sub").textContent = text; }
 
-function setStatusPill(_state) {
-  // Pill replaced with dynamic Header Avatar. 
-}
-
 // ── Boot: check if already logged in ──────────────────────────────────────────
 chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
   if (response?.ok && response.userDoc) {
     renderProfile(response.userDoc);
   } else {
     showScreen("login");
-    setHeaderSub("Sign in to auto-apply");
+    setHeaderSub("Sign in to continue");
     $("avatar-initials").style.display = "none";
     document.body.classList.add("loaded");
     // Poll immediately — if the web app tab is open and user is logged in,
@@ -73,14 +69,13 @@ function startAuthPolling() {
         clearInterval(authPoller);
         authPoller = null;
         if (btn) { btn.classList.remove("btn-syncing"); btn.innerHTML = BTN_LABEL; btn.disabled = false; }
-        setHeaderSub("Sign in to auto-apply");
+        setHeaderSub("Sign in to continue");
       }
     });
   }, 1500);
 }
 
 const BTN_LABEL = '<svg width="14" height="14" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="7" fill="white" fill-opacity="0.25"/><text x="16" y="23" font-family="Ubuntu,Arial" font-size="18" font-weight="700" fill="white" text-anchor="middle">J</text></svg> Sign in with JobWatch';
-const _BTN_LOADING = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Opening…';
 
 $("btn-login").addEventListener("click", () => {
   // Just open the site — if already logged in, JW_AUTH fires and polling picks it up.
@@ -88,24 +83,17 @@ $("btn-login").addEventListener("click", () => {
   chrome.tabs.create({ url: "https://jobwatch.akashramasani.com" });
 });
 
-
-
 // ── Avatar: click → open JobWatch profile page ────────────────────────────────
 $("avatar-initials").addEventListener("click", () => {
   chrome.tabs.create({ url: "https://jobwatch.akashramasani.com/profile" });
 });
 
 // ── Render profile ─────────────────────────────────────────────────────────────
-let statusPoller = null;
-
 function renderProfile(userDoc) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
-  setStatusPill("online");
 
-  // Profile info
   const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
-
 
   // Avatar pop-in
   const parts = name.split(" ");
@@ -116,64 +104,9 @@ function renderProfile(userDoc) {
   av.classList.add("avatar-pop");
   av.style.display = "flex";
 
-
-
-  // Load live stats from Firestore + refresh every 30s
-  loadEligibleStats();
-  if (window._statsPoller) clearInterval(window._statsPoller);
-  window._statsPoller = setInterval(loadEligibleStats, 30_000);
-
-  pollAutoApplyStatus();
   startAuthValidityCheck();
   document.body.classList.add("loaded");
 }
-
-// ── Live eligible job count ────────────────────────────────────────────────────
-function loadEligibleStats() {
-  // 1. Show cached values instantly (no loading flash)
-  chrome.storage.session.get("eligibleStats", ({ eligibleStats }) => {
-    if (eligibleStats) {
-      $("stat-applied").textContent = eligibleStats.applied;
-      $("stat-jobs").textContent    = eligibleStats.remaining;
-    } else {
-      $("stat-applied").textContent = "—";
-      $("stat-jobs").textContent    = "—";
-    }
-
-    // 2. Silently fetch fresh data in the background
-    chrome.runtime.sendMessage({ type: "GET_ELIGIBLE_COUNT" }, (res) => {
-      if (chrome.runtime.lastError || !res?.ok) return;
-
-      // Only update + animate if the numbers actually changed
-      const prev = eligibleStats || {};
-      if (res.applied !== prev.applied || res.remaining !== prev.remaining) {
-        animateCount("stat-applied", res.applied);
-        animateCount("stat-jobs",    res.remaining);
-      }
-
-      // Cache for next open
-      chrome.storage.session.set({ eligibleStats: { applied: res.applied, remaining: res.remaining } });
-    });
-  });
-}
-
-
-
-function animateCount(id, target) {
-  const el = $(id);
-  const duration = 600;
-  const start = performance.now();
-  const from = 0;
-
-  function step(now) {
-    const progress = Math.min((now - start) / duration, 1);
-    const ease = 1 - Math.pow(1 - progress, 3); // ease-out cubic
-    el.textContent = Math.round(from + (target - from) * ease);
-    if (progress < 1) requestAnimationFrame(step);
-  }
-  requestAnimationFrame(step);
-}
-
 
 // ── Auth validity check: auto-logout when web app session ends ──────────────
 let authValidityPoller = null;
@@ -186,9 +119,8 @@ function startAuthValidityCheck() {
         // Tokens gone (JW_LOGOUT was received) — switch back to login
         clearInterval(authValidityPoller);
         authValidityPoller = null;
-        if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
         showScreen("login");
-        setHeaderSub("Sign in to auto-apply");
+        setHeaderSub("Sign in to continue");
         $("avatar-initials").style.display = "none";
         startAuthPolling();
       }
@@ -196,127 +128,70 @@ function startAuthValidityCheck() {
   }, 10_000); // check every 10 seconds
 }
 
-// ── Auto Apply progress ────────────────────────────────────────────────────────
-function setProgressUI(active, done, total) {
-  const wrap = $("progress-wrap");
-  const btn  = $("btn-auto-apply");
-  const stop = $("btn-stop");
-
-  if (active && total > 0) {
-    wrap.style.display = "block";
-    stop.style.display = "flex";
-    btn.disabled = true;
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Running…';
-    const pct = Math.round((done / total) * 100);
-    $("progress-fill").style.width  = pct + "%";
-    $("progress-count").textContent = `${done} / ${total}`;
-    $("progress-label").textContent = "Applying…";
-    $("progress-jobs").textContent  = done < total ? `Working on job ${done + 1} of ${total}` : "✅ All done!";
-    $("stat-applied").textContent   = done;
-    $("stat-jobs").textContent      = total;
-  } else {
-    stop.style.display = "none";
-    btn.disabled = false;
-    btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 40)</span>';
-    if (total > 0) {
-      wrap.style.display = "block";
-      $("progress-fill").style.width  = "100%";
-      $("progress-count").textContent = `${done} / ${total}`;
-      $("progress-label").textContent = "Completed";
-      $("progress-jobs").textContent  = `✅ Applied to ${done} job${done !== 1 ? "s" : ""}`;
-      $("stat-applied").textContent   = done;
-      $("stat-jobs").textContent      = total;
-    }
-  }
+// ── Add feed ──────────────────────────────────────────────────────────────────
+function companyToSlug(name) {
+  return (name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
 
-function pollAutoApplyStatus() {
-  if (statusPoller) clearInterval(statusPoller);
-  statusPoller = setInterval(() => {
-    chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
-      if (!res?.ok) return;
-      setProgressUI(res.active, res.done, res.total);
-      if (!res.active && res.total > 0) {
-        clearInterval(statusPoller);
-        statusPoller = null;
-      }
-    });
-  }, 1500);
+function buildFeedUrl(source, slug) {
+  if (source === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
+  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
 }
 
-$("btn-auto-apply").addEventListener("click", () => {
-  $("btn-auto-apply").disabled = true;
-  $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:spin 0.8s linear infinite"><path d="M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0"/></svg> Starting…';
-  chrome.runtime.sendMessage({ type: "START_AUTO_APPLY" }, (res) => {
-    if (!res?.ok || res.total === 0) {
-      $("btn-auto-apply").disabled = false;
-      $("btn-auto-apply").innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Auto Apply All <span style="opacity:0.6;font-weight:500">(score &gt; 40)</span>';
-      const noticeEl = $("status-text");
-      noticeEl.innerHTML = res?.total === 0
-        ? '<span>⚠️</span><span>No eligible Ashby jobs found (score &gt; 40, not yet applied).</span>'
-        : '<span>❌</span><span>Failed to start. Please try again.</span>';
-      return;
-    }
-    setProgressUI(true, 0, res.total);
-    pollAutoApplyStatus();
-  });
-});
+function selectedSource() {
+  return document.querySelector('input[name="feed-source"]:checked')?.value || "greenhouse";
+}
 
-$("btn-stop").addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "STOP_AUTO_APPLY" }, () => {
-    if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
-    chrome.runtime.sendMessage({ type: "GET_AUTO_APPLY_STATUS" }, (res) => {
-      if (res?.ok) setProgressUI(false, res.done, res.total);
-    });
-  });
-});
+function updateUrlPreview() {
+  const slug = companyToSlug($("feed-company").value);
+  $("feed-url-preview").textContent = slug
+    ? buildFeedUrl(selectedSource(), slug)
+    : "The API endpoint is built from the company name.";
+}
 
-// ── Capture rendered application forms → scripts/form-capture-server.mjs ──────
-$("btn-capture").addEventListener("click", () => {
-  const btn = $("btn-capture");
-  const st = $("capture-status");
+$("feed-company").addEventListener("input", updateUrlPreview);
+document.querySelectorAll('input[name="feed-source"]').forEach((r) =>
+  r.addEventListener("change", updateUrlPreview)
+);
+updateUrlPreview();
 
-  // Second click while running = stop
-  if (btn.dataset.running === "1") {
-    chrome.runtime.sendMessage({ type: "STOP_FORM_CAPTURE" });
-    st.textContent = "Stopping after current job…";
+function setFeedStatus(text, kind) {
+  const st = $("feed-status");
+  st.style.display = "block";
+  st.textContent = text;
+  st.style.color = kind === "error" ? "#dc2626" : "#065f46";
+}
+
+const ADD_LABEL = "＋ Add Feed";
+
+function submitFeed() {
+  const company = $("feed-company").value.trim();
+  const source = selectedSource();
+  if (!company) {
+    setFeedStatus("Please enter a company name.", "error");
     return;
   }
 
-  btn.dataset.running = "1";
-  btn.textContent = "⏹ Stop Capture";
-  st.style.display = "block";
-  st.textContent = "Starting…";
+  const btn = $("btn-add-feed");
+  btn.disabled = true;
+  btn.textContent = "Adding…";
+  $("feed-status").style.display = "none";
 
-  chrome.runtime.sendMessage({ type: "START_FORM_CAPTURE" }, (res) => {
+  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source }, (res) => {
+    btn.disabled = false;
+    btn.textContent = ADD_LABEL;
     if (chrome.runtime.lastError || !res?.ok) {
-      st.textContent = "❌ " + (chrome.runtime.lastError?.message || res?.error || "Failed to start");
-      btn.dataset.running = "";
-      btn.textContent = "🧾 Capture Forms → observations";
+      setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
+      return;
     }
+    const label = source === "ashby" ? "AshbyHQ" : "Greenhouse";
+    setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
+    $("feed-company").value = "";
+    updateUrlPreview();
   });
+}
 
-  if (window._capturePoller) clearInterval(window._capturePoller);
-  window._capturePoller = setInterval(() => {
-    chrome.storage.session.get("captureState", ({ captureState }) => {
-      if (!captureState) return;
-      const { phase, done, failed, total, current, error } = captureState;
-      if (phase === "done" || phase === "stopped" || phase === "error") {
-        clearInterval(window._capturePoller);
-        window._capturePoller = null;
-        btn.dataset.running = "";
-        btn.textContent = "🧾 Capture Forms → observations";
-        st.textContent = phase === "error"
-          ? "❌ " + (error || "Capture failed")
-          : `${phase === "stopped" ? "⏹ Stopped" : "✅ Done"}: ${done}/${total} captured, ${failed} failed → forms-dom/`;
-      } else {
-        st.textContent = `${done + failed}/${total} — ${current || "…"}`;
-      }
-    });
-  }, 800);
+$("btn-add-feed").addEventListener("click", submitFeed);
+$("feed-company").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") submitFeed();
 });
-
-// ── CSS keyframe for spinner ───────────────────────────────────────────────────
-const style = document.createElement("style");
-style.textContent = `@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`;
-document.head.appendChild(style);

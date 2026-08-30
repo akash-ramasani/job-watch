@@ -130,14 +130,24 @@
     .badge-green  { background: #d1fae5; color: #065f46; }
     .badge-gray   { background: #f3f4f6; color: #6b7280; }
 
-    /* ── Stats ── */
-    .stats-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
-    .stat-card {
-      background: #f9fafb; border: 1px solid #e5e7eb;
-      border-radius: 10px; padding: 10px 12px;
+    /* ── Add feed radios (matches web app radio design) ── */
+    .radio-row { display: flex; gap: 22px; align-items: center; margin-top: 2px; }
+    .radio-opt {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; font-weight: 500; color: #111827;
+      text-transform: none; letter-spacing: normal; cursor: pointer; margin-bottom: 0;
     }
-    .stat-value { font-size: 20px; font-weight: 700; color: #111827; line-height: 1; }
-    .stat-label { font-size: 10px; color: #9ca3af; margin-top: 3px; font-weight: 500; }
+    .radio-opt input[type="radio"] {
+      appearance: none; width: 16px; height: 16px; border-radius: 50%;
+      border: 1px solid #d1d5db; background: #fff; position: relative;
+      cursor: pointer; transition: all 0.15s; margin: 0; flex-shrink: 0;
+    }
+    .radio-opt input[type="radio"]:checked { border-color: #4f46e5; background: #4f46e5; }
+    .radio-opt input[type="radio"]:checked::before {
+      content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #fff;
+    }
+    .radio-opt input[type="radio"]:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
+    .url-preview { font-size: 10px; color: #9ca3af; word-break: break-all; margin: -2px 0 12px; line-height: 1.5; }
 
     /* ── Status notice ── */
     .status-notice {
@@ -147,30 +157,6 @@
       display: flex; align-items: flex-start; gap: 8px;
     }
     .status-notice.detected { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
-
-    /* ── Apply button ── */
-    .btn-apply {
-      background: linear-gradient(135deg, #4f46e5, #7c3aed);
-      color: white; padding: 11px 16px;
-      box-shadow: 0 4px 14px rgba(79,70,229,0.25);
-    }
-    .btn-apply:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(79,70,229,0.35); }
-    .btn-apply:disabled { opacity: 0.45; cursor: not-allowed; }
-
-    /* ── Progress ── */
-    .progress-wrap {
-      margin-top: 10px; background: #f9fafb; border: 1px solid #e5e7eb;
-      border-radius: 10px; padding: 12px; display: none;
-    }
-    .progress-header { display: flex; justify-content: space-between; margin-bottom: 7px; }
-    .progress-header span { font-size: 11px; color: #9ca3af; }
-    .progress-header strong { font-size: 11px; color: #374151; font-weight: 700; }
-    .progress-track { height: 5px; background: #e5e7eb; border-radius: 999px; overflow: hidden; }
-    .progress-fill {
-      height: 100%; border-radius: 999px; transition: width 0.5s ease;
-      width: 0%; background: linear-gradient(90deg, #4f46e5, #7c3aed);
-    }
-    .progress-job-name { font-size: 10px; color: #9ca3af; margin-top: 7px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     /* ── Divider ── */
     .divider { border: none; border-top: 1px solid #f3f4f6; margin: 12px 0; }
@@ -214,10 +200,6 @@
     .anim-slide:nth-child(2) { animation-delay: 0.12s; }
     .anim-slide:nth-child(3) { animation-delay: 0.19s; }
     .anim-slide:nth-child(4) { animation-delay: 0.26s; }
-
-    /* ── Stat card hover lift ── */
-    .stat-card { transition: transform 0.18s ease, box-shadow 0.18s ease; cursor: default; }
-    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(99,102,241,0.12); }
 
     /* ── Button press feedback ── */
     .btn { transition: all 0.2s, transform 0.1s; }
@@ -275,39 +257,29 @@
   <!-- Profile screen -->
   <div class="body" id="screen-profile">
 
-    <div class="stats-row anim-slide">
-      <div class="stat-card">
-        <div class="stat-value" id="stat-applied">—</div>
-        <div class="stat-label">Applied</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="stat-jobs">—</div>
-        <div class="stat-label">Can Apply</div>
+    <div class="field anim-slide">
+      <label for="feed-company">Company Name</label>
+      <input id="feed-company" placeholder="e.g. otter, stradahq, thetradedesk" autocomplete="off" />
+    </div>
+
+    <div class="field anim-slide">
+      <label>Job Board</label>
+      <div class="radio-row">
+        <label class="radio-opt">
+          <input type="radio" name="feed-source" value="greenhouse" checked />
+          Greenhouse
+        </label>
+        <label class="radio-opt">
+          <input type="radio" name="feed-source" value="ashby" />
+          AshbyHQ
+        </label>
       </div>
     </div>
 
-    <button class="btn btn-apply anim-slide" id="btn-auto-apply" style="animation-delay:0.17s">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-      Auto Apply All <span style="opacity:0.65;font-weight:400">(score &gt; 40)</span>
-    </button>
+    <p class="url-preview anim-slide" id="feed-url-preview"></p>
 
-    <div class="progress-wrap" id="progress-wrap">
-      <div class="progress-header">
-        <span id="progress-label">Applying…</span>
-        <strong id="progress-count">0 / 0</strong>
-      </div>
-      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
-      <div class="progress-job-name" id="progress-jobs"></div>
-    </div>
-
-    <button class="btn btn-ghost" id="btn-stop" style="display:none">⏹ Stop</button>
-
-    <!-- ── Capture rendered forms for observed high-score jobs (needs local server) ── -->
-    <hr class="divider" style="margin:10px 0 8px">
-    <button class="btn btn-ghost" id="btn-capture" style="font-size:11px; opacity:0.85; gap:6px;">
-      🧾 Capture Forms → observations
-    </button>
-    <div id="capture-status" style="display:none; margin-top:6px; font-size:11px; color:#6b7280;"></div>
+    <button class="btn btn-primary anim-slide" id="btn-add-feed">＋ Add Feed</button>
+    <div id="feed-status" style="display:none; margin-top:10px; font-size:11px; line-height:1.5;"></div>
   </div>
 
   <script src="popup.js"></script>
