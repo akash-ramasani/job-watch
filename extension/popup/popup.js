@@ -138,15 +138,68 @@ function buildFeedUrl(source, slug) {
   return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
 }
 
+// Lightweight URL used only for live validation — Greenhouse without
+// ?content=true skips the full job descriptions (much smaller payload).
+function buildCheckUrl(source, slug) {
+  if (source === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
+  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
+}
+
 function selectedSource() {
   return document.querySelector('input[name="feed-source"]:checked')?.value || "greenhouse";
 }
 
+// ── Live endpoint check: runs on every company/radio change ──────────────────
+// green = endpoint returns real job data, red = 404 / empty / unreachable.
+let endpointStatus = "idle"; // idle | checking | valid | invalid
+let checkTimer = null;
+let checkController = null;
+let checkSeq = 0;
+
+function paintPreview(text, color) {
+  const el = $("feed-url-preview");
+  el.textContent = text;
+  el.style.color = color;
+}
+
 function updateUrlPreview() {
   const slug = companyToSlug($("feed-company").value);
-  $("feed-url-preview").textContent = slug
-    ? buildFeedUrl(selectedSource(), slug)
-    : "The API endpoint is built from the company name.";
+  const source = selectedSource();
+
+  clearTimeout(checkTimer);
+  if (checkController) checkController.abort();
+
+  if (!slug) {
+    endpointStatus = "idle";
+    paintPreview("The API endpoint is built from the company name.", "#9ca3af");
+    return;
+  }
+
+  const url = buildFeedUrl(source, slug);
+  endpointStatus = "checking";
+  paintPreview(`${url} — checking…`, "#9ca3af");
+
+  const seq = ++checkSeq;
+  checkTimer = setTimeout(async () => {
+    checkController = new AbortController();
+    try {
+      const resp = await fetch(buildCheckUrl(source, slug), { signal: checkController.signal });
+      const data = resp.ok ? await resp.json().catch(() => null) : null;
+      const jobCount = Array.isArray(data?.jobs) ? data.jobs.length : 0;
+      if (seq !== checkSeq) return; // a newer check superseded this one
+      if (jobCount > 0) {
+        endpointStatus = "valid";
+        paintPreview(`${url} — ${jobCount} jobs live`, "#059669");
+      } else {
+        endpointStatus = "invalid";
+        paintPreview(`${url} — no data at this endpoint`, "#dc2626");
+      }
+    } catch (err) {
+      if (err.name === "AbortError" || seq !== checkSeq) return;
+      endpointStatus = "invalid";
+      paintPreview(`${url} — no data at this endpoint`, "#dc2626");
+    }
+  }, 500);
 }
 
 $("feed-company").addEventListener("input", updateUrlPreview);
@@ -169,6 +222,14 @@ function submitFeed() {
   const source = selectedSource();
   if (!company) {
     setFeedStatus("Please enter a company name.", "error");
+    return;
+  }
+  if (endpointStatus === "checking" || endpointStatus === "idle") {
+    setFeedStatus("Still verifying the endpoint — one moment.", "error");
+    return;
+  }
+  if (endpointStatus !== "valid") {
+    setFeedStatus("This endpoint has no job data. Check the company name and job board.", "error");
     return;
   }
 

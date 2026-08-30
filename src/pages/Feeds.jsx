@@ -93,6 +93,15 @@ function buildFeedUrl(source, slug) {
   return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
 }
 
+// Lightweight URL used only for live validation — Greenhouse without
+// ?content=true skips the full job descriptions (much smaller payload).
+function buildCheckUrl(source, slug) {
+  if (source === "ashby") {
+    return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
+  }
+  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
+}
+
 function detectSourceFromUrl(raw) {
   const u = (raw || "").trim().toLowerCase();
   if (u.includes("boards-api.greenhouse.io/v1/boards/")) return "greenhouse";
@@ -203,6 +212,8 @@ export default function Feeds({ user }) {
 
   const [company, setCompany] = useState(searchParams.get("company") || "");
   const [source, setSource] = useState("greenhouse");
+  // idle | checking | valid | invalid — live probe of the built endpoint
+  const [endpointCheck, setEndpointCheck] = useState({ status: "idle", jobCount: 0 });
   const [feeds, setFeeds] = useState([]);
   const [busyArchiveId, setBusyArchiveId] = useState(null);
   const [busyRunNow, setBusyRunNow] = useState(false);
@@ -220,6 +231,35 @@ export default function Feeds({ user }) {
   const activeFeeds = useMemo(() => feeds.filter((f) => !f.archivedAt), [feeds]);
   const archivedFeeds = useMemo(() => feeds.filter((f) => !!f.archivedAt), [feeds]);
 
+  // Live-check the built endpoint on every company/radio change (debounced).
+  useEffect(() => {
+    const slug = companyToSlug(company);
+    if (!slug) {
+      setEndpointCheck({ status: "idle", jobCount: 0 });
+      return;
+    }
+    setEndpointCheck({ status: "checking", jobCount: 0 });
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const resp = await fetch(buildCheckUrl(source, slug), { signal: ctrl.signal });
+        const data = resp.ok ? await resp.json().catch(() => null) : null;
+        const jobCount = Array.isArray(data?.jobs) ? data.jobs.length : 0;
+        setEndpointCheck(
+          jobCount > 0
+            ? { status: "valid", jobCount }
+            : { status: "invalid", jobCount: 0 }
+        );
+      } catch (err) {
+        if (err.name !== "AbortError") setEndpointCheck({ status: "invalid", jobCount: 0 });
+      }
+    }, 500);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [company, source]);
+
   async function addFeed(e) {
     e.preventDefault();
     const cleanCompany = company.trim();
@@ -228,6 +268,15 @@ export default function Feeds({ user }) {
     const slug = companyToSlug(cleanCompany);
     if (!slug) {
       showToast("Please enter a valid company name.", "error");
+      return;
+    }
+
+    if (endpointCheck.status === "checking") {
+      showToast("Still verifying the endpoint — one moment.", "error");
+      return;
+    }
+    if (endpointCheck.status !== "valid") {
+      showToast("This endpoint has no job data. Check the company name and job board.", "error");
       return;
     }
 
@@ -410,9 +459,23 @@ export default function Feeds({ user }) {
                     ))}
                   </div>
                 </fieldset>
-                <p className="mt-3 text-[11px] text-gray-400 leading-relaxed">
+                <p
+                  className={`mt-3 text-[11px] leading-relaxed break-all ${
+                    endpointCheck.status === "valid"
+                      ? "text-emerald-600"
+                      : endpointCheck.status === "invalid"
+                        ? "text-red-600"
+                        : "text-gray-400"
+                  }`}
+                >
                   {companyToSlug(company)
-                    ? buildFeedUrl(source, companyToSlug(company))
+                    ? `${buildFeedUrl(source, companyToSlug(company))}${
+                        endpointCheck.status === "valid"
+                          ? ` — ${endpointCheck.jobCount} jobs live`
+                          : endpointCheck.status === "invalid"
+                            ? " — no data at this endpoint"
+                            : " — checking…"
+                      }`
                     : "The API endpoint is built automatically from the company name."}
                 </p>
               </div>
