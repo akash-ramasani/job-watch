@@ -1143,6 +1143,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // Unknown message type (e.g. a newer popup talking to a stale service
+      // worker) — always respond so the caller's UI never hangs.
+      sendResponse({ ok: false, error: `Unknown message type: ${message.type}. Reload the extension.` });
+
     } catch (err) {
       sendResponse({ ok: false, error: err.message });
     }

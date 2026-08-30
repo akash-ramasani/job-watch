@@ -238,17 +238,34 @@ function submitFeed() {
   btn.textContent = "Adding…";
   $("feed-status").style.display = "none";
 
-  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source }, (res) => {
+  // Never leave the button stuck on "Adding…" — a stale service worker that
+  // doesn't know ADD_FEED would otherwise hold the message channel open forever.
+  let settled = false;
+  const finish = (fn) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(watchdog);
     btn.disabled = false;
     btn.textContent = ADD_LABEL;
-    if (chrome.runtime.lastError || !res?.ok) {
-      setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
-      return;
-    }
-    const label = source === "ashby" ? "AshbyHQ" : "Greenhouse";
-    setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
-    $("feed-company").value = "";
-    updateUrlPreview();
+    fn();
+  };
+  const watchdog = setTimeout(() => {
+    finish(() =>
+      setFeedStatus("No response from the extension. Reload it in chrome://extensions and try again.", "error")
+    );
+  }, 15000);
+
+  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source }, (res) => {
+    finish(() => {
+      if (chrome.runtime.lastError || !res?.ok) {
+        setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
+        return;
+      }
+      const label = source === "ashby" ? "AshbyHQ" : "Greenhouse";
+      setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
+      $("feed-company").value = "";
+      updateUrlPreview();
+    });
   });
 }
 
