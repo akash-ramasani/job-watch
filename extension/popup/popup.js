@@ -162,7 +162,7 @@ function setFeedStatus(text, kind) {
   st.style.color = kind === "error" ? "#dc2626" : "#065f46";
 }
 
-const ADD_LABEL = "＋ Add Feed";
+const ADD_LABEL = "Add Feed";
 
 function submitFeed() {
   const company = $("feed-company").value.trim();

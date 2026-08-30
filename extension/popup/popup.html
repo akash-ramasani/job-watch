@@ -71,9 +71,9 @@
 
     .field { margin-bottom: 12px; }
     .field label {
-      display: block; font-size: 10px; font-weight: 700;
-      letter-spacing: 0.08em; text-transform: uppercase;
-      color: #6b7280; margin-bottom: 5px;
+      display: block; font-size: 10px; font-weight: 800;
+      letter-spacing: 0.1em; text-transform: uppercase;
+      color: #9ca3af; margin-bottom: 6px;
     }
     .field input {
       width: 100%; padding: 9px 12px;
@@ -130,24 +130,28 @@
     .badge-green  { background: #d1fae5; color: #065f46; }
     .badge-gray   { background: #f3f4f6; color: #6b7280; }
 
-    /* ── Add feed radios (matches web app radio design) ── */
-    .radio-row { display: flex; gap: 22px; align-items: center; margin-top: 2px; }
-    .radio-opt {
-      display: flex; align-items: center; gap: 8px;
-      font-size: 12px; font-weight: 500; color: #111827;
-      text-transform: none; letter-spacing: normal; cursor: pointer; margin-bottom: 0;
+    /* ── Add feed radios (matches web app radio design) ──
+       .field label / .field input are scoped away from the radio group so the
+       text-input padding and uppercase label styles don't distort it. */
+    .radio-row { display: flex; gap: 28px; align-items: center; margin-top: 8px; }
+    .field label.radio-opt {
+      display: flex; align-items: center; gap: 10px;
+      font-size: 13px; font-weight: 500; color: #111827;
+      text-transform: none; letter-spacing: normal; margin-bottom: 0; cursor: pointer;
     }
-    .radio-opt input[type="radio"] {
-      appearance: none; width: 16px; height: 16px; border-radius: 50%;
-      border: 1px solid #d1d5db; background: #fff; position: relative;
-      cursor: pointer; transition: all 0.15s; margin: 0; flex-shrink: 0;
+    .field .radio-opt input[type="radio"] {
+      appearance: none; -webkit-appearance: none;
+      width: 16px; height: 16px; min-width: 16px; padding: 0;
+      border-radius: 50%; border: 1px solid #d1d5db; background: #fff;
+      position: relative; cursor: pointer; margin: 0; flex-shrink: 0;
+      transition: border-color 0.15s, background 0.15s;
     }
-    .radio-opt input[type="radio"]:checked { border-color: #4f46e5; background: #4f46e5; }
-    .radio-opt input[type="radio"]:checked::before {
+    .field .radio-opt input[type="radio"]:checked { border-color: #4f46e5; background: #4f46e5; }
+    .field .radio-opt input[type="radio"]:checked::before {
       content: ""; position: absolute; inset: 4px; border-radius: 50%; background: #fff;
     }
-    .radio-opt input[type="radio"]:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }
-    .url-preview { font-size: 10px; color: #9ca3af; word-break: break-all; margin: -2px 0 12px; line-height: 1.5; }
+    .field .radio-opt input[type="radio"]:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; box-shadow: none; }
+    .url-preview { font-size: 10px; color: #9ca3af; word-break: break-all; margin: -2px 0 14px; line-height: 1.6; }
 
     /* ── Status notice ── */
     .status-notice {
@@ -278,7 +282,10 @@
 
     <p class="url-preview anim-slide" id="feed-url-preview"></p>
 
-    <button class="btn btn-primary anim-slide" id="btn-add-feed">＋ Add Feed</button>
+    <button class="btn btn-primary anim-slide" id="btn-add-feed"
+      style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 11px; font-weight: 800; padding: 12px 16px;">
+      Add Feed
+    </button>
     <div id="feed-status" style="display:none; margin-top:10px; font-size:11px; line-height:1.5;"></div>
   </div>
 
