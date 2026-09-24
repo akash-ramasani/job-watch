@@ -133,9 +133,14 @@
     /* ── Add feed radios (matches web app radio design) ──
        .field label / .field input are scoped away from the radio group so the
        text-input padding and uppercase label styles don't distort it. */
-    .radio-row { display: flex; gap: 28px; align-items: center; margin-top: 8px; }
+    /* Three options must fit the 304px inner width on one row; wrap is the
+       fallback for wider labels (e.g. a localized font), not the norm. */
+    .radio-row {
+      display: flex; flex-wrap: wrap; align-items: center;
+      justify-content: space-between; gap: 8px 12px; margin-top: 8px;
+    }
     .field label.radio-opt {
-      display: flex; align-items: center; gap: 10px;
+      display: flex; align-items: center; gap: 8px; white-space: nowrap;
       font-size: 13px; font-weight: 500; color: #111827;
       text-transform: none; letter-spacing: normal; margin-bottom: 0; cursor: pointer;
     }
@@ -266,11 +271,6 @@
       <input id="feed-company" placeholder="e.g. otter, stradahq, thetradedesk" autocomplete="off" />
     </div>
 
-    <div class="field anim-slide" id="feed-workday-field" style="display:none;">
-      <label for="feed-workday-url">Workday Career Site URL</label>
-      <input id="feed-workday-url" placeholder="https://<company>.wd5.myworkdayjobs.com/<SiteName>" autocomplete="off" spellcheck="false" />
-    </div>
-
     <div class="field anim-slide">
       <label>Job Board</label>
       <div class="radio-row">
@@ -287,6 +287,11 @@
           Workday
         </label>
       </div>
+    </div>
+
+    <div class="field anim-slide" id="feed-workday-field" style="display:none;">
+      <label for="feed-workday-url">Workday Career Site URL</label>
+      <input id="feed-workday-url" placeholder="https://<company>.wd5.myworkdayjobs.com/<SiteName>" autocomplete="off" spellcheck="false" />
     </div>
 
     <p class="url-preview anim-slide" id="feed-url-preview"></p>
