@@ -48,3 +48,6 @@ ashby_html_files/
 
 # Auto-apply worker: generated docs (contain personal data) and env
 worker/out/
+
+# Personal documents (resume source etc.) — never commit
+private/

@@ -3166,9 +3166,14 @@ exports.generateTailoredResume = onCall(
     const jobTitle = job.title || "the role";
 
     const projects = Array.isArray(profile.projects) ? profile.projects.filter((p) => p && (p.name || p.description)) : [];
+    // Grouped skills (from the LaTeX import) keep the resume's "Languages:",
+    // "Cloud / DevOps:" rows; a flat list is wrapped in a single group.
+    const profileGroups = Array.isArray(profile.skillGroups) && profile.skillGroups.length
+      ? profile.skillGroups.map((g) => ({ label: String(g.label || "Skills"), skills: (g.skills || []).map((s) => String(s)) }))
+      : [{ label: "Skills", skills: (profile.skills || []).map((s) => String(s)) }];
     const promptProfile = {
       summary: profile.summary || "",
-      skills: profile.skills || [],
+      skillGroups: profileGroups,
       roles: roles.map((r, index) => ({
         index,
         title: r.title || "",
@@ -3198,16 +3203,17 @@ exports.generateTailoredResume = onCall(
 Hard rules — violating any of them makes the output unusable:
 1. Use ONLY facts present in the candidate profile. Never add a tool, language, framework, metric, responsibility, certification or outcome that the profile does not state or clearly imply.
 1b. Each role's bullets must come ONLY from that role's own "description". Never move, reuse or blend an achievement from one role into another, and never put the same bullet under two roles. If a role's description is thin, write fewer bullets (even one) rather than borrowing.
+1c. Return bullets for EVERY role index and EVERY project index, including roles unrelated to this job: for those, keep the substance, tighten the wording, and bold the terms most transferable to the job. Never omit a role.
 2. You do not write employers, titles, dates or locations. Refer to roles and projects by their "index" only.
-3. Rewrite each role's experience as 3-6 concise bullets that foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's. Lead with impact; keep numbers only if the profile has them. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Split a dense paragraph into several bullets rather than one long one.
-4. Order skills with the most job-relevant first. Include only skills the candidate has.
+3. Rewrite each role's experience as 3-6 concise bullets that foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's. Lead with impact; keep numbers only if the profile has them. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Split a dense paragraph into several bullets rather than one long one. Wrap the 2-4 most job-relevant terms of each bullet in **double asterisks** for emphasis; nothing else.
+4. Skills: keep the candidate's skill groups (same labels), reorder within each group so the most job-relevant come first, and drop skills irrelevant to this job only if the group still has at least 3. Never add a skill or a group the candidate doesn't have.
 5. If the job needs something the candidate lacks, say so in the requirements list. Do not paper over gaps.
 6. Write like a human engineer: plain, specific, no buzzword padding, no em dashes.
 7. The summary is a rephrasing of the candidate's existing summary and skills for this job. It may only name domains, technologies and responsibilities that appear in the profile; if the job's domain (e.g. "video understanding") is not in the profile, the summary must not mention it.
 8. Return ONLY a JSON object with this shape:
 {
-  "summary": "2-3 sentence professional summary for this job, only claims the profile supports",
-  "skills": ["ordered", "list"],
+  "summary": "2-3 sentence professional summary for this job, only claims the profile supports, with 3-5 key terms wrapped in **double asterisks**",
+  "skillGroups": [{ "label": "same label as the profile", "skills": ["ordered", "list"] }],
   "roles": [{ "index": 0, "bullets": ["...", "..."] }],
   "projects": [{ "index": 0, "bullets": ["..."] }],
   "requirements": [
@@ -3228,15 +3234,17 @@ ${JSON.stringify(promptProfile)}`;
         {
           model: OPENAI_SMART_MODEL,
           temperature: 0.2,
-          max_tokens: 2500,
+          max_tokens: 4500,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
         },
-        { timeout: 60000 }
+        { timeout: 90000 }
       );
+      const finish = completion.choices?.[0]?.finish_reason;
+      if (finish && finish !== "stop") logger.warn(`generateTailoredResume pass 1 finish_reason=${finish} (output may be truncated)`);
       draft = parseJsonLoose(completion.choices?.[0]?.message?.content);
     } catch (err) {
       logger.error("generateTailoredResume pass 1 failed:", err);
@@ -3259,36 +3267,45 @@ ${JSON.stringify(promptProfile)}`;
         bullets: bullets.length ? bullets : splitDescriptionToBullets(r.description),
       };
     });
-    const builtProjects = projects
-      .map((p, index) => {
-        const d = draftProjects.get(index);
-        if (!d) return null; // the model left it out as irrelevant to this job
-        const bullets = (d.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 4);
-        return {
-          name: p.name || "",
-          technologies: p.techStack || (p.technologies || []).join(", "),
-          bullets: bullets.length ? bullets : splitDescriptionToBullets(p.description),
-        };
-      })
-      .filter(Boolean);
+    // Every project the user listed stays on the resume; the model may only
+    // rephrase or trim a project's bullets, never remove the project.
+    const builtProjects = projects.map((p, index) => {
+      const d = draftProjects.get(index);
+      const bullets = (d?.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 4);
+      return {
+        name: p.name || "",
+        link: p.link || "",
+        technologies: p.techStack || (p.technologies || []).join(", "),
+        bullets: bullets.length ? bullets : splitDescriptionToBullets(p.description),
+      };
+    });
 
-    // Model's job-relevant ordering first, then the rest of the user's real
-    // skills so the section isn't thin; anything not in the profile is dropped.
+    // Skills stay in the user's own groups. The model may only reorder and
+    // prune inside a group; any skill not in the profile is dropped, and a
+    // group the model forgot comes back verbatim.
     const droppedSkills = [];
-    const seenSkills = new Set();
-    const skills = [];
-    for (const s of [...(Array.isArray(draft.skills) ? draft.skills : []), ...(profile.skills || [])]) {
-      const clean = String(s || "").trim();
-      const key = normalizeSkillText(clean);
-      if (!clean || seenSkills.has(key)) continue;
-      seenSkills.add(key);
-      if (!skillInCorpus(clean, corpus)) {
-        droppedSkills.push(clean);
-        continue;
+    const draftGroups = new Map(
+      (Array.isArray(draft.skillGroups) ? draft.skillGroups : [])
+        .map((g) => [normalizeSkillText(g.label), (g.skills || []).map((s) => String(s).trim()).filter(Boolean)])
+    );
+    const skillGroups = profileGroups.map((g) => {
+      const allowed = new Map(g.skills.map((s) => [normalizeSkillText(s), s]));
+      const proposed = draftGroups.get(normalizeSkillText(g.label));
+      if (!proposed) return { label: g.label, skills: g.skills };
+      const kept = [];
+      const seen = new Set();
+      for (const s of proposed) {
+        const key = normalizeSkillText(s);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (allowed.has(key)) kept.push(allowed.get(key));
+        else if (skillInCorpus(s, corpus)) kept.push(s); // real, just filed under another group
+        else droppedSkills.push(s);
       }
-      skills.push(clean);
-      if (skills.length >= 25) break;
-    }
+      return { label: g.label, skills: kept.length >= Math.min(3, g.skills.length) ? kept : g.skills };
+    });
+    const skills = [...new Set(skillGroups.flatMap((g) => g.skills))];
+    const stripEmphasis = (s) => String(s || "").replace(/\*\*/g, "");
 
     // ── Pass 2: audit the summary and every bullet against the profile. An
     // unsupported claim is trimmed out when the rest of the line stands; the
@@ -3299,15 +3316,16 @@ ${JSON.stringify(promptProfile)}`;
     let summary = String(draft.summary || profile.summary || "").trim();
     const wholeProfileText = JSON.stringify(promptProfile);
     const flat = [];
-    if (summary) flat.push({ id: "summary", text: summary, source: "professional summary", sourceText: wholeProfileText });
+    // The audit sees plain text; **emphasis** markers are display-only.
+    if (summary) flat.push({ id: "summary", text: stripEmphasis(summary), source: "professional summary", sourceText: wholeProfileText });
     builtRoles.forEach((r, ri) => {
       const sourceText = `${r.title} at ${r.company} (${r.startDate} - ${r.endDate}): ${roles[ri].description || ""}`;
-      r.bullets.forEach((b, bi) => flat.push({ id: `r${ri}:${bi}`, text: b, source: `${r.title} @ ${r.company}`, sourceText }));
+      r.bullets.forEach((b, bi) => flat.push({ id: `r${ri}:${bi}`, text: stripEmphasis(b), source: `${r.title} @ ${r.company}`, sourceText }));
     });
     builtProjects.forEach((p, pi) => {
       const src = projects.find((x) => (x.name || "") === p.name) || {};
       const sourceText = `Project ${p.name} (${p.technologies}): ${src.description || ""}`;
-      p.bullets.forEach((b, bi) => flat.push({ id: `p${pi}:${bi}`, text: b, source: `project ${p.name}`, sourceText }));
+      p.bullets.forEach((b, bi) => flat.push({ id: `p${pi}:${bi}`, text: stripEmphasis(b), source: `project ${p.name}`, sourceText }));
     });
 
     const removedBullets = [];
@@ -3360,6 +3378,34 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
         logger.warn(`generateTailoredResume audit skipped: ${err?.message}`);
       }
     }
+    // ── Pass 3 (deterministic): a line that uses vocabulary found in the job
+    // description but nowhere in the profile has absorbed the JD. The model
+    // audit misses this often enough (e.g. "video systems" for a candidate
+    // with no video work) that it gets a hard rule: such lines are dropped and
+    // the summary reverts to the user's own.
+    const STOP = new Set(["with", "that", "this", "from", "into", "across", "using", "through", "their", "while", "where", "which", "about", "after", "before", "under", "over", "between", "within", "without", "including", "experience", "experienced", "strong", "skilled", "proficient", "familiar", "familiarity", "ability", "years", "team", "teams", "product", "products", "engineer", "engineers", "engineering", "software", "systems", "system", "solutions", "solution", "build", "building", "built", "develop", "developing", "developed", "design", "designing", "designed", "deliver", "delivering", "delivered", "work", "working", "worked", "support", "supporting", "large", "scale", "scalable", "production", "quality", "high", "modern", "role", "senior", "level"]);
+    const vocab = (s) => new Set(normalizeSkillText(s).split(" ").filter((w) => w.length >= 4 && !STOP.has(w) && !/^\d+$/.test(w)));
+    const jdVocab = vocab(jobDesc);
+    const corpusWords = vocab(corpus);
+    const jdOnlyWords = (text) => [...vocab(stripEmphasis(text))].filter((w) => jdVocab.has(w) && !corpusWords.has(w));
+
+    let summaryReverted = null;
+    {
+      const bad = jdOnlyWords(summary);
+      if (bad.length) {
+        summaryReverted = bad;
+        summary = profile.summary || "";
+      }
+    }
+    const dropContaminated = (list, sourceLabel) => list.filter((b) => {
+      const bad = jdOnlyWords(b);
+      if (bad.length === 0) return true;
+      removedBullets.push({ text: stripEmphasis(b), source: sourceLabel, reason: `uses terms from the job description that are not in your profile: ${bad.join(", ")}` });
+      return false;
+    });
+    builtRoles.forEach((r) => { r.bullets = dropContaminated(r.bullets, `${r.title} @ ${r.company}`); });
+    builtProjects.forEach((p) => { p.bullets = dropContaminated(p.bullets, `project ${p.name}`); });
+
     // A role stripped bare falls back to the user's own description.
     for (let i = 0; i < builtRoles.length; i++) {
       if (builtRoles[i].bullets.length === 0) builtRoles[i].bullets = splitDescriptionToBullets(roles[i].description);
@@ -3380,14 +3426,24 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       removedBullets,
       trimmedBullets,
       droppedSkills,
+      summaryReverted, // JD-only terms that made the generated summary unusable, or null
     };
 
     const resume = {
+      header: profile.header || null, // name + contact line as written on the user's own resume
       summary: String(summary || "").trim(),
       skills,
+      skillGroups,
       roles: builtRoles,
       projects: builtProjects,
-      education: profile.education || [],
+      education: (profile.education || []).map((e) => ({
+        degree: e.degree || "",
+        institution: e.institution || "",
+        location: e.location || "",
+        startDate: e.startDate || "",
+        endDate: e.endDate || "",
+        description: e.description || "",
+      })),
       certifications: profile.certifications || [],
     };
 

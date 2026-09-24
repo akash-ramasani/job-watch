@@ -6,12 +6,14 @@
 //   node scripts/test-tailored-resume.mjs                 # newest AI-scored job with a description
 //   node scripts/test-tailored-resume.mjs <jobDocId>      # a specific job
 //   node scripts/test-tailored-resume.mjs <jobDocId> --force
+//   node scripts/test-tailored-resume.mjs <jobDocId> --tex out.tex   # also write the LaTeX (same template as the web app)
 
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { db, ADMIN_UID } from "../worker/lib/firestore.mjs";
+import { buildResumeLatex } from "../src/lib/resumeLatex.js";
 
 const require = createRequire(new URL("../worker/package.json", import.meta.url));
 const { getAuth } = require("firebase-admin/auth");
@@ -21,7 +23,9 @@ const PROJECT_ID = "greenhouse-jobs-scrapper";
 const REGION = "us-central1";
 const args = process.argv.slice(2);
 const force = args.includes("--force");
-let jobId = args.find((a) => !a.startsWith("--")) || null;
+const texIdx = args.indexOf("--tex");
+const texOut = texIdx !== -1 ? args[texIdx + 1] : null;
+let jobId = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--tex") || null;
 
 const firestore = await db();
 if (!jobId) {
@@ -67,6 +71,12 @@ for (const q of matchReport.requirements) console.log(`${q.covered === "yes" ? "
 if (matchReport.removedBullets.length) { console.log("\n--- REMOVED BY AUDIT ---"); for (const b of matchReport.removedBullets) console.log(`- ${b.text}\n    ↳ ${b.reason}`); }
 if (matchReport.droppedSkills.length) console.log("\n--- SKILLS DROPPED (not in profile) ---", matchReport.droppedSkills.join(", "));
 console.log("\n--- SUMMARY ---\n" + resume.summary);
-console.log("\n--- SKILLS ---\n" + resume.skills.join(", "));
+console.log("\n--- SKILLS ---");
+for (const g of resume.skillGroups || [{ label: "Skills", skills: resume.skills }]) console.log(`${g.label}: ${g.skills.join(", ")}`);
 for (const r of resume.roles) { console.log(`\n--- ${r.title} @ ${r.company} (${r.startDate} – ${r.endDate}${r.location ? ", " + r.location : ""}) ---`); r.bullets.forEach((b) => console.log("• " + b)); }
+if (texOut) {
+  const tex = buildResumeLatex(resume, resume.header || {});
+  await writeFile(texOut, tex, "utf8");
+  console.log(`\nLaTeX written to ${texOut} (${tex.length} chars)`);
+}
 process.exit(0);

@@ -10,6 +10,7 @@ import { useToast } from "../components/Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import { track } from "../lib/analytics.js";
+import { buildResumeLatex, emphasisRuns } from "../lib/resumeLatex.js";
 
 
 const US_STATES = [
@@ -292,15 +293,50 @@ export default function Jobs({ user, userMeta, preferences }) {
   };
 
   // Single-column, text-only layout so applicant tracking systems parse it cleanly.
+  // ── Tailored resume exports ──────────────────────────────────────────────
+  // Both mirror the user's own LaTeX resume template: .tex is the template
+  // itself (Overleaf-ready); the PDF approximates it with jsPDF for a quick copy.
+  const resumeContact = () => ({
+    name: userMeta?.fullName || user?.displayName || "",
+    location: userMeta?.city || "",
+    phone: userMeta?.phone || "",
+    email: userMeta?.email || user?.email || "",
+    github: userMeta?.github || "",
+    linkedin: userMeta?.linkedin || "",
+  });
+  const resumeFileBase = () => {
+    const company = trState.job?.companyName || "Company";
+    const role = trState.job?.title || "Role";
+    const fullName = trState.data?.resume?.header?.name || userMeta?.fullName || user?.displayName || "Resume";
+    return `${company} - ${role} - ${fullName} - Resume`.replace(/[<>:"/\\|?*]/g, "_").trim();
+  };
+
+  const handleDownloadResumeTex = () => {
+    const resume = trState.data?.resume;
+    if (!resume) return;
+    const tex = buildResumeLatex(resume, resumeContact());
+    const blob = new Blob([tex], { type: "application/x-tex;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${resumeFileBase()}.tex`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    track("tailored_resume_downloaded", { company: trState.job?.companyName, format: "tex" });
+  };
+
   const handleDownloadResumePdf = () => {
     const resume = trState.data?.resume;
     if (!resume) return;
-    const doc = new jsPDF({ unit: "pt", format: "letter" });
+    const doc = new jsPDF({ unit: "pt", format: "a4" });
     const pageW = doc.internal.pageSize.getWidth();
     const pageH = doc.internal.pageSize.getHeight();
-    const margin = 48;
+    const margin = 0.38 * 72; // matches geometry margin=0.38in
     const width = pageW - margin * 2;
-    let y = margin;
+    const FONT = "times";
+    let y = margin + 4;
 
     const ensure = (h) => {
       if (y + h > pageH - margin) {
@@ -308,115 +344,124 @@ export default function Jobs({ user, userMeta, preferences }) {
         y = margin;
       }
     };
-    const text = (str, size, style = "normal", opts = {}) => {
-      doc.setFont("helvetica", style);
+    const setStyle = (size, style = "normal") => {
+      doc.setFont(FONT, style);
       doc.setFontSize(size);
-      const lines = doc.splitTextToSize(String(str), opts.width || width);
-      const lh = size * 1.3;
-      for (const line of lines) {
-        ensure(lh);
-        doc.text(line, opts.x ?? margin, y, opts.align ? { align: opts.align } : undefined);
-        y += lh;
+    };
+    // Word-wrap runs of {text, bold} and draw them; returns nothing, advances y.
+    const drawRich = (input, x, maxWidth, size, baseStyle = "normal") => {
+      const runs = typeof input === "string" ? emphasisRuns(input) : input;
+      const words = [];
+      for (const r of runs) {
+        const style = r.bold ? "bold" : baseStyle;
+        r.text.split(/(\s+)/).forEach((w) => { if (w) words.push({ w, style }); });
       }
+      const lh = size * 1.22;
+      let line = [];
+      let lineW = 0;
+      const flush = () => {
+        ensure(lh);
+        let cx = x;
+        for (const t of line) {
+          setStyle(size, t.style);
+          doc.text(t.w, cx, y);
+          cx += doc.getTextWidth(t.w);
+        }
+        y += lh;
+        line = [];
+        lineW = 0;
+      };
+      for (const t of words) {
+        setStyle(size, t.style);
+        const ww = doc.getTextWidth(t.w);
+        if (lineW + ww > maxWidth && line.length && !/^\s+$/.test(t.w)) flush();
+        if (line.length === 0 && /^\s+$/.test(t.w)) continue;
+        line.push(t);
+        lineW += ww;
+      }
+      if (line.length) flush();
     };
     const section = (title) => {
-      y += 8;
-      ensure(20);
-      doc.setFont("helvetica", "bold");
-      doc.setFontSize(10.5);
+      y += 6;
+      ensure(22);
+      setStyle(12.5, "normal");
       doc.text(title.toUpperCase(), margin, y);
-      y += 4;
-      doc.setDrawColor(120);
+      y += 3;
+      doc.setLineWidth(0.6);
       doc.line(margin, y, pageW - margin, y);
       y += 12;
     };
+    const twoCol = (leftText, rightText, size, leftStyle, rightStyle) => {
+      ensure(size * 1.3);
+      setStyle(size, leftStyle);
+      doc.text(leftText || "", margin, y);
+      if (rightText) {
+        setStyle(size, rightStyle);
+        doc.text(rightText, pageW - margin, y, { align: "right" });
+      }
+      y += size * 1.3;
+    };
     const bullets = (items) => {
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
       for (const b of items || []) {
-        const lines = doc.splitTextToSize(String(b), width - 14);
-        ensure(lines.length * 13);
-        doc.text("•", margin + 2, y);
-        lines.forEach((line, i) => {
-          doc.text(line, margin + 14, y);
-          if (i < lines.length - 1) y += 13;
-        });
-        y += 13;
+        ensure(13);
+        setStyle(9.5, "normal");
+        doc.text("•", margin + 6, y);
+        drawRich(b, margin + 18, width - 18, 9.5);
+        y += 1;
       }
     };
 
-    const fullName = userMeta?.fullName || user?.displayName || "";
-    const contact = [
-      userMeta?.email || user?.email,
-      userMeta?.phone,
-      userMeta?.city,
-      userMeta?.linkedin ? `linkedin.com/in/${String(userMeta.linkedin).replace(/^.*linkedin\.com\/in\//, "").replace(/\/$/, "")}` : null,
-      userMeta?.github ? `github.com/${String(userMeta.github).replace(/^.*github\.com\//, "").replace(/\/$/, "")}` : null,
-      userMeta?.portfolio,
-    ].filter(Boolean).join("  |  ");
-
-    text(fullName, 18, "bold");
-    if (contact) text(contact, 9.5);
+    const h = { ...resumeContact(), ...(resume.header || {}) };
+    setStyle(19, "bold");
+    ensure(30);
+    doc.text(String(h.name || "").toUpperCase(), pageW / 2, y, { align: "center" });
+    y += 16;
+    const strip = (u) => String(u || "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
+    const contact = [h.location, h.phone, h.email, h.github ? strip(h.github) : null, h.linkedin ? strip(h.linkedin) : null].filter(Boolean).join("  |  ");
+    if (contact) {
+      setStyle(9.5, "normal");
+      doc.text(contact, pageW / 2, y, { align: "center" });
+      y += 10;
+    }
 
     if (resume.summary) {
-      section("Summary");
-      text(resume.summary, 10);
+      section("Profile");
+      drawRich(resume.summary, margin, width, 9.5);
     }
-    if (resume.skills?.length) {
+    const groups = resume.skillGroups?.length ? resume.skillGroups : (resume.skills?.length ? [{ label: "Skills", skills: resume.skills }] : []);
+    if (groups.length) {
       section("Skills");
-      text(resume.skills.join(", "), 10);
+      for (const g of groups) {
+        if (!g?.skills?.length) continue;
+        drawRich([{ text: `${g.label}: `, bold: true }, { text: g.skills.join(", "), bold: false }], margin, width, 9.5);
+      }
     }
     if (resume.roles?.length) {
-      section("Experience");
+      section("Professional Experience");
       for (const r of resume.roles) {
-        ensure(30);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10.5);
-        doc.text(`${r.title || ""}${r.title && r.company ? " — " : ""}${r.company || ""}`.replace(" — ", " - "), margin, y);
-        const dates = [r.startDate, r.endDate].filter(Boolean).join(" - ");
-        if (dates) {
-          doc.setFont("helvetica", "normal");
-          doc.setFontSize(9.5);
-          doc.text(dates, pageW - margin, y, { align: "right" });
-        }
-        y += 13;
-        if (r.location) {
-          doc.setFont("helvetica", "italic");
-          doc.setFontSize(9.5);
-          doc.text(r.location, margin, y);
-          y += 13;
-        }
+        const dates = [r.startDate, r.endDate].filter(Boolean).join(" – ");
+        twoCol(r.company, dates, 10.5, "bold", "normal");
+        twoCol(r.title, r.location, 9.5, "italic", "italic");
+        y += 1;
         bullets(r.bullets);
-        y += 4;
+        y += 3;
       }
     }
     if (resume.projects?.length) {
-      section("Projects");
+      section("Selected Projects");
       for (const p of resume.projects) {
-        ensure(30);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10.5);
-        doc.text(`${p.name || ""}${p.technologies ? `  (${p.technologies})` : ""}`, margin, y);
-        y += 13;
+        twoCol(p.name, p.link ? strip(p.link) : "", 10.5, "bold", "normal");
         bullets(p.bullets);
-        y += 4;
+        y += 3;
       }
     }
     if (resume.education?.length) {
       section("Education");
       for (const e of resume.education) {
-        ensure(26);
-        doc.setFont("helvetica", "bold");
-        doc.setFontSize(10);
-        doc.text(`${e.degree || ""}${e.degree && e.institution ? " - " : ""}${e.institution || ""}`, margin, y);
-        const dates = [e.startDate, e.endDate].filter(Boolean).join(" - ");
-        if (dates) {
-          doc.setFont("helvetica", "normal");
-          doc.setFontSize(9.5);
-          doc.text(dates, pageW - margin, y, { align: "right" });
-        }
-        y += 13;
-        if (e.description) text(e.description, 9.5);
+        const dates = [e.startDate, e.endDate].filter(Boolean).join(" – ");
+        twoCol(e.institution, dates, 10.5, "bold", "normal");
+        twoCol(e.degree, e.location, 9.5, "italic", "italic");
+        y += 2;
       }
     }
     if (resume.certifications?.length) {
@@ -424,11 +469,8 @@ export default function Jobs({ user, userMeta, preferences }) {
       bullets(resume.certifications);
     }
 
-    const company = trState.job?.companyName || "Company";
-    const role = trState.job?.title || "Role";
-    const fileName = `${company} - ${role} - ${fullName || "Resume"} - Resume.pdf`.replace(/[<>:"/\\|?*]/g, "_").trim();
-    doc.save(fileName);
-    track("tailored_resume_downloaded", { company });
+    doc.save(`${resumeFileBase()}.pdf`);
+    track("tailored_resume_downloaded", { company: trState.job?.companyName, format: "pdf" });
   };
 
   const handleDownloadPdf = () => {
@@ -1107,26 +1149,41 @@ export default function Jobs({ user, userMeta, preferences }) {
                     <div className="md:col-span-3 p-6 text-[12.5px] text-gray-800 leading-relaxed">
                       {(() => {
                         const res = trState.data.resume;
+                        const hdr = { ...resumeContact(), ...(res.header || {}) };
+                        const Rich = ({ text }) => emphasisRuns(text).map((r, i) => r.bold ? <strong key={i} className="font-semibold text-gray-900">{r.text}</strong> : <span key={i}>{r.text}</span>);
                         const H = ({ children }) => (
-                          <h4 className="mt-5 mb-1.5 text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100 pb-1">{children}</h4>
+                          <h4 className="mt-5 mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-700 border-b border-gray-300 pb-0.5" style={{ fontVariant: "small-caps" }}>{children}</h4>
                         );
+                        const groups = res.skillGroups?.length ? res.skillGroups : (res.skills?.length ? [{ label: "Skills", skills: res.skills }] : []);
+                        const strip = (u) => String(u || "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
                         return (
-                          <>
-                            <p className="text-lg font-black text-gray-900">{userMeta?.fullName || user?.displayName}</p>
-                            {res.summary && (<><H>Summary</H><p>{res.summary}</p></>)}
-                            {res.skills?.length > 0 && (<><H>Skills</H><p>{res.skills.join(", ")}</p></>)}
+                          <div className="font-serif">
+                            <p className="text-center text-xl font-black tracking-wide text-gray-900" style={{ fontVariant: "small-caps" }}>{hdr.name}</p>
+                            <p className="text-center text-[11px] text-gray-600">
+                              {[hdr.location, hdr.phone, hdr.email, hdr.github ? strip(hdr.github) : null, hdr.linkedin ? strip(hdr.linkedin) : null].filter(Boolean).join("  |  ")}
+                            </p>
+                            {res.summary && (<><H>Profile</H><p><Rich text={res.summary} /></p></>)}
+                            {groups.length > 0 && (
+                              <>
+                                <H>Skills</H>
+                                {groups.map((g, i) => g?.skills?.length ? <p key={i}><strong className="font-semibold text-gray-900">{g.label}:</strong> {g.skills.join(", ")}</p> : null)}
+                              </>
+                            )}
                             {res.roles?.length > 0 && (
                               <>
-                                <H>Experience</H>
+                                <H>Professional Experience</H>
                                 {res.roles.map((r, i) => (
                                   <div key={i} className="mb-3">
                                     <div className="flex items-baseline justify-between gap-3">
-                                      <p className="font-bold text-gray-900">{r.title}{r.title && r.company ? " · " : ""}{r.company}</p>
-                                      <p className="text-[11px] text-gray-500 whitespace-nowrap">{[r.startDate, r.endDate].filter(Boolean).join(" – ")}</p>
+                                      <p className="font-bold text-gray-900">{r.company}</p>
+                                      <p className="text-[11px] text-gray-600 whitespace-nowrap">{[r.startDate, r.endDate].filter(Boolean).join(" – ")}</p>
                                     </div>
-                                    {r.location && <p className="text-[11px] italic text-gray-500">{r.location}</p>}
+                                    <div className="flex items-baseline justify-between gap-3">
+                                      <p className="italic text-gray-700">{r.title}</p>
+                                      {r.location && <p className="text-[11px] italic text-gray-600 whitespace-nowrap">{r.location}</p>}
+                                    </div>
                                     <ul className="mt-1 list-disc pl-5 space-y-0.5">
-                                      {r.bullets.map((b, j) => <li key={j}>{b}</li>)}
+                                      {r.bullets.map((b, j) => <li key={j}><Rich text={b} /></li>)}
                                     </ul>
                                   </div>
                                 ))}
@@ -1134,11 +1191,14 @@ export default function Jobs({ user, userMeta, preferences }) {
                             )}
                             {res.projects?.length > 0 && (
                               <>
-                                <H>Projects</H>
+                                <H>Selected Projects</H>
                                 {res.projects.map((p, i) => (
                                   <div key={i} className="mb-2">
-                                    <p className="font-bold text-gray-900">{p.name}{p.technologies ? <span className="font-normal text-gray-500"> ({p.technologies})</span> : null}</p>
-                                    <ul className="mt-1 list-disc pl-5 space-y-0.5">{p.bullets.map((b, j) => <li key={j}>{b}</li>)}</ul>
+                                    <div className="flex items-baseline justify-between gap-3">
+                                      <p className="font-bold text-gray-900">{p.name}</p>
+                                      {p.link && <p className="text-[11px] underline text-gray-600 whitespace-nowrap">{strip(p.link)}</p>}
+                                    </div>
+                                    <ul className="mt-1 list-disc pl-5 space-y-0.5">{p.bullets.map((b, j) => <li key={j}><Rich text={b} /></li>)}</ul>
                                   </div>
                                 ))}
                               </>
@@ -1147,15 +1207,21 @@ export default function Jobs({ user, userMeta, preferences }) {
                               <>
                                 <H>Education</H>
                                 {res.education.map((e, i) => (
-                                  <div key={i} className="flex items-baseline justify-between gap-3">
-                                    <p><span className="font-bold text-gray-900">{e.degree}</span>{e.degree && e.institution ? " · " : ""}{e.institution}</p>
-                                    <p className="text-[11px] text-gray-500 whitespace-nowrap">{[e.startDate, e.endDate].filter(Boolean).join(" – ")}</p>
+                                  <div key={i} className="mb-1.5">
+                                    <div className="flex items-baseline justify-between gap-3">
+                                      <p className="font-bold text-gray-900">{e.institution}</p>
+                                      <p className="text-[11px] text-gray-600 whitespace-nowrap">{[e.startDate, e.endDate].filter(Boolean).join(" – ")}</p>
+                                    </div>
+                                    <div className="flex items-baseline justify-between gap-3">
+                                      <p className="italic text-gray-700">{e.degree}</p>
+                                      {e.location && <p className="text-[11px] italic text-gray-600 whitespace-nowrap">{e.location}</p>}
+                                    </div>
                                   </div>
                                 ))}
                               </>
                             )}
                             {res.certifications?.length > 0 && (<><H>Certifications</H><ul className="list-disc pl-5">{res.certifications.map((c, i) => <li key={i}>{c}</li>)}</ul></>)}
-                          </>
+                          </div>
                         );
                       })()}
                     </div>
@@ -1184,9 +1250,18 @@ export default function Jobs({ user, userMeta, preferences }) {
                   <button
                     onClick={handleDownloadResumePdf}
                     disabled={!trState.data?.resume || trState.loading}
-                    className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-white hover:bg-gray-50 disabled:opacity-50 text-indigo-700 text-xs font-bold rounded-xl ring-1 ring-inset ring-indigo-200 transition-colors"
+                    title="Quick PDF that approximates your LaTeX template"
                   >
-                    Download PDF
+                    PDF
+                  </button>
+                  <button
+                    onClick={handleDownloadResumeTex}
+                    disabled={!trState.data?.resume || trState.loading}
+                    className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
+                    title="Your resume template, ready for Overleaf"
+                  >
+                    Download .tex
                   </button>
                 </div>
               </div>
