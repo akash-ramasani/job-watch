@@ -370,17 +370,6 @@
     return fields;
   }
 
-  // ─── Read Ashby's validation error list ──────────────────────────────────
-  function scrapeFormErrors(_form) {
-    const container = document.querySelector(
-      "._errorsContainer_135ul_78, [class*='_errorsContainer_'], [role='alert'][aria-live]"
-    );
-    if (!container) return [];
-    return [...container.querySelectorAll("li, [class*='_error_135ul']")]
-      .map(li => li.textContent.trim())
-      .filter(Boolean);
-  }
-
   // ─── Deterministic Text Rule Engine ────────────────────────────────────────
   // Instantly maps known text fields using regex — no AI needed.
   // ─── Job location from the page (JSON-LD / __NEXT_DATA__ / embedded JSON) ──

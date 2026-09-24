@@ -831,7 +831,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             // Type the value so filter-as-you-type comboboxes narrow the list.
             // Poll up to ~2.5s: async lists (e.g. School) load from the network.
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-            try { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); } catch (e) { /* not a text combobox */ }
+            try { setter.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); } catch { /* not a text combobox */ }
             for (let i = 0; i < 7 && !match; i++) {
               await wait(350);
               opts = collect();
