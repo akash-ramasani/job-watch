@@ -21,7 +21,8 @@
     "mammoth": "^1.12.1",
     "openai": "^6.49.0",
     "p-limit": "^4.0.0",
-    "pdf-parse": "^1.1.4"
+    "pdf-parse": "^1.1.4",
+    "zipcodes": "^8.0.0"
   },
   "devDependencies": {
     "eslint": "^8.56.0",

@@ -3429,14 +3429,14 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       trimmedBullets,
       droppedSkills,
       summaryReverted, // JD-only terms that made the generated summary unusable, or null
-      location: { display: location.display, tier: location.tier, reason: location.reason, candidates: location.candidates, jobLocation: job.locationName || null },
+      location: { display: location.displayWithZip || location.display, zip: location.zip || null, tier: location.tier, reason: location.reason, candidates: location.candidates, jobLocation: job.locationName || null },
     };
 
     // The header's location follows the job: the most important city in the
     // posting's location list (tiered), the single city if there's one, or
     // San Francisco for remote/unparseable. City + state only — never a street
     // address. The user's own contact details are otherwise untouched.
-    const header = { ...(profile.header || {}), location: location.display };
+    const header = { ...(profile.header || {}), location: location.displayWithZip || location.display };
 
     const resume = {
       header, // name + contact line as written on the user's own resume, location swapped per job

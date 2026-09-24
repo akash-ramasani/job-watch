@@ -13,7 +13,8 @@
  *  - An unrecognised but well-formed "City, ST" (e.g. Findlay, OH) is used
  *    as-is rather than replaced.
  *
- * Only city + state are produced — never a street address or ZIP.
+ * Only city + state (+ a representative ZIP for the city) are produced —
+ * never a street address.
  *
  * Deliberately independent of mapLocation: the map normaliser falls back to
  * San Francisco for cities it can't geocode, so it can't tell "SF" from
@@ -39,67 +40,83 @@ const STATE_NAMES_BY_LENGTH = Object.keys(STATES).sort((a, b) => b.length - a.le
  */
 const METROS = [
   // ── Tier 1 ──
-  { tier: 1, display: "San Francisco, CA", state: "CA", cities: ["san francisco", "sf", "bay area", "san francisco bay area", "sf bay area", "south san francisco", "oakland", "berkeley", "emeryville", "fremont", "redwood city", "menlo park", "palo alto", "san mateo", "foster city", "burlingame", "san bruno", "daly city", "brisbane", "alameda", "san rafael", "walnut creek", "pleasanton", "san ramon", "dublin", "hayward", "union city", "newark"] },
-  { tier: 1, display: "New York, NY", state: "NY", cities: ["new york", "new york city", "nyc", "new york new york", "manhattan", "brooklyn", "queens", "bronx", "jersey city", "hoboken", "newark nj", "long island city", "white plains", "stamford"] },
-  { tier: 1, display: "Seattle, WA", state: "WA", cities: ["seattle", "bellevue", "redmond", "kirkland", "bothell", "renton", "issaquah", "tacoma"] },
-  { tier: 1, display: "San Jose, CA", state: "CA", cities: ["san jose", "sunnyvale", "santa clara", "mountain view", "cupertino", "milpitas", "los gatos", "campbell", "los altos", "saratoga", "morgan hill"] },
-  { tier: 1, display: "Los Angeles, CA", state: "CA", cities: ["los angeles", "la", "santa monica", "culver city", "venice", "el segundo", "playa vista", "burbank", "glendale ca", "pasadena", "torrance", "long beach", "manhattan beach", "marina del rey", "hawthorne"] },
+  { tier: 1, display: "San Francisco, CA", zip: "94114", state: "CA", cities: ["san francisco", "sf", "bay area", "san francisco bay area", "sf bay area", "south san francisco", "oakland", "berkeley", "emeryville", "fremont", "redwood city", "menlo park", "palo alto", "san mateo", "foster city", "burlingame", "san bruno", "daly city", "brisbane", "alameda", "san rafael", "walnut creek", "pleasanton", "san ramon", "dublin", "hayward", "union city", "newark"] },
+  { tier: 1, display: "New York, NY", zip: "10016", state: "NY", cities: ["new york", "new york city", "nyc", "new york new york", "manhattan", "brooklyn", "queens", "bronx", "jersey city", "hoboken", "newark nj", "long island city", "white plains", "stamford"] },
+  { tier: 1, display: "Seattle, WA", zip: "98109", state: "WA", cities: ["seattle", "bellevue", "redmond", "kirkland", "bothell", "renton", "issaquah", "tacoma"] },
+  { tier: 1, display: "San Jose, CA", zip: "95112", state: "CA", cities: ["san jose", "sunnyvale", "santa clara", "mountain view", "cupertino", "milpitas", "los gatos", "campbell", "los altos", "saratoga", "morgan hill"] },
+  { tier: 1, display: "Los Angeles, CA", zip: "90015", state: "CA", cities: ["los angeles", "la", "santa monica", "culver city", "venice", "el segundo", "playa vista", "burbank", "glendale ca", "pasadena", "torrance", "long beach", "manhattan beach", "marina del rey", "hawthorne"] },
   // ── Tier 2 ──
-  { tier: 2, display: "Boston, MA", state: "MA", cities: ["boston", "cambridge", "somerville", "waltham", "burlington ma", "lexington", "bedford ma", "woburn", "quincy", "newton", "needham", "watertown", "andover", "billerica", "westford", "marlborough", "framingham"] },
-  { tier: 2, display: "Austin, TX", state: "TX", cities: ["austin", "round rock", "cedar park", "pflugerville"] },
-  { tier: 2, display: "Chicago, IL", state: "IL", cities: ["chicago", "naperville", "schaumburg", "evanston", "oak brook", "deerfield", "vernon hills", "lisle", "rosemont"] },
-  { tier: 2, display: "Washington, DC", state: "DC", cities: ["washington", "washington dc", "washington d.c.", "arlington", "reston", "mclean", "tysons", "herndon", "chantilly", "alexandria", "fairfax", "vienna va", "sterling", "dulles", "bethesda", "rockville", "silver spring", "gaithersburg", "germantown", "columbia md", "annapolis junction", "fort meade", "springfield va", "falls church"] },
-  { tier: 2, display: "Denver, CO", state: "CO", cities: ["denver", "boulder", "broomfield", "louisville co", "englewood", "aurora co", "westminster co", "littleton", "golden", "centennial", "lakewood co", "fort collins", "colorado springs"] },
-  { tier: 2, display: "San Diego, CA", state: "CA", cities: ["san diego", "la jolla", "carlsbad", "sorrento valley", "carmel valley", "chula vista"] },
-  { tier: 2, display: "Atlanta, GA", state: "GA", cities: ["atlanta", "alpharetta", "sandy springs", "marietta", "roswell", "duluth ga", "kennesaw"] },
-  { tier: 2, display: "Dallas, TX", state: "TX", cities: ["dallas", "plano", "irving", "richardson", "mckinney", "frisco", "fort worth", "addison", "westlake tx", "southlake", "coppell", "allen"] },
-  { tier: 2, display: "Raleigh, NC", state: "NC", cities: ["raleigh", "durham", "cary", "morrisville", "research triangle park", "rtp", "chapel hill"] },
-  { tier: 2, display: "Portland, OR", state: "OR", cities: ["portland", "beaverton", "hillsboro", "lake oswego", "tigard", "wilsonville"] },
-  { tier: 2, display: "Irvine, CA", state: "CA", cities: ["irvine", "orange county", "newport beach", "costa mesa", "anaheim", "santa ana", "aliso viejo", "lake forest", "tustin"] },
+  { tier: 2, display: "Boston, MA", zip: "02116", state: "MA", cities: ["boston", "cambridge", "somerville", "waltham", "burlington ma", "lexington", "bedford ma", "woburn", "quincy", "newton", "needham", "watertown", "andover", "billerica", "westford", "marlborough", "framingham"] },
+  { tier: 2, display: "Austin, TX", zip: "78701", state: "TX", cities: ["austin", "round rock", "cedar park", "pflugerville"] },
+  { tier: 2, display: "Chicago, IL", zip: "60611", state: "IL", cities: ["chicago", "naperville", "schaumburg", "evanston", "oak brook", "deerfield", "vernon hills", "lisle", "rosemont"] },
+  { tier: 2, display: "Washington, DC", zip: "20001", state: "DC", cities: ["washington", "washington dc", "washington d.c.", "arlington", "reston", "mclean", "tysons", "herndon", "chantilly", "alexandria", "fairfax", "vienna va", "sterling", "dulles", "bethesda", "rockville", "silver spring", "gaithersburg", "germantown", "columbia md", "annapolis junction", "fort meade", "springfield va", "falls church"] },
+  { tier: 2, display: "Denver, CO", zip: "80202", state: "CO", cities: ["denver", "boulder", "broomfield", "louisville co", "englewood", "aurora co", "westminster co", "littleton", "golden", "centennial", "lakewood co", "fort collins", "colorado springs"] },
+  { tier: 2, display: "San Diego, CA", zip: "92101", state: "CA", cities: ["san diego", "la jolla", "carlsbad", "sorrento valley", "carmel valley", "chula vista"] },
+  { tier: 2, display: "Atlanta, GA", zip: "30309", state: "GA", cities: ["atlanta", "alpharetta", "sandy springs", "marietta", "roswell", "duluth ga", "kennesaw"] },
+  { tier: 2, display: "Dallas, TX", zip: "75201", state: "TX", cities: ["dallas", "plano", "irving", "richardson", "mckinney", "frisco", "fort worth", "addison", "westlake tx", "southlake", "coppell", "allen"] },
+  { tier: 2, display: "Raleigh, NC", zip: "27601", state: "NC", cities: ["raleigh", "durham", "cary", "morrisville", "research triangle park", "rtp", "chapel hill"] },
+  { tier: 2, display: "Portland, OR", zip: "97209", state: "OR", cities: ["portland", "beaverton", "hillsboro", "lake oswego", "tigard", "wilsonville"] },
+  { tier: 2, display: "Irvine, CA", zip: "92618", state: "CA", cities: ["irvine", "orange county", "newport beach", "costa mesa", "anaheim", "santa ana", "aliso viejo", "lake forest", "tustin"] },
   // ── Tier 3 ──
-  { tier: 3, display: "Phoenix, AZ", state: "AZ", cities: ["phoenix", "tempe", "scottsdale", "chandler", "mesa", "gilbert", "glendale az"] },
-  { tier: 3, display: "Salt Lake City, UT", state: "UT", cities: ["salt lake city", "lehi", "draper", "provo", "sandy", "south jordan", "orem", "american fork"] },
-  { tier: 3, display: "Minneapolis, MN", state: "MN", cities: ["minneapolis", "st. paul", "st paul", "saint paul", "eden prairie", "bloomington mn", "plymouth mn", "minnetonka", "eagan"] },
-  { tier: 3, display: "Philadelphia, PA", state: "PA", cities: ["philadelphia", "king of prussia", "malvern", "conshohocken", "wayne pa", "radnor", "blue bell", "wilmington", "cherry hill", "mount laurel"] },
-  { tier: 3, display: "Miami, FL", state: "FL", cities: ["miami", "fort lauderdale", "boca raton", "coral gables", "doral", "west palm beach", "sunrise fl"] },
-  { tier: 3, display: "Houston, TX", state: "TX", cities: ["houston", "the woodlands", "sugar land", "katy", "spring tx"] },
-  { tier: 3, display: "Pittsburgh, PA", state: "PA", cities: ["pittsburgh", "cranberry township"] },
-  { tier: 3, display: "Detroit, MI", state: "MI", cities: ["detroit", "ann arbor", "dearborn", "troy mi", "auburn hills", "southfield", "warren mi", "farmington hills", "novi"] },
-  { tier: 3, display: "Columbus, OH", state: "OH", cities: ["columbus", "dublin oh", "westerville", "new albany"] },
-  { tier: 3, display: "Nashville, TN", state: "TN", cities: ["nashville", "franklin tn", "brentwood tn"] },
-  { tier: 3, display: "Charlotte, NC", state: "NC", cities: ["charlotte", "fort mill", "huntersville"] },
-  { tier: 3, display: "Kansas City, MO", state: "MO", cities: ["kansas city", "overland park", "olathe", "leawood", "lenexa"] },
-  { tier: 3, display: "St. Louis, MO", state: "MO", cities: ["st. louis", "st louis", "saint louis", "chesterfield", "clayton mo", "o'fallon"] },
-  { tier: 3, display: "Baltimore, MD", state: "MD", cities: ["baltimore", "towson", "hanover md", "linthicum"] },
-  { tier: 3, display: "Orlando, FL", state: "FL", cities: ["orlando", "lake mary", "maitland"] },
-  { tier: 3, display: "Tampa, FL", state: "FL", cities: ["tampa", "st. petersburg", "st petersburg", "clearwater"] },
-  { tier: 3, display: "Sacramento, CA", state: "CA", cities: ["sacramento", "folsom", "roseville", "rancho cordova"] },
-  { tier: 3, display: "Las Vegas, NV", state: "NV", cities: ["las vegas", "henderson", "reno"] },
-  { tier: 3, display: "Madison, WI", state: "WI", cities: ["madison"] },
-  { tier: 3, display: "Milwaukee, WI", state: "WI", cities: ["milwaukee", "brookfield wi", "waukesha"] },
-  { tier: 3, display: "Indianapolis, IN", state: "IN", cities: ["indianapolis", "carmel in", "fishers"] },
-  { tier: 3, display: "Cincinnati, OH", state: "OH", cities: ["cincinnati", "mason oh", "blue ash"] },
-  { tier: 3, display: "Cleveland, OH", state: "OH", cities: ["cleveland", "mayfield heights", "beachwood", "akron"] },
-  { tier: 3, display: "Richmond, VA", state: "VA", cities: ["richmond", "glen allen", "henrico"] },
-  { tier: 3, display: "Hartford, CT", state: "CT", cities: ["hartford", "windsor", "bloomfield ct", "farmington ct", "new haven", "north haven"] },
-  { tier: 3, display: "Albany, NY", state: "NY", cities: ["albany", "malta", "troy ny", "schenectady"] },
-  { tier: 3, display: "Huntsville, AL", state: "AL", cities: ["huntsville"] },
-  { tier: 3, display: "Tucson, AZ", state: "AZ", cities: ["tucson"] },
-  { tier: 3, display: "Omaha, NE", state: "NE", cities: ["omaha"] },
-  { tier: 3, display: "Louisville, KY", state: "KY", cities: ["louisville"] },
-  { tier: 3, display: "Jacksonville, FL", state: "FL", cities: ["jacksonville"] },
-  { tier: 3, display: "Boise, ID", state: "ID", cities: ["boise"] },
-  { tier: 3, display: "Albuquerque, NM", state: "NM", cities: ["albuquerque"] },
-  { tier: 3, display: "Oklahoma City, OK", state: "OK", cities: ["oklahoma city", "tulsa"] },
-  { tier: 3, display: "Rochester, NY", state: "NY", cities: ["rochester", "buffalo", "syracuse"] },
-  { tier: 3, display: "Providence, RI", state: "RI", cities: ["providence", "warwick ri"] },
-  { tier: 3, display: "Des Moines, IA", state: "IA", cities: ["des moines", "west des moines"] },
-  { tier: 3, display: "Charleston, SC", state: "SC", cities: ["charleston", "greenville sc", "columbia sc"] },
-  { tier: 3, display: "San Antonio, TX", state: "TX", cities: ["san antonio"] },
-  { tier: 3, display: "New Orleans, LA", state: "LA", cities: ["new orleans", "baton rouge"] },
+  { tier: 3, display: "Phoenix, AZ", zip: "85004", state: "AZ", cities: ["phoenix", "tempe", "scottsdale", "chandler", "mesa", "gilbert", "glendale az"] },
+  { tier: 3, display: "Salt Lake City, UT", zip: "84101", state: "UT", cities: ["salt lake city", "lehi", "draper", "provo", "sandy", "south jordan", "orem", "american fork"] },
+  { tier: 3, display: "Minneapolis, MN", zip: "55401", state: "MN", cities: ["minneapolis", "st. paul", "st paul", "saint paul", "eden prairie", "bloomington mn", "plymouth mn", "minnetonka", "eagan"] },
+  { tier: 3, display: "Philadelphia, PA", zip: "19103", state: "PA", cities: ["philadelphia", "king of prussia", "malvern", "conshohocken", "wayne pa", "radnor", "blue bell", "wilmington", "cherry hill", "mount laurel"] },
+  { tier: 3, display: "Miami, FL", zip: "33131", state: "FL", cities: ["miami", "fort lauderdale", "boca raton", "coral gables", "doral", "west palm beach", "sunrise fl"] },
+  { tier: 3, display: "Houston, TX", zip: "77002", state: "TX", cities: ["houston", "the woodlands", "sugar land", "katy", "spring tx"] },
+  { tier: 3, display: "Pittsburgh, PA", zip: "15222", state: "PA", cities: ["pittsburgh", "cranberry township"] },
+  { tier: 3, display: "Detroit, MI", zip: "48226", state: "MI", cities: ["detroit", "ann arbor", "dearborn", "troy mi", "auburn hills", "southfield", "warren mi", "farmington hills", "novi"] },
+  { tier: 3, display: "Columbus, OH", zip: "43215", state: "OH", cities: ["columbus", "dublin oh", "westerville", "new albany"] },
+  { tier: 3, display: "Nashville, TN", zip: "37203", state: "TN", cities: ["nashville", "franklin tn", "brentwood tn"] },
+  { tier: 3, display: "Charlotte, NC", zip: "28202", state: "NC", cities: ["charlotte", "fort mill", "huntersville"] },
+  { tier: 3, display: "Kansas City, MO", zip: "64105", state: "MO", cities: ["kansas city", "overland park", "olathe", "leawood", "lenexa"] },
+  { tier: 3, display: "St. Louis, MO", zip: "63101", state: "MO", cities: ["st. louis", "st louis", "saint louis", "chesterfield", "clayton mo", "o'fallon"] },
+  { tier: 3, display: "Baltimore, MD", zip: "21201", state: "MD", cities: ["baltimore", "towson", "hanover md", "linthicum"] },
+  { tier: 3, display: "Orlando, FL", zip: "32801", state: "FL", cities: ["orlando", "lake mary", "maitland"] },
+  { tier: 3, display: "Tampa, FL", zip: "33602", state: "FL", cities: ["tampa", "st. petersburg", "st petersburg", "clearwater"] },
+  { tier: 3, display: "Sacramento, CA", zip: "95814", state: "CA", cities: ["sacramento", "folsom", "roseville", "rancho cordova"] },
+  { tier: 3, display: "Las Vegas, NV", zip: "89101", state: "NV", cities: ["las vegas", "henderson", "reno"] },
+  { tier: 3, display: "Madison, WI", zip: "53703", state: "WI", cities: ["madison"] },
+  { tier: 3, display: "Milwaukee, WI", zip: "53202", state: "WI", cities: ["milwaukee", "brookfield wi", "waukesha"] },
+  { tier: 3, display: "Indianapolis, IN", zip: "46204", state: "IN", cities: ["indianapolis", "carmel in", "fishers"] },
+  { tier: 3, display: "Cincinnati, OH", zip: "45202", state: "OH", cities: ["cincinnati", "mason oh", "blue ash"] },
+  { tier: 3, display: "Cleveland, OH", zip: "44114", state: "OH", cities: ["cleveland", "mayfield heights", "beachwood", "akron"] },
+  { tier: 3, display: "Richmond, VA", zip: "23219", state: "VA", cities: ["richmond", "glen allen", "henrico"] },
+  { tier: 3, display: "Hartford, CT", zip: "06103", state: "CT", cities: ["hartford", "windsor", "bloomfield ct", "farmington ct", "new haven", "north haven"] },
+  { tier: 3, display: "Albany, NY", zip: "12207", state: "NY", cities: ["albany", "malta", "troy ny", "schenectady"] },
+  { tier: 3, display: "Huntsville, AL", zip: "35801", state: "AL", cities: ["huntsville"] },
+  { tier: 3, display: "Tucson, AZ", zip: "85701", state: "AZ", cities: ["tucson"] },
+  { tier: 3, display: "Omaha, NE", zip: "68102", state: "NE", cities: ["omaha"] },
+  { tier: 3, display: "Louisville, KY", zip: "40202", state: "KY", cities: ["louisville"] },
+  { tier: 3, display: "Jacksonville, FL", zip: "32202", state: "FL", cities: ["jacksonville"] },
+  { tier: 3, display: "Boise, ID", zip: "83702", state: "ID", cities: ["boise"] },
+  { tier: 3, display: "Albuquerque, NM", zip: "87102", state: "NM", cities: ["albuquerque"] },
+  { tier: 3, display: "Oklahoma City, OK", zip: "73102", state: "OK", cities: ["oklahoma city", "tulsa"] },
+  { tier: 3, display: "Rochester, NY", zip: "14604", state: "NY", cities: ["rochester", "buffalo", "syracuse"] },
+  { tier: 3, display: "Providence, RI", zip: "02903", state: "RI", cities: ["providence", "warwick ri"] },
+  { tier: 3, display: "Des Moines, IA", zip: "50309", state: "IA", cities: ["des moines", "west des moines"] },
+  { tier: 3, display: "Charleston, SC", zip: "29401", state: "SC", cities: ["charleston", "greenville sc", "columbia sc"] },
+  { tier: 3, display: "San Antonio, TX", zip: "78205", state: "TX", cities: ["san antonio"] },
+  { tier: 3, display: "New Orleans, LA", zip: "70112", state: "LA", cities: ["new orleans", "baton rouge"] },
 ];
 
-const DEFAULT = { display: "San Francisco, CA", city: "San Francisco", state: "CA", tier: 1 };
+const DEFAULT = { display: "San Francisco, CA", city: "San Francisco", state: "CA", zip: "94114", tier: 1 };
+
+// ZIP for cities outside the metro table: first ZIP the `zipcodes` dataset lists
+// for that city/state. Lazy so the module still loads if the package is absent.
+function lookupZip(city, state) {
+  try {
+    const zipcodes = require("zipcodes");
+    const hits = zipcodes.lookupByName(city, state) || [];
+    return hits.length ? hits[0].zip : null;
+  } catch {
+    return null;
+  }
+}
+
+function withZip(display, zip) {
+  return zip ? `${display} ${zip}` : display;
+}
 
 const CITY_INDEX = new Map(); // "city" or "city st" → metro
 for (const m of METROS) {
@@ -235,25 +252,28 @@ function chooseResumeLocation(job) {
     for (const parsed of parseSegment(seg.replace(REMOTE_RE, " "))) {
       const metro = metroFor(parsed.city, parsed.state);
       if (metro) {
-        candidates.push({ display: metro.display, city: metro.display.split(",")[0], state: metro.state, tier: metro.tier, rank: METROS.indexOf(metro), from: seg });
+        candidates.push({ display: metro.display, zip: metro.zip, city: metro.display.split(",")[0], state: metro.state, tier: metro.tier, rank: METROS.indexOf(metro), from: seg });
       } else if (parsed.city && parsed.state) {
-        candidates.push({ display: `${parsed.city}, ${parsed.state}`, city: parsed.city, state: parsed.state, tier: 4, rank: 999, from: seg });
+        candidates.push({ display: `${parsed.city}, ${parsed.state}`, zip: null, city: parsed.city, state: parsed.state, tier: 4, rank: 999, from: seg });
       } else if (!parsed.city && parsed.state && STATE_DEFAULT.has(parsed.state)) {
         const sm = STATE_DEFAULT.get(parsed.state); // state-only posting → its main metro
-        candidates.push({ display: sm.display, city: sm.display.split(",")[0], state: sm.state, tier: sm.tier + 0.5, rank: METROS.indexOf(sm), from: seg });
+        candidates.push({ display: sm.display, zip: sm.zip, city: sm.display.split(",")[0], state: sm.state, tier: sm.tier + 0.5, rank: METROS.indexOf(sm), from: seg });
       }
     }
   }
 
   if (candidates.length === 0) {
     const remote = REMOTE_RE.test(text) || job?.isRemote === true || /remote/i.test(job?.workplaceType || "");
-    return { ...DEFAULT, reason: remote ? "remote → default" : (text ? "no US city parsed → default" : "no location → default"), candidates: [] };
+    return { ...DEFAULT, displayWithZip: withZip(DEFAULT.display, DEFAULT.zip), reason: remote ? "remote → default" : (text ? "no US city parsed → default" : "no location → default"), candidates: [] };
   }
   candidates.sort((a, b) => a.tier - b.tier || a.rank - b.rank);
   const best = candidates[0];
   const distinct = [...new Set(candidates.map((c) => c.display))];
+  const zip = best.zip || lookupZip(best.city, best.state);
   return {
     display: best.display,
+    zip,
+    displayWithZip: withZip(best.display, zip),
     city: best.city,
     state: best.state,
     tier: Math.floor(best.tier),

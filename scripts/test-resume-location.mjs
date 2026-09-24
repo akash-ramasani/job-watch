@@ -28,7 +28,7 @@ const tier4 = new Map();
 for (const d of snap.docs) {
   const j = d.data();
   const r = chooseResumeLocation(j);
-  byDisplay.set(r.display, (byDisplay.get(r.display) || 0) + 1);
+  byDisplay.set(r.displayWithZip || r.display, (byDisplay.get(r.displayWithZip || r.display) || 0) + 1);
   byReason.set(r.reason, (byReason.get(r.reason) || 0) + 1);
   if (r.reason.endsWith("→ default") && !r.reason.startsWith("remote")) defaults.push(j.locationName);
   if (r.tier === 4) tier4.set(r.display, (tier4.get(r.display) || 0) + 1);
