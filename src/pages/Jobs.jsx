@@ -103,6 +103,8 @@ export default function Jobs({ user, userMeta, preferences }) {
 
   // Cover Letter State
   const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
+  // Tailored Resume State
+  const [trState, setTrState] = useState({ isOpen: false, job: null, loading: false, data: null, error: "" });
 
   useEffect(() => {
     let cancelled = false;
@@ -262,6 +264,171 @@ export default function Jobs({ user, userMeta, preferences }) {
       track("cover_letter_failed", { reason: cleanMsg?.slice(0, 80) });
       setClState({ isOpen: true, job, loading: false, text: "", error: cleanMsg });
     }
+  };
+
+  const handleGenerateResume = async (e, job, force = false) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    setTrState({ isOpen: true, job, loading: true, data: null, error: "" });
+    const startedAt = Date.now();
+    track("tailored_resume_requested", { source: job.source, company: job.companyName, force });
+    try {
+      const fn = httpsCallable(functions, "generateTailoredResume", { headers: { "X-Session-Token": localStorage.getItem("jw_session_token") || "" } });
+      const res = await fn({ jobId: job.id, force });
+      if (!res.data?.resume) throw new Error("No resume returned");
+      track("tailored_resume_generated", {
+        source: job.source,
+        duration_ms: Date.now() - startedAt,
+        cached: !!res.data.cached,
+        coverage: res.data.matchReport?.coveragePct ?? null,
+      });
+      setTrState({ isOpen: true, job, loading: false, data: res.data, error: "" });
+    } catch (err) {
+      console.error("Tailored resume error:", err);
+      const cleanMsg = err.message ? err.message.replace(/\[.*\]\s*/, "") : "Failed to generate";
+      track("tailored_resume_failed", { reason: cleanMsg?.slice(0, 80) });
+      setTrState({ isOpen: true, job, loading: false, data: null, error: cleanMsg });
+    }
+  };
+
+  // Single-column, text-only layout so applicant tracking systems parse it cleanly.
+  const handleDownloadResumePdf = () => {
+    const resume = trState.data?.resume;
+    if (!resume) return;
+    const doc = new jsPDF({ unit: "pt", format: "letter" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const pageH = doc.internal.pageSize.getHeight();
+    const margin = 48;
+    const width = pageW - margin * 2;
+    let y = margin;
+
+    const ensure = (h) => {
+      if (y + h > pageH - margin) {
+        doc.addPage();
+        y = margin;
+      }
+    };
+    const text = (str, size, style = "normal", opts = {}) => {
+      doc.setFont("helvetica", style);
+      doc.setFontSize(size);
+      const lines = doc.splitTextToSize(String(str), opts.width || width);
+      const lh = size * 1.3;
+      for (const line of lines) {
+        ensure(lh);
+        doc.text(line, opts.x ?? margin, y, opts.align ? { align: opts.align } : undefined);
+        y += lh;
+      }
+    };
+    const section = (title) => {
+      y += 8;
+      ensure(20);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10.5);
+      doc.text(title.toUpperCase(), margin, y);
+      y += 4;
+      doc.setDrawColor(120);
+      doc.line(margin, y, pageW - margin, y);
+      y += 12;
+    };
+    const bullets = (items) => {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      for (const b of items || []) {
+        const lines = doc.splitTextToSize(String(b), width - 14);
+        ensure(lines.length * 13);
+        doc.text("•", margin + 2, y);
+        lines.forEach((line, i) => {
+          doc.text(line, margin + 14, y);
+          if (i < lines.length - 1) y += 13;
+        });
+        y += 13;
+      }
+    };
+
+    const fullName = userMeta?.fullName || user?.displayName || "";
+    const contact = [
+      userMeta?.email || user?.email,
+      userMeta?.phone,
+      userMeta?.city,
+      userMeta?.linkedin ? `linkedin.com/in/${String(userMeta.linkedin).replace(/^.*linkedin\.com\/in\//, "").replace(/\/$/, "")}` : null,
+      userMeta?.github ? `github.com/${String(userMeta.github).replace(/^.*github\.com\//, "").replace(/\/$/, "")}` : null,
+      userMeta?.portfolio,
+    ].filter(Boolean).join("  |  ");
+
+    text(fullName, 18, "bold");
+    if (contact) text(contact, 9.5);
+
+    if (resume.summary) {
+      section("Summary");
+      text(resume.summary, 10);
+    }
+    if (resume.skills?.length) {
+      section("Skills");
+      text(resume.skills.join(", "), 10);
+    }
+    if (resume.roles?.length) {
+      section("Experience");
+      for (const r of resume.roles) {
+        ensure(30);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10.5);
+        doc.text(`${r.title || ""}${r.title && r.company ? " — " : ""}${r.company || ""}`.replace(" — ", " - "), margin, y);
+        const dates = [r.startDate, r.endDate].filter(Boolean).join(" - ");
+        if (dates) {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9.5);
+          doc.text(dates, pageW - margin, y, { align: "right" });
+        }
+        y += 13;
+        if (r.location) {
+          doc.setFont("helvetica", "italic");
+          doc.setFontSize(9.5);
+          doc.text(r.location, margin, y);
+          y += 13;
+        }
+        bullets(r.bullets);
+        y += 4;
+      }
+    }
+    if (resume.projects?.length) {
+      section("Projects");
+      for (const p of resume.projects) {
+        ensure(30);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10.5);
+        doc.text(`${p.name || ""}${p.technologies ? `  (${p.technologies})` : ""}`, margin, y);
+        y += 13;
+        bullets(p.bullets);
+        y += 4;
+      }
+    }
+    if (resume.education?.length) {
+      section("Education");
+      for (const e of resume.education) {
+        ensure(26);
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.text(`${e.degree || ""}${e.degree && e.institution ? " - " : ""}${e.institution || ""}`, margin, y);
+        const dates = [e.startDate, e.endDate].filter(Boolean).join(" - ");
+        if (dates) {
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9.5);
+          doc.text(dates, pageW - margin, y, { align: "right" });
+        }
+        y += 13;
+        if (e.description) text(e.description, 9.5);
+      }
+    }
+    if (resume.certifications?.length) {
+      section("Certifications");
+      bullets(resume.certifications);
+    }
+
+    const company = trState.job?.companyName || "Company";
+    const role = trState.job?.title || "Role";
+    const fileName = `${company} - ${role} - ${fullName || "Resume"} - Resume.pdf`.replace(/[<>:"/\\|?*]/g, "_").trim();
+    doc.save(fileName);
+    track("tailored_resume_downloaded", { company });
   };
 
   const handleDownloadPdf = () => {
@@ -436,12 +603,21 @@ export default function Jobs({ user, userMeta, preferences }) {
 
           <div className="flex items-center gap-4 flex-shrink-0 z-10">
             {preferences?.aiScoringEnabled && userMeta?.aiAccess !== false && (
-              <button
-                onClick={(e) => handleGenerateCoverLetter(e, job)}
-                className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
-              >
-                Cover Letter
-              </button>
+              <>
+                <button
+                  onClick={(e) => handleGenerateResume(e, job)}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-colors"
+                  title="Tailor your real experience to this job"
+                >
+                  Resume
+                </button>
+                <button
+                  onClick={(e) => handleGenerateCoverLetter(e, job)}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
+                >
+                  Cover Letter
+                </button>
+              </>
             )}
             <div className="hidden sm:flex flex-col items-end min-w-[70px]">
               <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
@@ -802,6 +978,217 @@ export default function Jobs({ user, userMeta, preferences }) {
                   </svg>
                   Download PDF
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Tailored Resume Modal */}
+      <AnimatePresence>
+        {trState.isOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
+                <div>
+                  <h3 className="text-sm font-bold text-gray-900">Tailored Resume</h3>
+                  <p className="text-[11px] font-semibold text-indigo-600 uppercase tracking-widest mt-0.5">
+                    {trState.job?.companyName} • {trState.job?.title}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setTrState({ ...trState, isOpen: false })}
+                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {trState.loading ? (
+                  <div className="flex flex-col items-center justify-center py-16 text-center text-gray-400">
+                    <svg className="w-8 h-8 animate-spin text-indigo-500 mb-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
+                      <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" className="opacity-75" />
+                    </svg>
+                    <p className="text-sm font-bold text-gray-700">Tailoring your experience to this job…</p>
+                    <p className="text-xs text-gray-500 mt-1">Rewriting your real bullets in the JD's language, then auditing every line against your profile.</p>
+                  </div>
+                ) : trState.error ? (
+                  <div className="m-6 p-4 bg-red-50 text-red-600 rounded-xl text-sm whitespace-pre-wrap font-mono ring-1 ring-inset ring-red-200">
+                    {trState.error}
+                  </div>
+                ) : trState.data ? (
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-0 md:divide-x divide-gray-100">
+                    {/* Match report */}
+                    <aside className="md:col-span-2 p-6 bg-gray-50/60 space-y-5">
+                      {(() => {
+                        const r = trState.data.matchReport || {};
+                        const pct = r.coveragePct;
+                        // Full class strings so Tailwind's scanner keeps them.
+                        const tone = pct == null
+                          ? { text: "text-gray-500", bar: "bg-gray-400" }
+                          : pct >= 80
+                            ? { text: "text-emerald-600", bar: "bg-emerald-500" }
+                            : pct >= 60
+                              ? { text: "text-amber-600", bar: "bg-amber-500" }
+                              : { text: "text-red-600", bar: "bg-red-500" };
+                        return (
+                          <>
+                            <div>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Requirement coverage</p>
+                              <div className="mt-2 flex items-end gap-3">
+                                <span className={`text-3xl font-black ${tone.text}`}>{pct == null ? "—" : `${pct}%`}</span>
+                                <span className="text-xs text-gray-500 pb-1">
+                                  {r.requirements?.filter((q) => q.covered === "yes").length || 0} covered ·{" "}
+                                  {r.requirements?.filter((q) => q.covered === "partial").length || 0} partial ·{" "}
+                                  {r.gaps?.length || 0} gaps
+                                </span>
+                              </div>
+                              <div className="mt-2 h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+                                <div className={`h-full ${tone.bar}`} style={{ width: `${pct || 0}%` }} />
+                              </div>
+                              <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
+                                Built only from your profile. Nothing was added that you haven't written; gaps are real gaps.
+                              </p>
+                            </div>
+                            <ul className="space-y-1.5">
+                              {(r.requirements || []).map((q, i) => (
+                                <li key={i} className="flex gap-2 text-xs leading-snug">
+                                  <span className={`mt-0.5 flex-shrink-0 ${q.covered === "yes" ? "text-emerald-600" : q.covered === "partial" ? "text-amber-500" : "text-red-500"}`}>
+                                    {q.covered === "yes" ? "✓" : q.covered === "partial" ? "◐" : "✗"}
+                                  </span>
+                                  <span>
+                                    <span className="text-gray-800">{q.requirement}</span>
+                                    {q.evidence && <span className="block text-[11px] text-gray-400">{q.evidence}</span>}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                            {(r.removedBullets?.length > 0 || r.trimmedBullets?.length > 0) && (
+                              <div className="rounded-xl bg-amber-50 ring-1 ring-inset ring-amber-200 p-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Checked against your profile</p>
+                                <p className="text-[11px] text-amber-800 mt-1 mb-2">
+                                  The draft claimed things your profile doesn't state. Those parts were trimmed or cut. If they're true, add the detail on your Profile page and regenerate.
+                                </p>
+                                <ul className="space-y-1.5">
+                                  {(r.trimmedBullets || []).map((b, i) => (
+                                    <li key={`t${i}`} className="text-[11px] text-amber-900">
+                                      <span className="font-semibold">Trimmed:</span> {b.reason}
+                                    </li>
+                                  ))}
+                                  {(r.removedBullets || []).map((b, i) => (
+                                    <li key={`r${i}`} className="text-[11px] text-amber-900">
+                                      <span className="line-through opacity-70">{b.text}</span>
+                                      <span className="block text-amber-700">{b.reason}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </aside>
+
+                    {/* Resume preview */}
+                    <div className="md:col-span-3 p-6 text-[12.5px] text-gray-800 leading-relaxed">
+                      {(() => {
+                        const res = trState.data.resume;
+                        const H = ({ children }) => (
+                          <h4 className="mt-5 mb-1.5 text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100 pb-1">{children}</h4>
+                        );
+                        return (
+                          <>
+                            <p className="text-lg font-black text-gray-900">{userMeta?.fullName || user?.displayName}</p>
+                            {res.summary && (<><H>Summary</H><p>{res.summary}</p></>)}
+                            {res.skills?.length > 0 && (<><H>Skills</H><p>{res.skills.join(", ")}</p></>)}
+                            {res.roles?.length > 0 && (
+                              <>
+                                <H>Experience</H>
+                                {res.roles.map((r, i) => (
+                                  <div key={i} className="mb-3">
+                                    <div className="flex items-baseline justify-between gap-3">
+                                      <p className="font-bold text-gray-900">{r.title}{r.title && r.company ? " · " : ""}{r.company}</p>
+                                      <p className="text-[11px] text-gray-500 whitespace-nowrap">{[r.startDate, r.endDate].filter(Boolean).join(" – ")}</p>
+                                    </div>
+                                    {r.location && <p className="text-[11px] italic text-gray-500">{r.location}</p>}
+                                    <ul className="mt-1 list-disc pl-5 space-y-0.5">
+                                      {r.bullets.map((b, j) => <li key={j}>{b}</li>)}
+                                    </ul>
+                                  </div>
+                                ))}
+                              </>
+                            )}
+                            {res.projects?.length > 0 && (
+                              <>
+                                <H>Projects</H>
+                                {res.projects.map((p, i) => (
+                                  <div key={i} className="mb-2">
+                                    <p className="font-bold text-gray-900">{p.name}{p.technologies ? <span className="font-normal text-gray-500"> ({p.technologies})</span> : null}</p>
+                                    <ul className="mt-1 list-disc pl-5 space-y-0.5">{p.bullets.map((b, j) => <li key={j}>{b}</li>)}</ul>
+                                  </div>
+                                ))}
+                              </>
+                            )}
+                            {res.education?.length > 0 && (
+                              <>
+                                <H>Education</H>
+                                {res.education.map((e, i) => (
+                                  <div key={i} className="flex items-baseline justify-between gap-3">
+                                    <p><span className="font-bold text-gray-900">{e.degree}</span>{e.degree && e.institution ? " · " : ""}{e.institution}</p>
+                                    <p className="text-[11px] text-gray-500 whitespace-nowrap">{[e.startDate, e.endDate].filter(Boolean).join(" – ")}</p>
+                                  </div>
+                                ))}
+                              </>
+                            )}
+                            {res.certifications?.length > 0 && (<><H>Certifications</H><ul className="list-disc pl-5">{res.certifications.map((c, i) => <li key={i}>{c}</li>)}</ul></>)}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 flex items-center justify-between gap-3">
+                <p className="text-[11px] text-gray-400">
+                  {trState.data?.cached ? "Saved version — regenerate after editing your profile." : trState.data ? "Saved for this job." : ""}
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setTrState({ ...trState, isOpen: false })}
+                    className="px-4 py-2 text-xs font-bold text-gray-600 hover:text-gray-800 transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={(e) => handleGenerateResume(e, trState.job, true)}
+                    disabled={trState.loading || !trState.job}
+                    className="px-4 py-2 text-xs font-bold text-indigo-600 hover:text-indigo-800 disabled:opacity-50 transition-colors"
+                  >
+                    Regenerate
+                  </button>
+                  <button
+                    onClick={handleDownloadResumePdf}
+                    disabled={!trState.data?.resume || trState.loading}
+                    className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
+                  >
+                    Download PDF
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>

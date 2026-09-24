@@ -54,7 +54,7 @@ function formatPhone(raw) {
 }
 
 function emptyResume() {
-  return { summary: "", skills: [], roles: [], education: [], projects: [], certifications: [], rawText: "", fileName: "" };
+  return { summary: "", skills: [], roles: [], education: [], projects: [], certifications: [], extraExperience: "", rawText: "", fileName: "" };
 }
 
 // ─── Auto-expanding Textarea ───────────────────────────────────────────────────
@@ -831,6 +831,18 @@ export default function Profile({ user, userMeta }) {
                     />
                   </div>
 
+                  {/* Extra real experience — feeds the tailored-resume generator only */}
+                  <div>
+                    <label htmlFor="resume-extra" className="caps-label block mb-2">More you've actually done (not on the resume)</label>
+                    <AutoTextarea
+                      id="resume-extra"
+                      className="input-standard"
+                      value={resumeData.extraExperience || ""}
+                      onChange={(e) => setResumeData({ ...resumeData, extraExperience: e.target.value })}
+                      placeholder="Tools, systems, scale, side projects, outcomes you left off for space. The per-job resume can draw on these; it never adds anything you haven't written here."
+                    />
+                  </div>
+
                   {/* Skills */}
                   <div>
                     <label className="caps-label block mb-3">Skills</label>
@@ -854,9 +866,13 @@ export default function Profile({ user, userMeta }) {
                   {/* Work Experience */}
                   <ResumeSection
                     label="Work Experience"
-                    onAdd={() => setResumeData({ ...resumeData, roles: [...resumeData.roles, { title: "", company: "", startDate: "", endDate: "", description: "" }] })}
+                    onAdd={() => setResumeData({ ...resumeData, roles: [...resumeData.roles, { title: "", company: "", location: "", startDate: "", endDate: "", description: "" }] })}
                     addLabel="Add Role"
                   >
+                    <p className="text-xs text-gray-500 -mt-1 mb-4">
+                      The tailored-resume generator can only use what's written here. The more real detail you add per role
+                      (tools, systems, scale, outcomes), the better it can match each job without inventing anything.
+                    </p>
                     {resumeData.roles.map((role, i) => (
                       <ResumeCard key={i} onRemove={() => removeResumeArrayItem("roles", i)}>
                         <div className="grid grid-cols-2 gap-4">
@@ -864,6 +880,7 @@ export default function Profile({ user, userMeta }) {
                           <LabeledInput label="Company" value={role.company} onChange={(e) => updateResumeArray("roles", i, "company", e.target.value)} />
                           <LabeledInput label="Start Date" value={role.startDate} onChange={(e) => updateResumeArray("roles", i, "startDate", e.target.value)} />
                           <LabeledInput label="End Date" value={role.endDate} onChange={(e) => updateResumeArray("roles", i, "endDate", e.target.value)} />
+                          <LabeledInput label="Location" value={role.location || ""} onChange={(e) => updateResumeArray("roles", i, "location", e.target.value)} placeholder="e.g. Sunnyvale, CA" />
                         </div>
                         <div className="mt-4">
                           <label className="caps-label block mb-2">Description</label>

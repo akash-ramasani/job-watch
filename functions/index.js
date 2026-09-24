@@ -3047,6 +3047,368 @@ ${builtResumeStr}
 );
 
 /**
+ * ═══════════════════════════════════════════════════════════════════════════
+ * 📄 TAILORED RESUME: rewrite the user's real experience for one job.
+ *
+ * The model never produces employers, titles, dates or locations. It returns
+ * bullets per role *index* and the server rebuilds every role from the saved
+ * profile, so the header of each role is exactly what the user entered.
+ * Skills are filtered to ones present somewhere in the profile, and a second
+ * model pass removes any bullet whose claims the profile doesn't support —
+ * those are listed in the match report instead of silently kept.
+ * Results are cached at users/{uid}/tailoredResumes/{jobId} until the profile
+ * changes or the user asks to regenerate.
+ * ═══════════════════════════════════════════════════════════════════════════
+ */
+const TAILORED_RESUME_VERSION = 1;
+
+function normalizeSkillText(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9+#]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/** Everything the user has told us about themselves, as one searchable string. */
+function buildProfileCorpus(profile) {
+  const parts = [profile.summary, profile.extraExperience, profile.rawText, ...(profile.skills || []), ...(profile.certifications || [])];
+  for (const r of profile.roles || []) parts.push(r.title, r.company, r.description);
+  for (const p of profile.projects || []) parts.push(p.name, p.description, p.techStack, ...(p.technologies || []));
+  for (const e of profile.education || []) parts.push(e.degree, e.institution, e.description);
+  return normalizeSkillText(parts.filter(Boolean).join(" \n "));
+}
+
+function skillInCorpus(skill, corpus) {
+  const n = normalizeSkillText(skill);
+  if (!n) return false;
+  if (corpus.includes(n)) return true;
+  // "Node.js" vs "nodejs", "CI/CD" vs "ci cd"
+  const tight = n.replace(/ /g, "");
+  return tight.length >= 3 && corpus.replace(/ /g, "").includes(tight);
+}
+
+function parseJsonLoose(raw) {
+  const text = String(raw || "").replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    const { jsonrepair } = require("jsonrepair");
+    return JSON.parse(jsonrepair(text));
+  }
+}
+
+/**
+ * The user's own description as bullets. Parsed resumes usually arrive as one
+ * paragraph, so fall back to sentence boundaries when there are no markers.
+ */
+function splitDescriptionToBullets(description) {
+  const text = String(description || "").trim();
+  if (!text) return [];
+  let parts = text.split(/\n+|(?:^|\s)[•\-–*]\s+/).map((s) => s.trim()).filter((s) => s.length > 3);
+  if (parts.length <= 1) {
+    parts = text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((s) => s.trim()).filter((s) => s.length > 3);
+  }
+  return parts.slice(0, 6);
+}
+
+exports.generateTailoredResume = onCall(
+  {
+    region: REGION,
+    minInstances: 0,
+    maxInstances: 10,
+    timeoutSeconds: 120,
+    secrets: [OPENAI_API_KEY],
+  },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "You must be logged in to generate a resume.");
+
+    const sessionToken = request.rawRequest?.headers?.["x-session-token"];
+    if (sessionToken) {
+      const userSnap = await db.collection("users").doc(uid).get();
+      const activeToken = userSnap.exists ? userSnap.data()?.activeSession?.token : null;
+      if (activeToken && activeToken !== sessionToken) {
+        throw new HttpsError("unauthenticated", "Session expired. You have been signed out because another login was detected.");
+      }
+    }
+
+    const { jobId, force } = request.data || {};
+    if (!jobId) throw new HttpsError("invalid-argument", "Missing jobId.");
+
+    const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
+    if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
+      throw new HttpsError("failed-precondition", "AI features are currently disabled in your settings.");
+    }
+
+    const profileSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
+    if (!profileSnap.exists) {
+      throw new HttpsError("failed-precondition", "No resume profile found. Upload a resume on the Profile page first.");
+    }
+    const profile = profileSnap.data();
+    const roles = Array.isArray(profile.roles) ? profile.roles.filter((r) => r && (r.company || r.title)) : [];
+    if (roles.length === 0) {
+      throw new HttpsError("failed-precondition", "Your resume profile has no work experience yet. Add your roles on the Profile page.");
+    }
+    const profileStamp = profile.updatedAt?.toMillis ? profile.updatedAt.toMillis() : 0;
+
+    const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
+    if (!jobSnap.exists) throw new HttpsError("not-found", "Job not found in database.");
+    const job = jobSnap.data();
+
+    const cacheRef = db.collection("users").doc(uid).collection("tailoredResumes").doc(jobId);
+    if (!force) {
+      const cached = await cacheRef.get();
+      const c = cached.exists ? cached.data() : null;
+      if (c && c.version === TAILORED_RESUME_VERSION && c.profileStamp === profileStamp && c.resume) {
+        return { ok: true, cached: true, resume: c.resume, matchReport: c.matchReport };
+      }
+    }
+
+    const jobDesc = (job.fullDescription || job.title || "").slice(0, 6000);
+    const companyName = job.companyName || "the company";
+    const jobTitle = job.title || "the role";
+
+    const projects = Array.isArray(profile.projects) ? profile.projects.filter((p) => p && (p.name || p.description)) : [];
+    const promptProfile = {
+      summary: profile.summary || "",
+      skills: profile.skills || [],
+      roles: roles.map((r, index) => ({
+        index,
+        title: r.title || "",
+        company: r.company || "",
+        location: r.location || "",
+        startDate: r.startDate || "",
+        endDate: r.endDate || "",
+        description: r.description || "",
+      })),
+      projects: projects.map((p, index) => ({
+        index,
+        name: p.name || "",
+        technologies: p.techStack || (p.technologies || []).join(", "),
+        description: p.description || "",
+      })),
+      education: profile.education || [],
+      certifications: profile.certifications || [],
+      extraExperience: profile.extraExperience || "",
+      resumeText: (profile.rawText || "").slice(0, 4000),
+    };
+
+    const client = requireOpenAI();
+
+    // ── Pass 1: tailor. Roles come back by index only. ────────────────────
+    const systemPrompt = `You are an expert technical resume writer. You tailor a candidate's REAL resume to one job description.
+
+Hard rules — violating any of them makes the output unusable:
+1. Use ONLY facts present in the candidate profile. Never add a tool, language, framework, metric, responsibility, certification or outcome that the profile does not state or clearly imply.
+1b. Each role's bullets must come ONLY from that role's own "description". Never move, reuse or blend an achievement from one role into another, and never put the same bullet under two roles. If a role's description is thin, write fewer bullets (even one) rather than borrowing.
+2. You do not write employers, titles, dates or locations. Refer to roles and projects by their "index" only.
+3. Rewrite each role's experience as 3-6 concise bullets that foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's. Lead with impact; keep numbers only if the profile has them. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Split a dense paragraph into several bullets rather than one long one.
+4. Order skills with the most job-relevant first. Include only skills the candidate has.
+5. If the job needs something the candidate lacks, say so in the requirements list. Do not paper over gaps.
+6. Write like a human engineer: plain, specific, no buzzword padding, no em dashes.
+7. The summary is a rephrasing of the candidate's existing summary and skills for this job. It may only name domains, technologies and responsibilities that appear in the profile; if the job's domain (e.g. "video understanding") is not in the profile, the summary must not mention it.
+8. Return ONLY a JSON object with this shape:
+{
+  "summary": "2-3 sentence professional summary for this job, only claims the profile supports",
+  "skills": ["ordered", "list"],
+  "roles": [{ "index": 0, "bullets": ["...", "..."] }],
+  "projects": [{ "index": 0, "bullets": ["..."] }],
+  "requirements": [
+    { "requirement": "one key requirement from the job description", "covered": "yes" | "partial" | "no", "evidence": "where the profile shows it, or empty" }
+  ]
+}
+List 8-14 requirements covering the job's must-haves and main nice-to-haves.`;
+
+    const userPrompt = `## Job: ${jobTitle} at ${companyName}
+${jobDesc}
+
+## Candidate profile (JSON)
+${JSON.stringify(promptProfile)}`;
+
+    let draft;
+    try {
+      const completion = await client.chat.completions.create(
+        {
+          model: OPENAI_SMART_MODEL,
+          temperature: 0.2,
+          max_tokens: 2500,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        },
+        { timeout: 60000 }
+      );
+      draft = parseJsonLoose(completion.choices?.[0]?.message?.content);
+    } catch (err) {
+      logger.error("generateTailoredResume pass 1 failed:", err);
+      throw new HttpsError("internal", "Failed to generate resume: " + err.message);
+    }
+
+    // ── Rebuild from the profile: headers are the user's, bullets are the draft's.
+    const corpus = buildProfileCorpus(profile);
+    const draftRoles = new Map((Array.isArray(draft.roles) ? draft.roles : []).map((r) => [Number(r.index), r]));
+    const draftProjects = new Map((Array.isArray(draft.projects) ? draft.projects : []).map((p) => [Number(p.index), p]));
+
+    const builtRoles = roles.map((r, index) => {
+      const bullets = (draftRoles.get(index)?.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 6);
+      return {
+        title: r.title || "",
+        company: r.company || "",
+        location: r.location || "",
+        startDate: r.startDate || "",
+        endDate: r.endDate || "",
+        bullets: bullets.length ? bullets : splitDescriptionToBullets(r.description),
+      };
+    });
+    const builtProjects = projects
+      .map((p, index) => {
+        const d = draftProjects.get(index);
+        if (!d) return null; // the model left it out as irrelevant to this job
+        const bullets = (d.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 4);
+        return {
+          name: p.name || "",
+          technologies: p.techStack || (p.technologies || []).join(", "),
+          bullets: bullets.length ? bullets : splitDescriptionToBullets(p.description),
+        };
+      })
+      .filter(Boolean);
+
+    // Model's job-relevant ordering first, then the rest of the user's real
+    // skills so the section isn't thin; anything not in the profile is dropped.
+    const droppedSkills = [];
+    const seenSkills = new Set();
+    const skills = [];
+    for (const s of [...(Array.isArray(draft.skills) ? draft.skills : []), ...(profile.skills || [])]) {
+      const clean = String(s || "").trim();
+      const key = normalizeSkillText(clean);
+      if (!clean || seenSkills.has(key)) continue;
+      seenSkills.add(key);
+      if (!skillInCorpus(clean, corpus)) {
+        droppedSkills.push(clean);
+        continue;
+      }
+      skills.push(clean);
+      if (skills.length >= 25) break;
+    }
+
+    // ── Pass 2: audit the summary and every bullet against the profile. An
+    // unsupported claim is trimmed out when the rest of the line stands; the
+    // whole line is dropped only when nothing supportable remains.
+    // Every line carries the ONLY text it may be judged against: a role bullet
+    // against that role's own description, so an achievement can't migrate
+    // between employers; the summary against the whole profile.
+    let summary = String(draft.summary || profile.summary || "").trim();
+    const wholeProfileText = JSON.stringify(promptProfile);
+    const flat = [];
+    if (summary) flat.push({ id: "summary", text: summary, source: "professional summary", sourceText: wholeProfileText });
+    builtRoles.forEach((r, ri) => {
+      const sourceText = `${r.title} at ${r.company} (${r.startDate} - ${r.endDate}): ${roles[ri].description || ""}`;
+      r.bullets.forEach((b, bi) => flat.push({ id: `r${ri}:${bi}`, text: b, source: `${r.title} @ ${r.company}`, sourceText }));
+    });
+    builtProjects.forEach((p, pi) => {
+      const src = projects.find((x) => (x.name || "") === p.name) || {};
+      const sourceText = `Project ${p.name} (${p.technologies}): ${src.description || ""}`;
+      p.bullets.forEach((b, bi) => flat.push({ id: `p${pi}:${bi}`, text: b, source: `project ${p.name}`, sourceText }));
+    });
+
+    const removedBullets = [];
+    const trimmedBullets = [];
+    if (flat.length > 0) {
+      try {
+        const verify = await client.chat.completions.create(
+          {
+            model: OPENAI_SMART_MODEL,
+            temperature: 0,
+            max_tokens: 1800,
+            response_format: { type: "json_object" },
+            messages: [
+              {
+                role: "system",
+                content: `You audit resume lines for fabrication. Each candidate line comes with a "sourceText": the ONLY material it may be judged against (a role's bullet against that role's own description; the summary against the whole profile). Check whether EVERY factual claim in the line (tools, technologies, responsibilities, metrics, outcomes, purposes) is stated in or clearly implied by ITS OWN sourceText. Something true elsewhere in the candidate's history does not count: an achievement from a different employer placed under this role is unsupported. Rephrasing and synonyms are fine; adding a technology, number, responsibility or purpose the sourceText never mentions is not.
+For each line with an unsupported claim, return a "fixed" version that keeps everything supported and removes only the unsupported part, rewritten to read naturally. If nothing supportable remains, return "fixed": "".
+Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "fixed": "rewritten line or empty" } ] }. An empty list means every line is fully supported.`,
+              },
+              {
+                role: "user",
+                content: `## Candidate lines (each with its own sourceText)\n${JSON.stringify(flat)}`,
+              },
+            ],
+          },
+          { timeout: 45000 }
+        );
+        const audit = parseJsonLoose(verify.choices?.[0]?.message?.content);
+        const findings = new Map(
+          (Array.isArray(audit.unsupported) ? audit.unsupported : [])
+            .map((u) => [String(u.id), { reason: String(u.reason || ""), fixed: String(u.fixed || "").trim() }])
+        );
+        if (findings.size) {
+          const apply = (id, original) => {
+            const f = findings.get(id);
+            if (!f) return original;
+            if (f.fixed && f.fixed.length > 10) {
+              trimmedBullets.push({ text: original, fixed: f.fixed, reason: f.reason });
+              return f.fixed;
+            }
+            removedBullets.push({ text: original, source: flat.find((x) => x.id === id)?.source || "", reason: f.reason });
+            return null;
+          };
+          summary = apply("summary", summary) || profile.summary || "";
+          builtRoles.forEach((r, ri) => { r.bullets = r.bullets.map((b, bi) => apply(`r${ri}:${bi}`, b)).filter(Boolean); });
+          builtProjects.forEach((p, pi) => { p.bullets = p.bullets.map((b, bi) => apply(`p${pi}:${bi}`, b)).filter(Boolean); });
+        }
+      } catch (err) {
+        // The audit is a safety net, not a gate; keep the draft but say the audit didn't run.
+        logger.warn(`generateTailoredResume audit skipped: ${err?.message}`);
+      }
+    }
+    // A role stripped bare falls back to the user's own description.
+    for (let i = 0; i < builtRoles.length; i++) {
+      if (builtRoles[i].bullets.length === 0) builtRoles[i].bullets = splitDescriptionToBullets(roles[i].description);
+    }
+
+    const requirements = (Array.isArray(draft.requirements) ? draft.requirements : [])
+      .map((q) => ({
+        requirement: String(q.requirement || "").trim(),
+        covered: ["yes", "partial", "no"].includes(q.covered) ? q.covered : "no",
+        evidence: String(q.evidence || "").trim(),
+      }))
+      .filter((q) => q.requirement);
+    const score = requirements.reduce((acc, q) => acc + (q.covered === "yes" ? 1 : q.covered === "partial" ? 0.5 : 0), 0);
+    const matchReport = {
+      coveragePct: requirements.length ? Math.round((score / requirements.length) * 100) : null,
+      requirements,
+      gaps: requirements.filter((q) => q.covered === "no").map((q) => q.requirement),
+      removedBullets,
+      trimmedBullets,
+      droppedSkills,
+    };
+
+    const resume = {
+      summary: String(summary || "").trim(),
+      skills,
+      roles: builtRoles,
+      projects: builtProjects,
+      education: profile.education || [],
+      certifications: profile.certifications || [],
+    };
+
+    await cacheRef.set({
+      version: TAILORED_RESUME_VERSION,
+      profileStamp,
+      jobId,
+      jobTitle,
+      companyName,
+      resume,
+      matchReport,
+      model: OPENAI_SMART_MODEL,
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+
+    logger.info(`generateTailoredResume: uid=${uid} job=${jobId} coverage=${matchReport.coveragePct} trimmed=${trimmedBullets.length} removed=${removedBullets.length} droppedSkills=${droppedSkills.length}`);
+    return { ok: true, cached: false, resume, matchReport };
+  }
+);
+
+/**
  * =====================================================================================
  * 🤖 EXTENSION: Map job application form fields to user profile using AI
  * =====================================================================================
