@@ -18,7 +18,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Smart Tracking",
-    description: "Automatically sync job listings from Greenhouse, AshbyHQ & Workday boards. Never miss a new posting again.",
+    description: "Automatically sync job listings from Greenhouse, AshbyHQ, Workday & Oracle Cloud boards. Never miss a new posting again.",
     color: "text-indigo-600",
     bg: "bg-indigo-50",
   },

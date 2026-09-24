@@ -133,11 +133,11 @@
     /* ── Add feed radios (matches web app radio design) ──
        .field label / .field input are scoped away from the radio group so the
        text-input padding and uppercase label styles don't distort it. */
-    /* Three options must fit the 304px inner width on one row; wrap is the
-       fallback for wider labels (e.g. a localized font), not the norm. */
+    /* Four options don't fit the 304px inner width on one row, so lay them out
+       as a tidy 2×2 grid instead of letting flex wrap unevenly. */
     .radio-row {
-      display: flex; flex-wrap: wrap; align-items: center;
-      justify-content: space-between; gap: 8px 12px; margin-top: 8px;
+      display: grid; grid-template-columns: 1fr 1fr; align-items: center;
+      gap: 10px 12px; margin-top: 8px;
     }
     .field label.radio-opt {
       display: flex; align-items: center; gap: 8px; white-space: nowrap;
@@ -286,11 +286,15 @@
           <input type="radio" name="feed-source" value="workday" />
           Workday
         </label>
+        <label class="radio-opt">
+          <input type="radio" name="feed-source" value="oracle" />
+          Oracle Cloud
+        </label>
       </div>
     </div>
 
     <div class="field anim-slide" id="feed-workday-field" style="display:none;">
-      <label for="feed-workday-url">Workday Career Site URL</label>
+      <label for="feed-workday-url" id="feed-site-url-label">Career Site URL</label>
       <input id="feed-workday-url" placeholder="https://<company>.wd5.myworkdayjobs.com/<SiteName>" autocomplete="off" spellcheck="false" />
     </div>
 

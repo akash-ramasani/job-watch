@@ -7,7 +7,7 @@ JobWatch is a modern, high-performance job tracking and scraping platform built 
 ## 🚀 Key Features
 
 - **🤖 Native AI Assistant**: An integrated, OpenAI-powered chat assistant that can query your job data, summarize sync runs, and perform smart searches directly in-app.
-- **⚡ Automated Scraping**: Periodically monitors job boards (Greenhouse, Ashby, Workday, Eightfold, Microsoft, etc.) for new postings. Workday covers 100+ large employers (NVIDIA, Salesforce, Intel, Cisco, …) via their public career-site JSON; see `scripts/workday_companies.csv` and `scripts/seed-workday-feeds.mjs`.
+- **⚡ Automated Scraping**: Periodically monitors job boards (Greenhouse, Ashby, Workday, Eightfold, Microsoft, etc.) for new postings. Workday covers 260+ large employers (NVIDIA, Salesforce, Intel, Cisco, …) and Oracle Recruiting Cloud covers Oracle, JPMorgan Chase, Goldman Sachs, Dell, Ford, Texas Instruments and more, both via their public career-site JSON; see `scripts/workday_companies.csv`, `scripts/oracle_companies.csv` and `scripts/seed-workday-feeds.mjs`.
 - **💬 Rich Markdown Support**: Assistant responses include beautifully rendered tables, lists, and formatted text.
 - **🌎 Localized Experience**: All job timestamps and sync logs are automatically localized to **Pacific Time (PT)**.
 - **🔔 Real-time Notifications**: Native OS-level push notifications via Firebase Cloud Messaging (FCM).

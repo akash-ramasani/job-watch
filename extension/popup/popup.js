@@ -170,6 +170,41 @@ function parseWorkdayCareerUrl(raw) {
   };
 }
 
+// Oracle Recruiting Cloud sites: https://<pod>.fa.<region>.oraclecloud.com/
+// hcmUI/CandidateExperience/<locale>/sites/<site>. Same parsing as
+// parseOracleFeedUrl in functions/index.js.
+function parseOracleCareerUrl(raw) {
+  let u;
+  try {
+    u = new URL((raw || "").trim());
+  } catch {
+    return null;
+  }
+  if (!/\.oraclecloud\.com$/i.test(u.hostname)) return null;
+  const m = u.pathname.match(/\/hcmUI\/CandidateExperience\/([a-z]{2}(?:-[A-Z]{2})?)\/sites\/([^/?#]+)/i);
+  if (!m) return null;
+  return {
+    careerUrl: `https://${u.hostname}/hcmUI/CandidateExperience/en/sites/${m[2]}`,
+    apiUrl: `https://${u.hostname}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?finder=findReqs;siteNumber=${m[2]}`,
+  };
+}
+
+// Sources keyed by a pasted career-site URL rather than a company slug.
+const URL_SOURCES = {
+  workday: {
+    label: "Workday Career Site URL",
+    placeholder: "https://<company>.wd5.myworkdayjobs.com/<SiteName>",
+    pretty: "Workday",
+    parse: parseWorkdayCareerUrl,
+  },
+  oracle: {
+    label: "Oracle Cloud Career Site URL",
+    placeholder: "https://<pod>.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/<Site>",
+    pretty: "Oracle Cloud",
+    parse: parseOracleCareerUrl,
+  },
+};
+
 // ── Live endpoint check: runs on every company/radio change ──────────────────
 // green = endpoint returns real job data, red = 404 / empty / unreachable.
 let endpointStatus = "idle"; // idle | checking | valid | invalid
@@ -190,21 +225,24 @@ function updateUrlPreview() {
   clearTimeout(checkTimer);
   if (checkController) checkController.abort();
 
-  // Workday's endpoint sends no CORS headers, so it can't be probed from here.
-  // Validate the URL shape; the first backend sync verifies it for real.
-  $("feed-workday-field").style.display = source === "workday" ? "" : "none";
-  if (source === "workday") {
+  // Workday's and Oracle's endpoints send no CORS headers, so they can't be
+  // probed from here. Validate the URL shape; the first backend sync verifies it.
+  const urlSource = URL_SOURCES[source];
+  $("feed-workday-field").style.display = urlSource ? "" : "none";
+  if (urlSource) {
+    $("feed-site-url-label").textContent = urlSource.label;
+    $("feed-workday-url").placeholder = urlSource.placeholder;
     const raw = $("feed-workday-url").value;
-    const wd = parseWorkdayCareerUrl(raw);
+    const parsed = urlSource.parse(raw);
     if (!raw.trim()) {
       endpointStatus = "idle";
-      paintPreview("Paste the company's Workday career page; the endpoint is derived from it.", "#9ca3af");
-    } else if (wd) {
+      paintPreview(`Paste the company's ${urlSource.pretty} career page; the endpoint is derived from it.`, "#9ca3af");
+    } else if (parsed) {
       endpointStatus = "valid";
-      paintPreview(`${wd.apiUrl} — verified on first sync`, "#059669");
+      paintPreview(`${parsed.apiUrl} — verified on first sync`, "#059669");
     } else {
       endpointStatus = "invalid";
-      paintPreview("Not a Workday career site URL — expected https://<company>.wd5.myworkdayjobs.com/<SiteName>", "#dc2626");
+      paintPreview(`Not a ${urlSource.pretty} career site URL — expected ${urlSource.placeholder}`, "#dc2626");
     }
     return;
   }
@@ -271,14 +309,14 @@ function submitFeed() {
   }
   if (endpointStatus !== "valid") {
     setFeedStatus(
-      source === "workday"
-        ? "Paste the company's Workday career site URL (https://<company>.wd5.myworkdayjobs.com/<SiteName>)."
+      URL_SOURCES[source]
+        ? `Paste the company's ${URL_SOURCES[source].pretty} career site URL (${URL_SOURCES[source].placeholder}).`
         : "This endpoint has no job data. Check the company name and job board.",
       "error"
     );
     return;
   }
-  const workdayUrl = source === "workday" ? parseWorkdayCareerUrl($("feed-workday-url").value)?.careerUrl : undefined;
+  const workdayUrl = URL_SOURCES[source] ? URL_SOURCES[source].parse($("feed-workday-url").value)?.careerUrl : undefined;
 
   const btn = $("btn-add-feed");
   btn.disabled = true;
@@ -308,7 +346,7 @@ function submitFeed() {
         setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
         return;
       }
-      const label = source === "ashby" ? "AshbyHQ" : source === "workday" ? "Workday" : "Greenhouse";
+      const label = source === "ashby" ? "AshbyHQ" : URL_SOURCES[source]?.pretty || "Greenhouse";
       setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
       $("feed-company").value = "";
       $("feed-workday-url").value = "";

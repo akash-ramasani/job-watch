@@ -985,22 +985,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── 4. Popup: add a job board feed ──────────────────────────────────
       if (message.type === "ADD_FEED") {
         const company = (message.company || "").trim();
-        const source = message.source === "ashby" ? "ashby"
-          : message.source === "workday" ? "workday"
-            : "greenhouse";
+        const source = ["ashby", "workday", "oracle"].includes(message.source) ? message.source : "greenhouse";
+        const isUrlSource = source === "workday" || source === "oracle";
         const slug = companyToSlug(company);
-        if (!company || (source !== "workday" && !slug)) {
+        if (!company || (!isUrlSource && !slug)) {
           sendResponse({ ok: false, error: "Please enter a valid company name." });
           return;
         }
 
-        // Workday feeds carry the career-site URL from the popup (already
-        // reduced to https://<tenant>.wd<N>.myworkdayjobs.com/<site>).
+        // Workday / Oracle feeds carry the career-site URL from the popup, already
+        // reduced to its canonical form by the popup's parser.
         let url;
-        if (source === "workday") {
+        if (isUrlSource) {
           url = String(message.url || "").trim();
-          if (!/^https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[^/?#]+$/i.test(url)) {
-            sendResponse({ ok: false, error: "Please paste a valid Workday career site URL." });
+          const ok = source === "workday"
+            ? /^https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[^/?#]+$/i.test(url)
+            : /^https:\/\/[a-z0-9.-]+\.oraclecloud\.com\/hcmUI\/CandidateExperience\/en\/sites\/[^/?#]+$/i.test(url);
+          if (!ok) {
+            sendResponse({ ok: false, error: `Please paste a valid ${source === "workday" ? "Workday" : "Oracle Cloud"} career site URL.` });
             return;
           }
         }

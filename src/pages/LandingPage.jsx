@@ -23,7 +23,7 @@ const FEATURES = [
       </svg>
     ),
     title: "Auto-Sync Feeds",
-    desc: "Connect Greenhouse, AshbyHQ, Workday & Eightfold.ai job boards once. JobWatch syncs new postings automatically every 15 minutes.",
+    desc: "Connect Greenhouse, AshbyHQ, Workday, Oracle Cloud & Eightfold.ai job boards once. JobWatch syncs new postings automatically every 15 minutes.",
   },
   {
     icon: (
@@ -912,7 +912,7 @@ export default function LandingPage() {
               {
                 step: "01",
                 title: "Add Your Feeds",
-                desc: "Paste a Greenhouse, AshbyHQ, Workday or Eightfold.ai job board URL and we'll start watching it immediately.",
+                desc: "Paste a Greenhouse, AshbyHQ, Workday, Oracle Cloud or Eightfold.ai job board URL and we'll start watching it immediately.",
               },
               {
                 step: "02",

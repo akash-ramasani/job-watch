@@ -85,16 +85,27 @@ const FEED_CONCURRENCY = 15;
 const RECENT_WINDOW_MINUTES = 20;
 const TTL_DAYS = 3;
 
-// Workday: the public list endpoint has no timestamps (only "Posted Today" style
-// text), so new jobs are detected by ID against users/{uid}/feedState/{feedId}
-// instead of by the RECENT_WINDOW cutoff. Workday rate-limits bursty clients
-// (HTTP 429 for a few minutes), so all Workday HTTP goes through one limiter.
+// ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
+// by req ID against users/{uid}/feedState/{feedId} instead of by the
+// RECENT_WINDOW cutoff — Workday's list has no timestamps at all, and ID
+// tracking never misses a posting when a run is late. Shared caps keep
+// sync + scoring inside the 540 s budget no matter how many such feeds exist.
+const ID_SOURCE_MAX_AGE_DAYS = TTL_DAYS; // never write a posting older than this
+const ID_SOURCE_MAX_NEW_PER_FEED = 15; // per run; the rest stays unseen and drains next run
+const ID_SOURCE_MAX_NEW_PER_RUN = 150; // across all ID-tracked feeds
+const ID_SOURCE_MAX_PAGES = 25; // safety stop when walking a list newest-first
+const ID_SOURCE_SEEN_RETENTION_DAYS = 45; // prune feedState entries first seen before this
+
+// Workday rate-limits bursty clients (HTTP 429 for a few minutes), so all
+// Workday HTTP goes through one limiter. 20 is a hard cap on the list page size.
 const WORKDAY_CONCURRENCY = 4;
-const WORKDAY_PAGE_SIZE = 20; // hard cap on the Workday side
-const WORKDAY_MAX_AGE_DAYS = TTL_DAYS; // never write a posting older than this
-const WORKDAY_MAX_NEW_PER_FEED = 15; // per run; the rest stays unseen and drains next run
-const WORKDAY_MAX_NEW_PER_RUN = 150; // across all Workday feeds, keeps sync+scoring in budget
-const WORKDAY_MAX_PAGES = 25; // safety stop when walking a list newest-first
+const WORKDAY_PAGE_SIZE = 20;
+
+// Oracle Recruiting Cloud (Oracle, JPMorgan Chase, Goldman Sachs, Dell, Ford…):
+// GET hcmRestApi list newest-first, up to 200 per page, with an exact country
+// code per row. 100 keeps responses small.
+const ORACLE_CONCURRENCY = 4;
+const ORACLE_PAGE_SIZE = 100;
 
 /**
  * Allowed origins for CORS. Set ALLOWED_ORIGINS env var as comma-separated list
@@ -712,7 +723,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   }
 
   const limiter = pLimit(FEED_CONCURRENCY);
-  const workdayRunBudget = { remaining: WORKDAY_MAX_NEW_PER_RUN };
+  const idSourceRunBudget = { remaining: ID_SOURCE_MAX_NEW_PER_RUN };
   const bw = db.bulkWriter();
 
   bw.onWriteError((err) => {
@@ -764,14 +775,17 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
         );
 
         const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
-        const isWorkday = source === "workday";
+        const isIdSource = source === "workday" || source === "oracle";
 
-        // Workday has no list timestamps: fetchWorkdayNewJobs returns only jobs
-        // whose IDs we have never seen for this feed (already US-filtered and
-        // detail-enriched), so the recency cutoff below does not apply to it.
-        const rawJobs = isWorkday
-          ? await fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget: workdayRunBudget })
-          : await fetchJobsFromFeed(url, source, recentCutoffMs);
+        // ID-tracked sources return only jobs whose IDs we have never seen for
+        // this feed (already US-filtered and detail-enriched), so the recency
+        // cutoff below does not apply to them.
+        const idSourceArgs = { userId, feedId, url, now, runBudget: idSourceRunBudget };
+        const rawJobs = source === "workday"
+          ? await fetchWorkdayNewJobs(idSourceArgs)
+          : source === "oracle"
+            ? await fetchOracleNewJobs(idSourceArgs)
+            : await fetchJobsFromFeed(url, source, recentCutoffMs);
         jobsFetched += rawJobs.length;
 
         const normalized = rawJobs
@@ -780,7 +794,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
         const locationFiltered = normalized.filter(jobMatchesLocationFilter);
 
-        const recentOnly = isWorkday
+        const recentOnly = isIdSource
           ? locationFiltered
           : locationFiltered.filter(
             (j) => j.sourceUpdatedTs && j.sourceUpdatedTs.toMillis() >= recentCutoff.toMillis()
@@ -1164,104 +1178,98 @@ function workdayReqIdFromRow(row) {
 }
 
 /**
- * Returns only jobs never seen before for this feed, already US-filtered and
- * detail-enriched, as { reqId, list, detail, careerUrl } for normalizeJobMinimal.
+ * ----------------------------
+ * ID-TRACKED SOURCES — shared core
+ * ----------------------------
+ * Walks a newest-first list until a page has nothing new inside the TTL
+ * window, fetches details only for unseen, plausibly-US rows, and remembers
+ * seen IDs in users/{uid}/feedState/{feedId}. Returns [{ row, detail }] for the
+ * source adapter to shape for normalizeJobMinimal.
  *
- * First run for a feed = seed: every ID in the TTL window is marked seen, but only
- * postings from today are processed, so a new feed doesn't flood scoring. Per-run
- * caps leave the overflow unseen; it drains on the following runs.
+ * First run for a feed = seed: every ID in the window is marked seen, but only
+ * postings from today are processed, so a new feed doesn't flood scoring.
+ * Per-run caps leave the overflow unseen; it drains on the following runs.
+ *
+ * Adapter contract:
+ *   fetchPage(offset) → { rows: [{ id, ageDays, looksUS, raw }], total }
+ *     rows newest first; ageDays null when unknown (treated as in-window)
+ *   fetchDetail(row)   → detail object or null (failures are logged, not thrown)
+ *   keep(row, detail)  → false to drop after the detail fetch (country code,
+ *                        posting date disagreeing with the list)
  */
-async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
-  const parsed = parseWorkdayFeedUrl(url);
-  if (!parsed) throw new Error(`Not a Workday career site URL: ${url}`);
-
+async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label, pageSize, fetchPage, fetchDetail, keep }) {
   const stateRef = db.collection("users").doc(userId).collection("feedState").doc(feedId);
   const stateSnap = await stateRef.get();
   const state = stateSnap.exists ? stateSnap.data() : null;
   const seen = { ...(state?.seenIds || {}) };
   const isFirstRun = !state;
   const todayIso = now.toDate().toISOString().slice(0, 10);
-  const maxAgeToProcess = isFirstRun ? 0 : WORKDAY_MAX_AGE_DAYS;
+  const maxAgeToProcess = isFirstRun ? 0 : ID_SOURCE_MAX_AGE_DAYS;
 
   const candidates = []; // unseen, in-window, plausibly-US rows, newest first
-  const newlySeen = {}; // reqId → first-seen date; rows we can retire without a detail fetch
+  const newlySeen = {}; // id → first-seen date; rows retired without a detail fetch
   let offset = 0;
   let pages = 0;
   let total = null;
 
-  while (pages < WORKDAY_MAX_PAGES) {
-    const page = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
-      method: "POST",
-      body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: "" },
-    });
+  while (pages < ID_SOURCE_MAX_PAGES) {
+    const page = await fetchPage(offset);
     pages++;
-    const rows = Array.isArray(page?.jobPostings) ? page.jobPostings : [];
+    const rows = Array.isArray(page?.rows) ? page.rows : [];
     if (total == null) total = Number(page?.total) || 0;
     if (rows.length === 0) break;
 
     let unseenInWindow = 0;
     let reachedOldRows = false;
     for (const row of rows) {
-      const reqId = workdayReqIdFromRow(row);
-      if (!reqId || seen[reqId] || newlySeen[reqId]) continue;
+      const id = row.id;
+      if (!id || seen[id] || newlySeen[id]) continue;
 
-      const ageDays = parseWorkdayPostedAgeDays(row.postedOn);
-      if (ageDays != null && ageDays > WORKDAY_MAX_AGE_DAYS) {
+      if (row.ageDays != null && row.ageDays > ID_SOURCE_MAX_AGE_DAYS) {
         // Older than the TTL window. Not recorded: age alone retires it on every
         // later run, which keeps feedState small (in-window IDs only).
         reachedOldRows = true;
         continue;
       }
       unseenInWindow++;
-      if (ageDays != null && ageDays > maxAgeToProcess) {
-        newlySeen[reqId] = todayIso;
+      if ((row.ageDays != null && row.ageDays > maxAgeToProcess) || !row.looksUS) {
+        newlySeen[id] = todayIso;
         continue;
       }
-      if (!workdayLocationLooksUS(row.locationsText)) {
-        newlySeen[reqId] = todayIso;
-        continue;
-      }
-      candidates.push({ reqId, list: row });
+      candidates.push(row);
     }
 
     // Newest-first list: a page with nothing new in the window means every
     // page below it is known (or too old) as well.
     if (unseenInWindow === 0 || reachedOldRows) break;
-    offset += WORKDAY_PAGE_SIZE;
+    offset += pageSize;
     if (total && offset >= total) break;
   }
 
-  const feedCap = Math.max(0, Math.min(WORKDAY_MAX_NEW_PER_FEED, runBudget.remaining));
+  const feedCap = Math.max(0, Math.min(ID_SOURCE_MAX_NEW_PER_FEED, runBudget.remaining));
   const toProcess = candidates.slice(0, feedCap);
   runBudget.remaining -= toProcess.length;
 
   const results = [];
   await Promise.all(
-    toProcess.map(async ({ reqId, list }) => {
+    toProcess.map(async (row) => {
       let detail = null;
       try {
-        const d = await workdayFetchJson(`${parsed.apiBase}${list.externalPath}`);
-        detail = d?.jobPostingInfo || null;
+        detail = await fetchDetail(row);
       } catch (e) {
         // Written without a description; scoring retries via fetchJobDescription.
-        logger.warn(`Workday detail failed feedId=${feedId} reqId=${reqId}: ${e.message}`);
+        logger.warn(`${label} detail failed feedId=${feedId} id=${row.id}: ${e.message}`);
       }
-      newlySeen[reqId] = todayIso;
-
-      const alpha2 = detail?.country?.alpha2Code ||
-        detail?.jobRequisitionLocation?.country?.alpha2Code || null;
-      if (alpha2 && alpha2 !== "US") return;
-      if (detail?.startDate) {
-        const ageMs = now.toMillis() - new Date(`${detail.startDate}T00:00:00Z`).getTime();
-        if (ageMs > (WORKDAY_MAX_AGE_DAYS + 1) * 86400000) return; // list said recent, detail disagrees
-      }
-      results.push({ reqId, list, detail, careerUrl: parsed.careerUrl });
+      newlySeen[row.id] = todayIso;
+      if (!keep(row, detail)) return;
+      results.push({ row, detail });
     })
   );
 
   if (isFirstRun || Object.keys(newlySeen).length > 0) {
     // Drop IDs first seen long ago — the age rule retires them without a lookup.
-    const pruneBefore = new Date(now.toMillis() - 45 * 86400000).toISOString().slice(0, 10);
+    const pruneBefore = new Date(now.toMillis() - ID_SOURCE_SEEN_RETENTION_DAYS * 86400000)
+      .toISOString().slice(0, 10);
     const merged = {};
     for (const [id, firstSeen] of Object.entries(seen)) {
       if (String(firstSeen) >= pruneBefore) merged[id] = firstSeen;
@@ -1269,7 +1277,7 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
     Object.assign(merged, newlySeen);
     await stateRef.set(
       {
-        source: "workday",
+        source,
         seenIds: merged,
         seenCount: Object.keys(merged).length,
         listedTotal: total,
@@ -1281,11 +1289,167 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
   }
 
   logger.info(
-    `Workday feedId=${feedId} ${parsed.tenant}/${parsed.site}: pages=${pages} listed=${total} ` +
+    `${label} feedId=${feedId}: pages=${pages} listed=${total} ` +
     `candidates=${candidates.length} processed=${toProcess.length} kept=${results.length}` +
     `${isFirstRun ? " (seed run)" : ""}${candidates.length > toProcess.length ? " (capped, rest next run)" : ""}`
   );
   return results;
+}
+
+/** Days between an ISO date (YYYY-MM-DD) and now, or null when unparsable. */
+function ageDaysFromIsoDate(isoDate, now) {
+  if (!isoDate) return null;
+  const t = new Date(`${String(isoDate).slice(0, 10)}T00:00:00Z`).getTime();
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((now.toMillis() - t) / 86400000));
+}
+
+/**
+ * Workday adapter. Returns [{ reqId, list, detail, careerUrl }] for
+ * normalizeJobMinimal.
+ */
+async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
+  const parsed = parseWorkdayFeedUrl(url);
+  if (!parsed) throw new Error(`Not a Workday career site URL: ${url}`);
+
+  const results = await fetchNewJobsById({
+    userId, feedId, now, runBudget,
+    source: "workday",
+    label: `Workday ${parsed.tenant}/${parsed.site}`,
+    pageSize: WORKDAY_PAGE_SIZE,
+    fetchPage: async (offset) => {
+      const page = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
+        method: "POST",
+        body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: "" },
+      });
+      const rows = (Array.isArray(page?.jobPostings) ? page.jobPostings : []).map((raw) => ({
+        id: workdayReqIdFromRow(raw),
+        ageDays: parseWorkdayPostedAgeDays(raw.postedOn),
+        looksUS: workdayLocationLooksUS(raw.locationsText),
+        raw,
+      }));
+      return { rows, total: page?.total };
+    },
+    fetchDetail: async (row) => {
+      const d = await workdayFetchJson(`${parsed.apiBase}${row.raw.externalPath}`);
+      return d?.jobPostingInfo || null;
+    },
+    keep: (row, detail) => {
+      const alpha2 = detail?.country?.alpha2Code ||
+        detail?.jobRequisitionLocation?.country?.alpha2Code || null;
+      if (alpha2 && alpha2 !== "US") return false;
+      // List said recent; drop if the detail's real posting date disagrees.
+      const age = ageDaysFromIsoDate(detail?.startDate, now);
+      return age == null || age <= ID_SOURCE_MAX_AGE_DAYS + 1;
+    },
+  });
+  return results.map(({ row, detail }) => ({ reqId: row.id, list: row.raw, detail, careerUrl: parsed.careerUrl }));
+}
+
+/**
+ * ----------------------------
+ * ORACLE RECRUITING CLOUD
+ * Career sites at https://<pod>.fa.<region>.oraclecloud.com/hcmUI/CandidateExperience/<locale>/sites/<site>
+ * (Oracle, JPMorgan Chase, Goldman Sachs, Dell, Ford, Texas Instruments, …)
+ * expose the REST resources the page uses:
+ *   GET <host>/hcmRestApi/resources/latest/recruitingCEJobRequisitions
+ *       ?onlyData=true&expand=requisitionList.secondaryLocations
+ *       &finder=findReqs;siteNumber=<site>,sortBy=POSTING_DATES_DESC,limit=N,offset=M
+ *   GET <host>/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails
+ *       ?expand=all&onlyData=true&finder=ById;siteNumber=<site>,Id="<id>"
+ * The list carries PostedDate (day) and an exact PrimaryLocationCountry; the
+ * detail carries the full posting timestamp and description.
+ * ----------------------------
+ */
+const oracleLimiter = pLimit(ORACLE_CONCURRENCY);
+
+function parseOracleFeedUrl(feedUrl) {
+  let u;
+  try {
+    u = new URL(String(feedUrl || "").trim());
+  } catch {
+    return null;
+  }
+  if (!/\.oraclecloud\.com$/i.test(u.hostname)) return null;
+  const m = u.pathname.match(/\/hcmUI\/CandidateExperience\/([a-z]{2}(?:-[A-Z]{2})?)\/sites\/([^/?#]+)/i);
+  if (!m) return null;
+  const site = m[2];
+  const base = `https://${u.hostname}`;
+  return {
+    host: u.hostname,
+    site,
+    apiBase: `${base}/hcmRestApi/resources/latest`,
+    careerUrl: `${base}/hcmUI/CandidateExperience/en/sites/${site}`,
+  };
+}
+
+async function oracleFetchJson(url, maxRetries = 3) {
+  return oracleLimiter(async () => {
+    let attempts = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const resp = await fetch(url, {
+        headers: {
+          accept: "application/json",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+      if (resp.ok) return await resp.json();
+      const retryable = resp.status === 429 || resp.status >= 500;
+      if (retryable && attempts < maxRetries) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, (resp.status === 429 ? 5000 : 1500) * attempts));
+        continue;
+      }
+      const text = await safeReadText(resp);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(text || "").slice(0, 200)}`);
+    }
+  });
+}
+
+function oracleListUrl(parsed, offset) {
+  const finder = `findReqs;siteNumber=${parsed.site},sortBy=POSTING_DATES_DESC,limit=${ORACLE_PAGE_SIZE},offset=${offset}`;
+  return `${parsed.apiBase}/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=${finder}`;
+}
+
+function oracleDetailUrl(parsed, id) {
+  return `${parsed.apiBase}/recruitingCEJobRequisitionDetails?expand=all&onlyData=true&finder=ById;siteNumber=${parsed.site},Id=%22${encodeURIComponent(id)}%22`;
+}
+
+/** Oracle adapter. Returns [{ id, list, detail, careerUrl }] for normalizeJobMinimal. */
+async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget }) {
+  const parsed = parseOracleFeedUrl(url);
+  if (!parsed) throw new Error(`Not an Oracle Recruiting Cloud career site URL: ${url}`);
+
+  const results = await fetchNewJobsById({
+    userId, feedId, now, runBudget,
+    source: "oracle",
+    label: `Oracle ${parsed.host.split(".")[0]}/${parsed.site}`,
+    pageSize: ORACLE_PAGE_SIZE,
+    fetchPage: async (offset) => {
+      const page = await oracleFetchJson(oracleListUrl(parsed, offset));
+      const item = Array.isArray(page?.items) ? page.items[0] : null;
+      const rows = (Array.isArray(item?.requisitionList) ? item.requisitionList : []).map((raw) => ({
+        id: raw.Id != null ? String(raw.Id) : null,
+        ageDays: ageDaysFromIsoDate(raw.PostedDate, now),
+        // Exact country code on every row; unknown → decide from the detail.
+        looksUS: raw.PrimaryLocationCountry ? raw.PrimaryLocationCountry === "US" : true,
+        raw,
+      }));
+      return { rows, total: item?.TotalJobsCount };
+    },
+    fetchDetail: async (row) => {
+      const d = await oracleFetchJson(oracleDetailUrl(parsed, row.id));
+      return Array.isArray(d?.items) ? d.items[0] || null : null;
+    },
+    keep: (row, detail) => {
+      const country = detail?.PrimaryLocationCountry || row.raw.PrimaryLocationCountry || null;
+      if (country && country !== "US") return false;
+      const age = ageDaysFromIsoDate(detail?.ExternalPostedStartDate, now);
+      return age == null || age <= ID_SOURCE_MAX_AGE_DAYS + 1;
+    },
+  });
+  return results.map(({ row, detail }) => ({ id: row.id, list: row.raw, detail, careerUrl: parsed.careerUrl }));
 }
 
 /**
@@ -1297,6 +1461,87 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
 function normalizeJobMinimal(rawJob, ctx) {
   const { source, companyName, companyKey, now, url } = ctx;
   if (!rawJob || typeof rawJob !== "object") return null;
+
+  if (source === "oracle") {
+    // rawJob comes from fetchOracleNewJobs: { id, list, detail, careerUrl }.
+    // `detail` is null when the detail fetch failed; the list row is enough to
+    // write the job, and scoring will re-fetch the description.
+    const list = rawJob.list || {};
+    const detail = rawJob.detail || {};
+    const externalId = rawJob.id || (list.Id != null ? String(list.Id) : null);
+    const jobUrl = externalId && rawJob.careerUrl ? `${rawJob.careerUrl}/job/${externalId}` : null;
+    if (!externalId && !jobUrl) return null;
+
+    const title = detail.Title || list.Title || null;
+
+    const locParts = [];
+    const primary = detail.PrimaryLocation || list.PrimaryLocation;
+    if (primary) locParts.push(String(primary));
+    const secondary = Array.isArray(detail.secondaryLocations) ? detail.secondaryLocations
+      : (Array.isArray(list.secondaryLocations) ? list.secondaryLocations : []);
+    for (const l of secondary) {
+      const name = l && (l.Name || l.LocationName);
+      if (name) locParts.push(String(name));
+    }
+    const locationName = locParts.join("; ") || null;
+    const locationTokens = extractLocationTokens(locationName);
+    const stateCodes = extractStateCodes(locationTokens);
+    const country = detail.PrimaryLocationCountry || list.PrimaryLocationCountry || null;
+    // "United States" alone (national remote) has no city/state token; the
+    // country code says US, so add the phrase jobMatchesLocationFilter accepts.
+    if (country === "US" && !locationTokens.includes("United States")) locationTokens.push("United States");
+
+    // The detail has the real posting timestamp; the list only has the day.
+    const postedDay = list.PostedDate ? String(list.PostedDate).slice(0, 10) : null;
+    const detailTs = toTimestampOrNull(detail.ExternalPostedStartDate);
+    const isToday = ageDaysFromIsoDate(postedDay, now) === 0;
+    const sourceUpdatedTs = detailTs || (isToday || !postedDay ? now : toTimestampOrNull(`${postedDay}T00:00:00Z`)) || now;
+    const sourceUpdatedIso = sourceUpdatedTs.toDate().toISOString();
+
+    const workplace = detail.WorkplaceType || list.WorkplaceType || null;
+    const meta = {};
+    if (externalId) meta["Req ID"] = externalId;
+    if (postedDay) meta["Posted"] = postedDay;
+    if (list.PostingEndDate) meta["Apply By"] = String(list.PostingEndDate).slice(0, 10);
+    if (workplace) meta["Workplace Type"] = workplace;
+    if (detail.JobFamily || list.JobFamily) meta["Job Family"] = detail.JobFamily || list.JobFamily;
+    if (list.JobSchedule) meta["Schedule"] = list.JobSchedule;
+
+    const remote = /remote/i.test(`${workplace || ""} ${locationName || ""}`);
+    const descHtml = [
+      detail.ExternalDescriptionStr,
+      detail.ExternalResponsibilitiesStr,
+      detail.ExternalQualificationsStr,
+      !detail.ExternalDescriptionStr ? list.ShortDescriptionStr : null,
+    ].filter(Boolean).join("\n");
+    const fullDescription = descHtml ? stripHtml(descHtml) : null;
+
+    const jobDocId = makeJobDocId({
+      source: "oracle",
+      companyKey,
+      externalId: externalId || jobUrl,
+    });
+
+    return {
+      jobDocId,
+      source: "oracle",
+      companyKey,
+      companyName,
+      externalId,
+      title,
+      jobUrl,
+      locationName,
+      locationTokens,
+      stateCodes,
+      workplaceType: workplace,
+      isRemote: remote ? true : null,
+      sourceUpdatedTs,
+      sourceUpdatedIso,
+      meta,
+      fullDescription,
+      mapLocation: normalizeToMapLocation(primary ? String(primary) : locationName),
+    };
+  }
 
   if (source === "workday") {
     // rawJob comes from fetchWorkdayNewJobs: { reqId, list, detail, careerUrl }.
@@ -1804,6 +2049,17 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
       const d = await workdayFetchJson(`${parsed.apiBase}${hit.externalPath}`);
       const raw = d?.jobPostingInfo?.jobDescription || "";
       return raw ? stripHtml(raw) : null;
+    }
+
+    if (source === "oracle") {
+      // Only reached when the detail fetch failed during sync.
+      const parsed = parseOracleFeedUrl(feedUrl);
+      if (!parsed || !externalId) return null;
+      const d = await oracleFetchJson(oracleDetailUrl(parsed, externalId));
+      const it = Array.isArray(d?.items) ? d.items[0] : null;
+      const html = [it?.ExternalDescriptionStr, it?.ExternalResponsibilitiesStr, it?.ExternalQualificationsStr]
+        .filter(Boolean).join("\n");
+      return html ? stripHtml(html) : null;
     }
 
     return null;
