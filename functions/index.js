@@ -2759,7 +2759,7 @@ exports.mapFormFields = onCall(
         ? `\n\nIMPORTANT — Previous submit attempt failed with these validation errors:\n${errorContext.map(e => `  - ${e}`).join("\n")}\nYou MUST provide correct, non-empty answers for those specific fields.`
         : "";
 
-      const prompt = `You are filling out a job application for "${jobTitle}" at "${companyName}".
+      const prompt = `You are filling out a job application for "${jobTitle || "the advertised role"}" at "${companyName || "the hiring company"}".
 Job location: ${jobLocationName || "Not specified"} (workplace type: ${jobWorkplaceType || "unspecified"}).${errorSection}
 
 Candidate profile:
@@ -2791,6 +2791,7 @@ Rules:
 - For "how did you hear about us?" → "LinkedIn"
 - For salary / compensation questions → "Open to discussion"
 - For cover letter / essay / motivation fields → write 2–3 natural sentences from the candidate's summary and experience.
+- Only ever refer to the hiring company by the exact name given above${companyName ? ` ("${companyName}")` : ""}; if no company name was given, write the answer without naming any company. NEVER mention a different company as the one being applied to.
 - CRITICAL WRITING STYLE: You MUST write like a real human. DO NOT use em dashes. DO NOT use typical AI buzzwords, bullet points, or standard AI essay structures. It is highly encouraged to include minor, natural grammatical imperfections (like missing a comma or using casual phrasing) so it passes as human. The primary goal is to sound completely organic to maximize the chances of getting an interview callback.
 - For "when can you start?" → use the availability field above.
 - For unknown text fields → a brief, natural answer based on the profile.
