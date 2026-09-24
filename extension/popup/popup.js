@@ -149,6 +149,27 @@ function selectedSource() {
   return document.querySelector('input[name="feed-source"]:checked')?.value || "greenhouse";
 }
 
+// Workday feeds are keyed by the career-site URL, not a company slug. Same
+// parsing as parseWorkdayFeedUrl in functions/index.js.
+function parseWorkdayCareerUrl(raw) {
+  let u;
+  try {
+    u = new URL((raw || "").trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.match(/^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$/i);
+  if (!host) return null;
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length && /^[a-z]{2}-[A-Z]{2}$/.test(parts[0])) parts.shift();
+  const site = parts[0];
+  if (!site || site === "wday") return null;
+  return {
+    careerUrl: `https://${u.hostname}/${site}`,
+    apiUrl: `https://${u.hostname}/wday/cxs/${host[1]}/${site}/jobs`,
+  };
+}
+
 // ── Live endpoint check: runs on every company/radio change ──────────────────
 // green = endpoint returns real job data, red = 404 / empty / unreachable.
 let endpointStatus = "idle"; // idle | checking | valid | invalid
@@ -168,6 +189,25 @@ function updateUrlPreview() {
 
   clearTimeout(checkTimer);
   if (checkController) checkController.abort();
+
+  // Workday's endpoint sends no CORS headers, so it can't be probed from here.
+  // Validate the URL shape; the first backend sync verifies it for real.
+  $("feed-workday-field").style.display = source === "workday" ? "" : "none";
+  if (source === "workday") {
+    const raw = $("feed-workday-url").value;
+    const wd = parseWorkdayCareerUrl(raw);
+    if (!raw.trim()) {
+      endpointStatus = "idle";
+      paintPreview("Paste the company's Workday career page; the endpoint is derived from it.", "#9ca3af");
+    } else if (wd) {
+      endpointStatus = "valid";
+      paintPreview(`${wd.apiUrl} — verified on first sync`, "#059669");
+    } else {
+      endpointStatus = "invalid";
+      paintPreview("Not a Workday career site URL — expected https://<company>.wd5.myworkdayjobs.com/<SiteName>", "#dc2626");
+    }
+    return;
+  }
 
   if (!slug) {
     endpointStatus = "idle";
@@ -203,6 +243,7 @@ function updateUrlPreview() {
 }
 
 $("feed-company").addEventListener("input", updateUrlPreview);
+$("feed-workday-url").addEventListener("input", updateUrlPreview);
 document.querySelectorAll('input[name="feed-source"]').forEach((r) =>
   r.addEventListener("change", updateUrlPreview)
 );
@@ -229,9 +270,15 @@ function submitFeed() {
     return;
   }
   if (endpointStatus !== "valid") {
-    setFeedStatus("This endpoint has no job data. Check the company name and job board.", "error");
+    setFeedStatus(
+      source === "workday"
+        ? "Paste the company's Workday career site URL (https://<company>.wd5.myworkdayjobs.com/<SiteName>)."
+        : "This endpoint has no job data. Check the company name and job board.",
+      "error"
+    );
     return;
   }
+  const workdayUrl = source === "workday" ? parseWorkdayCareerUrl($("feed-workday-url").value)?.careerUrl : undefined;
 
   const btn = $("btn-add-feed");
   btn.disabled = true;
@@ -255,15 +302,16 @@ function submitFeed() {
     );
   }, 15000);
 
-  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source }, (res) => {
+  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source, url: workdayUrl }, (res) => {
     finish(() => {
       if (chrome.runtime.lastError || !res?.ok) {
         setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
         return;
       }
-      const label = source === "ashby" ? "AshbyHQ" : "Greenhouse";
+      const label = source === "ashby" ? "AshbyHQ" : source === "workday" ? "Workday" : "Greenhouse";
       setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
       $("feed-company").value = "";
+      $("feed-workday-url").value = "";
       updateUrlPreview();
     });
   });

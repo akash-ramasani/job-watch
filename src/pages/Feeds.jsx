@@ -75,11 +75,44 @@ const URL_RULES = {
     isValid: (u) => u.includes("explore.jobs.netflix.net/api/apply/v2/jobs"),
     normalize: (u) => u.trim(),
   },
+  workday: {
+    label: "Workday Career Site URL",
+    placeholder: "https://<company>.wd5.myworkdayjobs.com/<SiteName>",
+    isValid: (u) => parseWorkdayCareerUrl(u) !== null,
+    normalize: (u) => parseWorkdayCareerUrl(u)?.careerUrl || u.trim(),
+  },
 };
+
+// Workday career pages are https://<tenant>.wd<N>.myworkdayjobs.com/<site>, often
+// copied with a locale or job path attached. Reduce to the canonical site URL —
+// the backend derives the JSON endpoint (/wday/cxs/<tenant>/<site>/jobs) from it.
+// Mirrors parseWorkdayFeedUrl in functions/index.js.
+function parseWorkdayCareerUrl(raw) {
+  let u;
+  try {
+    u = new URL((raw || "").trim());
+  } catch {
+    return null;
+  }
+  const host = u.hostname.match(/^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$/i);
+  if (!host) return null;
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length && /^[a-z]{2}-[A-Z]{2}$/.test(parts[0])) parts.shift();
+  const site = parts[0];
+  if (!site || site === "wday") return null;
+  const tenant = host[1];
+  return {
+    tenant,
+    site,
+    careerUrl: `https://${u.hostname}/${site}`,
+    apiUrl: `https://${u.hostname}/wday/cxs/${tenant}/${site}/jobs`,
+  };
+}
 
 const JOB_SOURCES = [
   { id: "greenhouse", title: "Greenhouse" },
   { id: "ashby", title: "AshbyHQ" },
+  { id: "workday", title: "Workday" },
 ];
 
 function companyToSlug(name) {
@@ -108,6 +141,7 @@ function detectSourceFromUrl(raw) {
   if (u.includes("api.ashbyhq.com/posting-api/job-board/")) return "ashby";
   if (u.includes("explore.jobs.netflix.net/api/apply/v2/jobs")) return "netflix";
   if (u.includes("/api/pcsx/search")) return "eightfold";
+  if (u.includes(".myworkdayjobs.com/")) return "workday";
   return "greenhouse";
 }
 
@@ -115,6 +149,7 @@ function prettySourceLabel(source) {
   if (source === "ashby" || source === "ashbyhq") return "AshbyHQ";
   if (source === "eightfold") return "Eightfold.ai";
   if (source === "netflix") return "Netflix";
+  if (source === "workday") return "Workday";
   return "Greenhouse";
 }
 
@@ -135,7 +170,9 @@ function validateUrlForSource(source, rawUrl) {
           ? "Eightfold/Microsoft URL should look like: https://<domain>/api/pcsx/search?domain=<domain>&..."
           : source === "netflix"
             ? "Netflix URL should look like: https://explore.jobs.netflix.net/api/apply/v2/jobs?domain=netflix.com&..."
-            : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
+            : source === "workday"
+              ? "Workday URL should look like: https://<company>.wd5.myworkdayjobs.com/<SiteName>"
+              : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
   }
   return { ok: true, normalizedUrl: rules.normalize(cleanUrl) };
@@ -153,6 +190,11 @@ function getDomainFromFeed(feed) {
     }
     // Netflix
     if (feed.source === "netflix") return "netflix.com";
+    // Workday: tenant subdomain is usually the company's own domain name
+    if (feed.source === "workday" || url.includes(".myworkdayjobs.com/")) {
+      const wd = parseWorkdayCareerUrl(url);
+      if (wd) return `${wd.tenant}.com`;
+    }
     // Greenhouse
     if (url.includes("greenhouse.io")) {
       const parts = url.split("/");
@@ -212,6 +254,8 @@ export default function Feeds({ user }) {
 
   const [company, setCompany] = useState(searchParams.get("company") || "");
   const [source, setSource] = useState("greenhouse");
+  // Workday feeds are keyed by the career-site URL, not a company slug.
+  const [workdayUrl, setWorkdayUrl] = useState("");
   // idle | checking | valid | invalid — live probe of the built endpoint
   const [endpointCheck, setEndpointCheck] = useState({ status: "idle", jobCount: 0 });
   const [feeds, setFeeds] = useState([]);
@@ -233,6 +277,20 @@ export default function Feeds({ user }) {
 
   // Live-check the built endpoint on every company/radio change (debounced).
   useEffect(() => {
+    // Workday's JSON endpoint sends no CORS headers, so the browser can't probe
+    // it. Validate the URL shape here; the first sync verifies it for real and
+    // surfaces any problem in the feed's lastError.
+    if (source === "workday") {
+      const wd = parseWorkdayCareerUrl(workdayUrl);
+      setEndpointCheck(
+        !workdayUrl.trim()
+          ? { status: "idle", jobCount: 0 }
+          : wd
+            ? { status: "valid", jobCount: 0 }
+            : { status: "invalid", jobCount: 0 }
+      );
+      return;
+    }
     const slug = companyToSlug(company);
     if (!slug) {
       setEndpointCheck({ status: "idle", jobCount: 0 });
@@ -258,15 +316,16 @@ export default function Feeds({ user }) {
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [company, source]);
+  }, [company, source, workdayUrl]);
 
   async function addFeed(e) {
     e.preventDefault();
     const cleanCompany = company.trim();
     if (!cleanCompany) return;
 
+    const isWorkday = source === "workday";
     const slug = companyToSlug(cleanCompany);
-    if (!slug) {
+    if (!isWorkday && !slug) {
       showToast("Please enter a valid company name.", "error");
       return;
     }
@@ -276,11 +335,16 @@ export default function Feeds({ user }) {
       return;
     }
     if (endpointCheck.status !== "valid") {
-      showToast("This endpoint has no job data. Check the company name and job board.", "error");
+      showToast(
+        isWorkday
+          ? "Paste the company's Workday career site URL (https://<company>.wd5.myworkdayjobs.com/<SiteName>)."
+          : "This endpoint has no job data. Check the company name and job board.",
+        "error"
+      );
       return;
     }
 
-    const builtUrl = buildFeedUrl(source, slug);
+    const builtUrl = isWorkday ? workdayUrl : buildFeedUrl(source, slug);
     const v = validateUrlForSource(source, builtUrl);
     if (!v.ok) {
       showToast(v.error, "error");
@@ -309,6 +373,7 @@ export default function Feeds({ user }) {
         "success"
       );
       setCompany("");
+      setWorkdayUrl("");
     } catch (err) {
       console.error(err);
       showToast("Failed to add feed. Please try again.", "error");
@@ -392,7 +457,7 @@ export default function Feeds({ user }) {
     <div className="page-wrapper">
       <div className="page-header">
         <h1>Feed Management</h1>
-        <p>Connect Greenhouse and AshbyHQ job boards, manage your sources, and trigger syncs.</p>
+        <p>Connect Greenhouse, AshbyHQ and Workday job boards, manage your sources, and trigger syncs.</p>
       </div>
 
       <div className="section-grid">
@@ -402,8 +467,9 @@ export default function Feeds({ user }) {
           </h2>
           <p className="mt-2 text-sm text-indigo-900/80 leading-relaxed">
             Connect <span className="font-semibold">Greenhouse</span>,{" "}
-            <span className="font-semibold">AshbyHQ</span>, and{" "}
-            <span className="font-semibold">Eightfold.ai</span> (Microsoft, PayPal, Nvidia, etc.) job boards.
+            <span className="font-semibold">AshbyHQ</span>,{" "}
+            <span className="font-semibold">Workday</span> (NVIDIA, Salesforce, Intel, etc.) and{" "}
+            <span className="font-semibold">Eightfold.ai</span> (Microsoft, etc.) job boards.
           </p>
 
           <div className="mt-6">
@@ -432,9 +498,24 @@ export default function Feeds({ user }) {
                   value={company}
                   onChange={(e) => setCompany(e.target.value)}
                   className="input-standard mt-2"
-                  placeholder="e.g. otter, stradahq, thetradedesk"
+                  placeholder={source === "workday" ? "e.g. NVIDIA, Salesforce, Intel" : "e.g. otter, stradahq, thetradedesk"}
                 />
               </div>
+
+              {source === "workday" && (
+                <div className="col-span-full">
+                  <label className="block text-xs font-black uppercase tracking-widest text-gray-400">
+                    Workday Career Site URL
+                  </label>
+                  <input
+                    value={workdayUrl}
+                    onChange={(e) => setWorkdayUrl(e.target.value)}
+                    className="input-standard mt-2"
+                    placeholder={URL_RULES.workday.placeholder}
+                    spellCheck={false}
+                  />
+                </div>
+              )}
 
               <div className="col-span-full">
                 <fieldset>
@@ -468,15 +549,21 @@ export default function Feeds({ user }) {
                         : "text-gray-400"
                   }`}
                 >
-                  {companyToSlug(company)
-                    ? `${buildFeedUrl(source, companyToSlug(company))}${
-                        endpointCheck.status === "valid"
-                          ? ` — ${endpointCheck.jobCount} jobs live`
-                          : endpointCheck.status === "invalid"
-                            ? " — no data at this endpoint"
-                            : " — checking…"
-                      }`
-                    : "The API endpoint is built automatically from the company name."}
+                  {source === "workday"
+                    ? parseWorkdayCareerUrl(workdayUrl)
+                      ? `${parseWorkdayCareerUrl(workdayUrl).apiUrl} — verified on first sync`
+                      : workdayUrl.trim()
+                        ? "Not a Workday career site URL — expected https://<company>.wd5.myworkdayjobs.com/<SiteName>"
+                        : "Paste the company's Workday career page; the JSON endpoint is derived from it."
+                    : companyToSlug(company)
+                      ? `${buildFeedUrl(source, companyToSlug(company))}${
+                          endpointCheck.status === "valid"
+                            ? ` — ${endpointCheck.jobCount} jobs live`
+                            : endpointCheck.status === "invalid"
+                              ? " — no data at this endpoint"
+                              : " — checking…"
+                        }`
+                      : "The API endpoint is built automatically from the company name."}
                 </p>
               </div>
             </div>

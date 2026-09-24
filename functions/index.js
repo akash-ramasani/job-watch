@@ -85,6 +85,17 @@ const FEED_CONCURRENCY = 15;
 const RECENT_WINDOW_MINUTES = 20;
 const TTL_DAYS = 3;
 
+// Workday: the public list endpoint has no timestamps (only "Posted Today" style
+// text), so new jobs are detected by ID against users/{uid}/feedState/{feedId}
+// instead of by the RECENT_WINDOW cutoff. Workday rate-limits bursty clients
+// (HTTP 429 for a few minutes), so all Workday HTTP goes through one limiter.
+const WORKDAY_CONCURRENCY = 4;
+const WORKDAY_PAGE_SIZE = 20; // hard cap on the Workday side
+const WORKDAY_MAX_AGE_DAYS = TTL_DAYS; // never write a posting older than this
+const WORKDAY_MAX_NEW_PER_FEED = 15; // per run; the rest stays unseen and drains next run
+const WORKDAY_MAX_NEW_PER_RUN = 150; // across all Workday feeds, keeps sync+scoring in budget
+const WORKDAY_MAX_PAGES = 25; // safety stop when walking a list newest-first
+
 /**
  * Allowed origins for CORS. Set ALLOWED_ORIGINS env var as comma-separated list
  * to override (e.g. your Vercel domain). Localhost is always included for dev.
@@ -701,6 +712,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   }
 
   const limiter = pLimit(FEED_CONCURRENCY);
+  const workdayRunBudget = { remaining: WORKDAY_MAX_NEW_PER_RUN };
   const bw = db.bulkWriter();
 
   bw.onWriteError((err) => {
@@ -752,7 +764,14 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
         );
 
         const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
-        const rawJobs = await fetchJobsFromFeed(url, source, recentCutoffMs);
+        const isWorkday = source === "workday";
+
+        // Workday has no list timestamps: fetchWorkdayNewJobs returns only jobs
+        // whose IDs we have never seen for this feed (already US-filtered and
+        // detail-enriched), so the recency cutoff below does not apply to it.
+        const rawJobs = isWorkday
+          ? await fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget: workdayRunBudget })
+          : await fetchJobsFromFeed(url, source, recentCutoffMs);
         jobsFetched += rawJobs.length;
 
         const normalized = rawJobs
@@ -761,9 +780,11 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
         const locationFiltered = normalized.filter(jobMatchesLocationFilter);
 
-        const recentOnly = locationFiltered.filter(
-          (j) => j.sourceUpdatedTs && j.sourceUpdatedTs.toMillis() >= recentCutoff.toMillis()
-        );
+        const recentOnly = isWorkday
+          ? locationFiltered
+          : locationFiltered.filter(
+            (j) => j.sourceUpdatedTs && j.sourceUpdatedTs.toMillis() >= recentCutoff.toMillis()
+          );
 
         jobsKeptRecent += recentOnly.length;
 
@@ -1037,6 +1058,238 @@ async function safeReadText(resp) {
 
 /**
  * ----------------------------
+ * WORKDAY
+ * Public career sites at https://<tenant>.wd<N>.myworkdayjobs.com/<site> expose
+ * the same JSON the page itself loads:
+ *   POST <base>/wday/cxs/<tenant>/<site>/jobs  {limit, offset, searchText, appliedFacets}
+ *   GET  <base>/wday/cxs/<tenant>/<site>/job/<path>  → jobPostingInfo (startDate, jobDescription, …)
+ * The list is newest-first but only carries "Posted Today"-style text, so new
+ * jobs are detected by req ID: walk the list until a page has no unseen IDs,
+ * remembering seen IDs in users/{uid}/feedState/{feedId}. Details (real posting
+ * date + full description) are fetched only for unseen jobs.
+ * ----------------------------
+ */
+const workdayLimiter = pLimit(WORKDAY_CONCURRENCY);
+
+/**
+ * Accepts a career-page URL in any of the shapes people copy from the browser:
+ *   https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite
+ *   https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/details/...
+ * Returns null when the host is not a Workday career site.
+ */
+function parseWorkdayFeedUrl(feedUrl) {
+  let u;
+  try {
+    u = new URL(String(feedUrl || "").trim());
+  } catch {
+    return null;
+  }
+  const hostMatch = u.hostname.match(/^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$/i);
+  if (!hostMatch) return null;
+  const tenant = hostMatch[1];
+  const parts = u.pathname.split("/").filter(Boolean);
+  if (parts.length && /^[a-z]{2}-[A-Z]{2}$/.test(parts[0])) parts.shift(); // locale segment
+  const site = parts[0];
+  if (!site || site === "wday") return null;
+  const base = `https://${u.hostname}`;
+  return {
+    tenant,
+    site,
+    apiBase: `${base}/wday/cxs/${tenant}/${site}`,
+    careerUrl: `${base}/${site}`,
+  };
+}
+
+async function workdayFetchJson(url, { method = "GET", body = null, maxRetries = 3 } = {}) {
+  return workdayLimiter(async () => {
+    let attempts = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const resp = await fetch(url, {
+        method,
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (resp.ok) return await resp.json();
+
+      const retryable = resp.status === 429 || resp.status >= 500;
+      if (retryable && attempts < maxRetries) {
+        attempts++;
+        // 429 is Workday's edge throttling — back off harder than fetchJson does.
+        await new Promise((r) => setTimeout(r, (resp.status === 429 ? 5000 : 1500) * attempts));
+        continue;
+      }
+      const text = await safeReadText(resp);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(text || "").slice(0, 200)}`);
+    }
+  });
+}
+
+/** "Posted Today" → 0, "Posted Yesterday" → 1, "Posted 3 Days Ago" → 3, "Posted 30+ Days Ago" → 30. Unknown → null. */
+function parseWorkdayPostedAgeDays(postedOn) {
+  const s = String(postedOn || "").toLowerCase();
+  if (!s) return null;
+  if (s.includes("today")) return 0;
+  if (s.includes("yesterday")) return 1;
+  const m = s.match(/(\d+)\+?\s*days?/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/**
+ * Cheap pre-filter on the list row's locationsText so we don't spend a detail
+ * request on Bengaluru. Ambiguous rows ("2 Locations", bare "Remote") pass and
+ * are decided after the detail fetch from the country code.
+ */
+function workdayLocationLooksUS(locationsText) {
+  const text = String(locationsText || "").trim();
+  if (!text) return true;
+  if (/^\d+\s+locations?$/i.test(text)) return true;
+  if (NON_US_LOCATION_RE.test(text)) return false;
+  if (/\b(united states|usa|u\.s\.a?\.?|us)\b/i.test(text)) return true;
+  if (/\bremote\b/i.test(text)) return true;
+  return jobMatchesLocationFilter({ locationTokens: extractLocationTokens(text) });
+}
+
+function workdayReqIdFromRow(row) {
+  if (Array.isArray(row?.bulletFields) && row.bulletFields[0]) return String(row.bulletFields[0]);
+  if (row?.externalPath) {
+    const tail = String(row.externalPath).split("_").pop();
+    if (tail) return tail;
+  }
+  return null;
+}
+
+/**
+ * Returns only jobs never seen before for this feed, already US-filtered and
+ * detail-enriched, as { reqId, list, detail, careerUrl } for normalizeJobMinimal.
+ *
+ * First run for a feed = seed: every ID in the TTL window is marked seen, but only
+ * postings from today are processed, so a new feed doesn't flood scoring. Per-run
+ * caps leave the overflow unseen; it drains on the following runs.
+ */
+async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
+  const parsed = parseWorkdayFeedUrl(url);
+  if (!parsed) throw new Error(`Not a Workday career site URL: ${url}`);
+
+  const stateRef = db.collection("users").doc(userId).collection("feedState").doc(feedId);
+  const stateSnap = await stateRef.get();
+  const state = stateSnap.exists ? stateSnap.data() : null;
+  const seen = { ...(state?.seenIds || {}) };
+  const isFirstRun = !state;
+  const todayIso = now.toDate().toISOString().slice(0, 10);
+  const maxAgeToProcess = isFirstRun ? 0 : WORKDAY_MAX_AGE_DAYS;
+
+  const candidates = []; // unseen, in-window, plausibly-US rows, newest first
+  const newlySeen = {}; // reqId → first-seen date; rows we can retire without a detail fetch
+  let offset = 0;
+  let pages = 0;
+  let total = null;
+
+  while (pages < WORKDAY_MAX_PAGES) {
+    const page = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
+      method: "POST",
+      body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: "" },
+    });
+    pages++;
+    const rows = Array.isArray(page?.jobPostings) ? page.jobPostings : [];
+    if (total == null) total = Number(page?.total) || 0;
+    if (rows.length === 0) break;
+
+    let unseenInWindow = 0;
+    let reachedOldRows = false;
+    for (const row of rows) {
+      const reqId = workdayReqIdFromRow(row);
+      if (!reqId || seen[reqId] || newlySeen[reqId]) continue;
+
+      const ageDays = parseWorkdayPostedAgeDays(row.postedOn);
+      if (ageDays != null && ageDays > WORKDAY_MAX_AGE_DAYS) {
+        // Older than the TTL window. Not recorded: age alone retires it on every
+        // later run, which keeps feedState small (in-window IDs only).
+        reachedOldRows = true;
+        continue;
+      }
+      unseenInWindow++;
+      if (ageDays != null && ageDays > maxAgeToProcess) {
+        newlySeen[reqId] = todayIso;
+        continue;
+      }
+      if (!workdayLocationLooksUS(row.locationsText)) {
+        newlySeen[reqId] = todayIso;
+        continue;
+      }
+      candidates.push({ reqId, list: row });
+    }
+
+    // Newest-first list: a page with nothing new in the window means every
+    // page below it is known (or too old) as well.
+    if (unseenInWindow === 0 || reachedOldRows) break;
+    offset += WORKDAY_PAGE_SIZE;
+    if (total && offset >= total) break;
+  }
+
+  const feedCap = Math.max(0, Math.min(WORKDAY_MAX_NEW_PER_FEED, runBudget.remaining));
+  const toProcess = candidates.slice(0, feedCap);
+  runBudget.remaining -= toProcess.length;
+
+  const results = [];
+  await Promise.all(
+    toProcess.map(async ({ reqId, list }) => {
+      let detail = null;
+      try {
+        const d = await workdayFetchJson(`${parsed.apiBase}${list.externalPath}`);
+        detail = d?.jobPostingInfo || null;
+      } catch (e) {
+        // Written without a description; scoring retries via fetchJobDescription.
+        logger.warn(`Workday detail failed feedId=${feedId} reqId=${reqId}: ${e.message}`);
+      }
+      newlySeen[reqId] = todayIso;
+
+      const alpha2 = detail?.country?.alpha2Code ||
+        detail?.jobRequisitionLocation?.country?.alpha2Code || null;
+      if (alpha2 && alpha2 !== "US") return;
+      if (detail?.startDate) {
+        const ageMs = now.toMillis() - new Date(`${detail.startDate}T00:00:00Z`).getTime();
+        if (ageMs > (WORKDAY_MAX_AGE_DAYS + 1) * 86400000) return; // list said recent, detail disagrees
+      }
+      results.push({ reqId, list, detail, careerUrl: parsed.careerUrl });
+    })
+  );
+
+  if (isFirstRun || Object.keys(newlySeen).length > 0) {
+    // Drop IDs first seen long ago — the age rule retires them without a lookup.
+    const pruneBefore = new Date(now.toMillis() - 45 * 86400000).toISOString().slice(0, 10);
+    const merged = {};
+    for (const [id, firstSeen] of Object.entries(seen)) {
+      if (String(firstSeen) >= pruneBefore) merged[id] = firstSeen;
+    }
+    Object.assign(merged, newlySeen);
+    await stateRef.set(
+      {
+        source: "workday",
+        seenIds: merged,
+        seenCount: Object.keys(merged).length,
+        listedTotal: total,
+        updatedAt: now,
+        ...(isFirstRun ? { seededAt: now } : {}),
+      },
+      { merge: true }
+    );
+  }
+
+  logger.info(
+    `Workday feedId=${feedId} ${parsed.tenant}/${parsed.site}: pages=${pages} listed=${total} ` +
+    `candidates=${candidates.length} processed=${toProcess.length} kept=${results.length}` +
+    `${isFirstRun ? " (seed run)" : ""}${candidates.length > toProcess.length ? " (capped, rest next run)" : ""}`
+  );
+  return results;
+}
+
+/**
+ * ----------------------------
  * NORMALIZATION (MINIMAL)
  * - NO contentHtml, NO isRemote, NO applyUrl
  * ----------------------------
@@ -1044,6 +1297,84 @@ async function safeReadText(resp) {
 function normalizeJobMinimal(rawJob, ctx) {
   const { source, companyName, companyKey, now, url } = ctx;
   if (!rawJob || typeof rawJob !== "object") return null;
+
+  if (source === "workday") {
+    // rawJob comes from fetchWorkdayNewJobs: { reqId, list, detail, careerUrl }.
+    // `detail` is null when the detail fetch failed; the list row is enough to
+    // write the job, and scoring will re-fetch the description.
+    const list = rawJob.list || {};
+    const detail = rawJob.detail || {};
+    const externalId = rawJob.reqId || detail.jobReqId || null;
+    const externalPath = list.externalPath ? String(list.externalPath) : null;
+    const jobUrl = detail.externalUrl
+      ? String(detail.externalUrl)
+      : (externalPath && rawJob.careerUrl ? `${rawJob.careerUrl}${externalPath}` : null);
+    if (!externalId && !jobUrl) return null;
+
+    const title = detail.title || list.title || null;
+
+    // The detail carries real location descriptors; the list may only say "2 Locations".
+    const locParts = [];
+    if (detail.location) locParts.push(String(detail.location));
+    if (Array.isArray(detail.additionalLocations)) {
+      for (const l of detail.additionalLocations) if (l) locParts.push(String(l));
+    }
+    if (locParts.length === 0 && list.locationsText && !/^\d+\s+locations?$/i.test(list.locationsText)) {
+      locParts.push(String(list.locationsText));
+    }
+    const locationName = locParts.join("; ") || null;
+    const locationTokens = extractLocationTokens(locationName);
+    const stateCodes = extractStateCodes(locationTokens);
+    const alpha2 = detail?.country?.alpha2Code ||
+      detail?.jobRequisitionLocation?.country?.alpha2Code || null;
+    // "Remote - United States" has no city/state token; the country code says US,
+    // so add the phrase jobMatchesLocationFilter already accepts.
+    if (alpha2 === "US" && !locationTokens.includes("United States")) locationTokens.push("United States");
+
+    // startDate is the real posting date (day precision, in the tenant's local
+    // day). Postings the list flags as "Posted Today" are stamped with the
+    // detection time so they sort with other sources' fresh jobs.
+    const startIso = detail.startDate ? String(detail.startDate) : null;
+    const startTs = startIso ? toTimestampOrNull(`${startIso}T00:00:00Z`) : null;
+    const isToday = parseWorkdayPostedAgeDays(list.postedOn) === 0;
+    const sourceUpdatedTs = !startTs || isToday ? now : startTs;
+    const sourceUpdatedIso = startIso ? `${startIso}T00:00:00.000Z` : now.toDate().toISOString();
+
+    const meta = {};
+    if (externalId) meta["Req ID"] = externalId;
+    if (detail.timeType) meta["Time Type"] = detail.timeType;
+    if (startIso) meta["Posted"] = startIso;
+    if (detail.remoteType) meta["Remote Type"] = detail.remoteType;
+
+    const remote = /\bremote\b/i.test(`${locationName || ""} ${detail.remoteType || ""}`);
+    const fullDescription = detail.jobDescription ? stripHtml(detail.jobDescription) : null;
+
+    const jobDocId = makeJobDocId({
+      source: "workday",
+      companyKey,
+      externalId: externalId || jobUrl,
+    });
+
+    return {
+      jobDocId,
+      source: "workday",
+      companyKey,
+      companyName,
+      externalId,
+      title,
+      jobUrl,
+      locationName,
+      locationTokens,
+      stateCodes,
+      workplaceType: detail.remoteType || null,
+      isRemote: remote ? true : null,
+      sourceUpdatedTs,
+      sourceUpdatedIso,
+      meta,
+      fullDescription,
+      mapLocation: normalizeToMapLocation(locationName),
+    };
+  }
 
   if (source.includes("greenhouse")) {
     const externalId =
@@ -1456,6 +1787,22 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
       const url = `${apiBase}/api/pcsx/position_details?position_id=${externalId}&domain=${domain}&hl=en`;
       const json = await fetchJson(url);
       const raw = json?.data?.jobDescription || "";
+      return raw ? stripHtml(raw) : null;
+    }
+
+    if (source === "workday") {
+      // Only reached when the detail fetch failed during sync. Workday's search
+      // indexes req IDs, so look the posting up by ID and read its detail.
+      const parsed = parseWorkdayFeedUrl(feedUrl);
+      if (!parsed || !externalId) return null;
+      const list = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
+        method: "POST",
+        body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset: 0, searchText: String(externalId) },
+      });
+      const hit = (list?.jobPostings || []).find((row) => workdayReqIdFromRow(row) === String(externalId));
+      if (!hit?.externalPath) return null;
+      const d = await workdayFetchJson(`${parsed.apiBase}${hit.externalPath}`);
+      const raw = d?.jobPostingInfo?.jobDescription || "";
       return raw ? stripHtml(raw) : null;
     }
 

@@ -985,15 +985,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── 4. Popup: add a job board feed ──────────────────────────────────
       if (message.type === "ADD_FEED") {
         const company = (message.company || "").trim();
-        const source = message.source === "ashby" ? "ashby" : "greenhouse";
+        const source = message.source === "ashby" ? "ashby"
+          : message.source === "workday" ? "workday"
+            : "greenhouse";
         const slug = companyToSlug(company);
-        if (!company || !slug) {
+        if (!company || (source !== "workday" && !slug)) {
           sendResponse({ ok: false, error: "Please enter a valid company name." });
           return;
         }
 
+        // Workday feeds carry the career-site URL from the popup (already
+        // reduced to https://<tenant>.wd<N>.myworkdayjobs.com/<site>).
+        let url;
+        if (source === "workday") {
+          url = String(message.url || "").trim();
+          if (!/^https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[^/?#]+$/i.test(url)) {
+            sendResponse({ ok: false, error: "Please paste a valid Workday career site URL." });
+            return;
+          }
+        }
+
         const { idToken } = await getFreshToken();
-        const url = buildFeedUrl(source, slug);
+        if (!url) url = buildFeedUrl(source, slug);
 
         const existing = await fsQuery(`users/${ADMIN_UID}`, "feeds", [], idToken);
         if (existing.some((f) => (f.url || "").toLowerCase() === url.toLowerCase())) {

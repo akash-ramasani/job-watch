@@ -266,6 +266,11 @@
       <input id="feed-company" placeholder="e.g. otter, stradahq, thetradedesk" autocomplete="off" />
     </div>
 
+    <div class="field anim-slide" id="feed-workday-field" style="display:none;">
+      <label for="feed-workday-url">Workday Career Site URL</label>
+      <input id="feed-workday-url" placeholder="https://<company>.wd5.myworkdayjobs.com/<SiteName>" autocomplete="off" spellcheck="false" />
+    </div>
+
     <div class="field anim-slide">
       <label>Job Board</label>
       <div class="radio-row">
@@ -276,6 +281,10 @@
         <label class="radio-opt">
           <input type="radio" name="feed-source" value="ashby" />
           AshbyHQ
+        </label>
+        <label class="radio-opt">
+          <input type="radio" name="feed-source" value="workday" />
+          Workday
         </label>
       </div>
     </div>
