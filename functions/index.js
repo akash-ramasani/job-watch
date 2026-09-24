@@ -66,6 +66,7 @@ function requireOpenAI() {
 }
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
+const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
@@ -3151,6 +3152,7 @@ exports.generateTailoredResume = onCall(
     const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
     if (!jobSnap.exists) throw new HttpsError("not-found", "Job not found in database.");
     const job = jobSnap.data();
+    const location = chooseResumeLocation(job); // "City, ST" for the header, from the posting's location list
 
     const cacheRef = db.collection("users").doc(uid).collection("tailoredResumes").doc(jobId);
     if (!force) {
@@ -3427,10 +3429,17 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       trimmedBullets,
       droppedSkills,
       summaryReverted, // JD-only terms that made the generated summary unusable, or null
+      location: { display: location.display, tier: location.tier, reason: location.reason, candidates: location.candidates, jobLocation: job.locationName || null },
     };
 
+    // The header's location follows the job: the most important city in the
+    // posting's location list (tiered), the single city if there's one, or
+    // San Francisco for remote/unparseable. City + state only — never a street
+    // address. The user's own contact details are otherwise untouched.
+    const header = { ...(profile.header || {}), location: location.display };
+
     const resume = {
-      header: profile.header || null, // name + contact line as written on the user's own resume
+      header, // name + contact line as written on the user's own resume, location swapped per job
       summary: String(summary || "").trim(),
       skills,
       skillGroups,

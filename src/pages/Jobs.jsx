@@ -1106,6 +1106,17 @@ export default function Jobs({ user, userMeta, preferences }) {
                                 Built only from your profile. Nothing was added that you haven't written; gaps are real gaps.
                               </p>
                             </div>
+                            {r.location && (
+                              <div className="rounded-xl bg-white ring-1 ring-inset ring-gray-200 p-3">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Resume location</p>
+                                <p className="mt-1 text-sm font-bold text-gray-900">{r.location.display}</p>
+                                <p className="text-[11px] text-gray-500">
+                                  {r.location.reason}
+                                  {r.location.candidates?.length > 1 ? ` · listed: ${r.location.candidates.join(", ")}` : ""}
+                                </p>
+                                {r.location.jobLocation && <p className="text-[11px] text-gray-400 mt-0.5 truncate" title={r.location.jobLocation}>Job says: {r.location.jobLocation}</p>}
+                              </div>
+                            )}
                             <ul className="space-y-1.5">
                               {(r.requirements || []).map((q, i) => (
                                 <li key={i} className="flex gap-2 text-xs leading-snug">

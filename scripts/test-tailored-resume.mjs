@@ -70,6 +70,7 @@ console.log("\n--- REQUIREMENTS ---");
 for (const q of matchReport.requirements) console.log(`${q.covered === "yes" ? "✓" : q.covered === "partial" ? "◐" : "✗"} ${q.requirement}${q.evidence ? `  [${q.evidence}]` : ""}`);
 if (matchReport.removedBullets.length) { console.log("\n--- REMOVED BY AUDIT ---"); for (const b of matchReport.removedBullets) console.log(`- ${b.text}\n    ↳ ${b.reason}`); }
 if (matchReport.droppedSkills.length) console.log("\n--- SKILLS DROPPED (not in profile) ---", matchReport.droppedSkills.join(", "));
+if (matchReport.location) console.log(`\n--- LOCATION --- ${matchReport.location.display}  (${matchReport.location.reason}; job says: ${matchReport.location.jobLocation})`);
 console.log("\n--- SUMMARY ---\n" + resume.summary);
 console.log("\n--- SKILLS ---");
 for (const g of resume.skillGroups || [{ label: "Skills", skills: resume.skills }]) console.log(`${g.label}: ${g.skills.join(", ")}`);
