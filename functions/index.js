@@ -1072,6 +1072,58 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 }
 
 /**
+ * One-off catch-up for one feed (scripts/harvest-week.mjs): jobs posted in
+ * [since, until) that `wantJob(title, description)` accepts and that aren't in
+ * the database yet, written with an expiry no earlier than `retainUntil`.
+ * Not used by the scheduled sync; the normal 3-day TTL is untouched.
+ */
+async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUntil, weekTag, dryRun = false }) {
+  const now = admin.firestore.Timestamp.now();
+  const source = String(feed.source || "").toLowerCase();
+  let url = String(feed.url || "").trim();
+  if (source.includes("greenhouse") && !url.includes("content=true")) url += url.includes("?") ? "&content=true" : "?content=true";
+  const companyName = String(feed.companyName || feed.company || "Unknown");
+  const maxAgeDays = Math.ceil((now.toMillis() - since.getTime()) / 86400000);
+  const harvest = { maxAgeDays, dryRun, wantRow: (row) => wantJob(row.raw?.title || row.raw?.Title || "", "") };
+  const idArgs = { userId, feedId: feed.id, url, now, runBudget: { remaining: Infinity }, harvest };
+  const raw = source === "workday" ? await fetchWorkdayNewJobs(idArgs)
+    : source === "oracle" ? await fetchOracleNewJobs(idArgs)
+      : await fetchJobsFromFeed(url, source, since.getTime());
+
+  const jobs = raw
+    .map((j) => normalizeJobMinimal(j, { source, companyName, companyKey: feed.id, now, url }))
+    .filter(Boolean)
+    .filter(jobMatchesLocationFilter)
+    .filter((j) => {
+      const t = j.sourceUpdatedTs?.toMillis?.();
+      return t != null && t >= since.getTime() && t < until.getTime();
+    })
+    .filter((j) => wantJob(j.title, j.fullDescription || ""));
+  if (!jobs.length) return { fetched: raw.length, matched: 0, written: 0 };
+
+  const col = db.collection("users").doc(userId).collection("jobs");
+  const existing = [];
+  for (let i = 0; i < jobs.length; i += 300) existing.push(...(await db.getAll(...jobs.slice(i, i + 300).map((j) => col.doc(j.jobDocId)))));
+  const missing = jobs.filter((_, i) => !existing[i].exists);
+  if (dryRun) return { fetched: raw.length, matched: jobs.length, written: 0, missing: missing.length };
+  const retainTs = admin.firestore.Timestamp.fromDate(retainUntil);
+  const bw = db.bulkWriter();
+  for (const job of missing) {
+    const normal = addDaysTs(job.sourceUpdatedTs || now, TTL_DAYS);
+    bw.set(col.doc(job.jobDocId), {
+      ...job,
+      fetchedAt: now,
+      expireAt: normal.toMillis() > retainTs.toMillis() ? normal : retainTs,
+      retainUntil: retainTs,
+      retainedForWeek: weekTag,
+      harvestedAt: now,
+    }, { merge: true });
+  }
+  await bw.close();
+  return { fetched: raw.length, matched: jobs.length, written: missing.length };
+}
+
+/**
  * ----------------------------
  * FEED LIST CACHE
  * ----------------------------
@@ -1427,14 +1479,18 @@ function workdayReqIdFromRow(row) {
  *   keep(row, detail)  → false to drop after the detail fetch (country code,
  *                        posting date disagreeing with the list)
  */
-async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label, pageSize, fetchPage, fetchDetail, keep }) {
+async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label, pageSize, fetchPage, fetchDetail, keep, harvest = null }) {
+  // harvest = { maxAgeDays, wantRow(row) }: a one-off catch-up (scripts/harvest-week.mjs).
+  // It ignores what was already seen, reaches back maxAgeDays, fetches details
+  // only for rows wantRow() accepts, has no per-feed cap, and never seeds state.
   const stateRef = db.collection("users").doc(userId).collection("feedState").doc(feedId);
   const stateSnap = await stateRef.get();
   const state = stateSnap.exists ? stateSnap.data() : null;
   const seen = { ...(state?.seenIds || {}) };
-  const isFirstRun = !state;
+  const isFirstRun = !state && !harvest;
   const todayIso = now.toDate().toISOString().slice(0, 10);
-  const maxAgeToProcess = isFirstRun ? 0 : ID_SOURCE_MAX_AGE_DAYS;
+  const windowDays = harvest ? harvest.maxAgeDays : ID_SOURCE_MAX_AGE_DAYS;
+  const maxAgeToProcess = isFirstRun ? 0 : windowDays;
 
   const candidates = []; // unseen, in-window, plausibly-US rows, newest first
   const newlySeen = {}; // id → first-seen date; rows retired without a detail fetch
@@ -1442,7 +1498,7 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
   let pages = 0;
   let total = null;
 
-  while (pages < ID_SOURCE_MAX_PAGES) {
+  while (pages < (harvest ? ID_SOURCE_MAX_PAGES * 4 : ID_SOURCE_MAX_PAGES)) {
     const page = await fetchPage(offset);
     pages++;
     const rows = Array.isArray(page?.rows) ? page.rows : [];
@@ -1453,15 +1509,19 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
     let reachedOldRows = false;
     for (const row of rows) {
       const id = row.id;
-      if (!id || seen[id] || newlySeen[id]) continue;
+      if (!id || (!harvest && seen[id]) || newlySeen[id]) continue;
 
-      if (row.ageDays != null && row.ageDays > ID_SOURCE_MAX_AGE_DAYS) {
+      if (row.ageDays != null && row.ageDays > windowDays) {
         // Older than the TTL window. Not recorded: age alone retires it on every
         // later run, which keeps feedState small (in-window IDs only).
         reachedOldRows = true;
         continue;
       }
       unseenInWindow++;
+      if (harvest) {
+        if (row.looksUS && harvest.wantRow(row)) candidates.push(row);
+        continue;
+      }
       if ((row.ageDays != null && row.ageDays > maxAgeToProcess) || !row.looksUS) {
         newlySeen[id] = todayIso;
         continue;
@@ -1476,7 +1536,7 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
     if (total && offset >= total) break;
   }
 
-  const feedCap = Math.max(0, Math.min(ID_SOURCE_MAX_NEW_PER_FEED, runBudget.remaining));
+  const feedCap = harvest ? candidates.length : Math.max(0, Math.min(ID_SOURCE_MAX_NEW_PER_FEED, runBudget.remaining));
   const toProcess = candidates.slice(0, feedCap);
   runBudget.remaining -= toProcess.length;
 
@@ -1496,7 +1556,9 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
     })
   );
 
-  if (isFirstRun || Object.keys(newlySeen).length > 0) {
+  // A catch-up only adds the IDs it fetched to an existing state (so the
+  // normal sync doesn't fetch them again); a feed with no state seeds normally.
+  if ((isFirstRun || Object.keys(newlySeen).length > 0) && !(harvest && (!state || harvest.dryRun))) {
     // Drop IDs first seen long ago — the age rule retires them without a lookup.
     const pruneBefore = new Date(now.toMillis() - ID_SOURCE_SEEN_RETENTION_DAYS * 86400000)
       .toISOString().slice(0, 10);
@@ -1538,12 +1600,13 @@ function ageDaysFromIsoDate(isoDate, now) {
  * Workday adapter. Returns [{ reqId, list, detail, careerUrl }] for
  * normalizeJobMinimal.
  */
-async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
+async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget, harvest = null }) {
+  const maxAge = harvest ? harvest.maxAgeDays : ID_SOURCE_MAX_AGE_DAYS;
   const parsed = parseWorkdayFeedUrl(url);
   if (!parsed) throw new Error(`Not a Workday career site URL: ${url}`);
 
   const results = await fetchNewJobsById({
-    userId, feedId, now, runBudget,
+    userId, feedId, now, runBudget, harvest,
     source: "workday",
     label: `Workday ${parsed.tenant}/${parsed.site}`,
     pageSize: WORKDAY_PAGE_SIZE,
@@ -1570,7 +1633,7 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget }) {
       if (alpha2 && alpha2 !== "US") return false;
       // List said recent; drop if the detail's real posting date disagrees.
       const age = ageDaysFromIsoDate(detail?.startDate, now);
-      return age == null || age <= ID_SOURCE_MAX_AGE_DAYS + 1;
+      return age == null || age <= maxAge + 1;
     },
   });
   return results.map(({ row, detail }) => ({ reqId: row.id, list: row.raw, detail, careerUrl: parsed.careerUrl }));
@@ -1647,12 +1710,13 @@ function oracleDetailUrl(parsed, id) {
 }
 
 /** Oracle adapter. Returns [{ id, list, detail, careerUrl }] for normalizeJobMinimal. */
-async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget }) {
+async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget, harvest = null }) {
+  const maxAge = harvest ? harvest.maxAgeDays : ID_SOURCE_MAX_AGE_DAYS;
   const parsed = parseOracleFeedUrl(url);
   if (!parsed) throw new Error(`Not an Oracle Recruiting Cloud career site URL: ${url}`);
 
   const results = await fetchNewJobsById({
-    userId, feedId, now, runBudget,
+    userId, feedId, now, runBudget, harvest,
     source: "oracle",
     label: `Oracle ${parsed.host.split(".")[0]}/${parsed.site}`,
     pageSize: ORACLE_PAGE_SIZE,
@@ -1676,7 +1740,7 @@ async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget }) {
       const country = detail?.PrimaryLocationCountry || row.raw.PrimaryLocationCountry || null;
       if (country && country !== "US") return false;
       const age = ageDaysFromIsoDate(detail?.ExternalPostedStartDate, now);
-      return age == null || age <= ID_SOURCE_MAX_AGE_DAYS + 1;
+      return age == null || age <= maxAge + 1;
     },
   });
   return results.map(({ row, detail }) => ({ id: row.id, list: row.raw, detail, careerUrl: parsed.careerUrl }));
@@ -4202,3 +4266,10 @@ exports.dailyAggregationReconciliation = onSchedule(
     }
   }
 );
+
+// Internal helpers for local scripts (scripts/harvest-week.mjs). Non-enumerable,
+// so Firebase's function discovery never sees it and nothing is deployed for it.
+Object.defineProperty(module.exports, "__internals", {
+  enumerable: false,
+  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID },
+});
