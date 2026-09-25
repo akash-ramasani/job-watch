@@ -12,7 +12,6 @@ import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import { track } from "../lib/analytics.js";
 import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/resumeDownloads.js";
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
-import JobRow, { JobRowSkeleton } from "../components/JobRow.jsx";
 import { isRelatedJob, useJobTypes } from "../lib/jobRelevance.js";
 
 
@@ -35,6 +34,19 @@ const US_STATES = [
   { code: "VA", name: "Virginia" }, { code: "WA", name: "Washington" }, { code: "WV", name: "West Virginia" },
   { code: "WI", name: "Wisconsin" }, { code: "WY", name: "Wyoming" }, { code: "DC", name: "DC" },
 ];
+
+function timeAgoFromFirestore(ts) {
+  if (!ts?.toDate) return "N/A";
+  const d = ts.toDate();
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / (1000 * 60));
+  const hours = Math.floor(mins / 60);
+  const days = Math.floor(hours / 24);
+  if (days > 0) return `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  if (mins > 0) return `${mins}m ago`;
+  return "just now";
+}
 
 function shortAgoFromDate(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "N/A";
@@ -121,6 +133,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     const locationNameToken = Array.isArray(data.locationTokens)
       ? data.locationTokens.map(t => typeof t === "string" ? t : (t?.name || t?.city || "")).filter(Boolean).join("; ")
       : "";
+    // No location listed stays empty (it used to show as "Remote", which it may not be).
     const locationName = data.locationName || locationNameToken || "";
     const companyName = data.companyName || "Unknown";
     const stateCodes =
@@ -413,19 +426,117 @@ export default function Jobs({ user, userMeta, preferences }) {
   const listLoading = loading || jobTypes === null;
   const scoredShare = relatedJobs.length ? relatedJobs.filter((j) => myScores[j.id]).length / relatedJobs.length : 1;
 
-  const renderJobItem = (job) => (
-    <JobRow
-      key={job.id}
-      job={job}
-      showScore={!!preferences?.aiScoringEnabled && userMeta?.aiAccess !== false}
-      showActions={!!preferences?.aiScoringEnabled && userMeta?.aiAccess !== false}
-      onOpen={(j) => track("job_opened", { source: j.source, company: j.companyName, has_score: j.relevanceScore != null })}
-      onResume={handleGenerateResume}
-      onCoverLetter={handleGenerateCoverLetter}
-    />
-  );
+  const renderJobItem = (job) => {
+    const updatedShort = job._updatedShort || "N/A";
+    const score = job.relevanceScore;
+    const hasScore = typeof score === "number";
 
-  const renderSkeleton = () => <JobRowSkeleton />;
+    // Tier determines the score chip color only — no background floods
+    const tier =
+      score >= 80 ? { dot: "bg-indigo-500", label: "Strong Match", textCls: "text-indigo-600" }
+        : score >= 60 ? { dot: "bg-indigo-400", label: "Good Match", textCls: "text-indigo-500" }
+          : score >= 40 ? { dot: "bg-gray-400", label: "Partial Match", textCls: "text-gray-500" }
+            : { dot: "bg-gray-300", label: "Weak Match", textCls: "text-gray-400" };
+
+    const scoreBadge = (hasScore && preferences?.aiScoringEnabled && userMeta?.aiAccess !== false) ? (
+      <span className="relative group/score inline-flex items-center gap-1.5 cursor-help">
+        {/* Score chip */}
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[10px] font-bold font-mono text-gray-700 transition-colors group-hover/score:bg-indigo-50 group-hover/score:ring-indigo-200 group-hover/score:text-indigo-700">
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${tier.dot}`} />
+          {score}
+        </span>
+        {/* Label */}
+        <span className={`text-[10px] font-bold uppercase tracking-widest ${tier.textCls}`}>
+          {tier.label}
+        </span>
+
+        {/* AI reason tooltip — shows on hover */}
+        {job.scoreReason && (
+          <span className="pointer-events-none absolute bottom-full left-0 mb-2 z-50 w-56 opacity-0 group-hover/score:opacity-100 transition-opacity duration-150">
+            <span className="block rounded-lg bg-gray-900 px-3 py-2 text-[11px] leading-relaxed text-white shadow-xl ring-1 ring-white/10">
+              <span className="block text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">{job.scoreMethod === "rule" ? "Quick estimate" : "AI Analysis"}</span>
+              {job.scoreReason}
+            </span>
+            {/* Arrow */}
+            <span className="block w-2 h-2 bg-gray-900 rotate-45 ml-3 -mt-1" />
+          </span>
+        )}
+      </span>
+    ) : null;
+
+    return (
+      <li
+        key={job.id}
+        className="group relative px-6 py-5 hover:bg-gray-50/80 transition-all border-l-4 border-transparent hover:border-indigo-500"
+      >
+        <div className="absolute top-0 left-0 right-0 h-[1px] bg-indigo-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+
+        <div className="flex items-center justify-between gap-4">
+          <a
+            href={job.absolute_url || "#"}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => track("job_opened", { source: job.source, company: job.companyName, has_score: job.relevanceScore != null })}
+            className="min-w-0 flex-1"
+          >
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="text-xs font-bold text-indigo-600 uppercase tracking-tight">
+                {job.companyName || "Unknown"}
+              </span>
+              <span className="text-gray-300">|</span>
+              <span className="text-xs text-gray-500 font-medium truncate">
+                {job.locationName || "Location not listed"}
+                {job.isRemote && !/remote/i.test(job.locationName || "") && <span className="ml-1 text-indigo-400 font-bold">(Remote)</span>}
+              </span>
+            </div>
+
+            <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
+              {job.title}
+            </h3>
+
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-visible">
+              <span className="text-xs text-gray-400">Discovered {timeAgoFromFirestore(job.firstSeenAt)}</span>
+              {scoreBadge}
+            </div>
+          </a>
+
+          <div className="flex items-center gap-4 flex-shrink-0 z-10">
+            {preferences?.aiScoringEnabled && userMeta?.aiAccess !== false && (
+              <>
+                <button
+                  onClick={(e) => handleGenerateResume(e, job)}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm transition-colors"
+                  title="Make a version of your resume for this job"
+                >
+                  Resume
+                </button>
+                <button
+                  onClick={(e) => handleGenerateCoverLetter(e, job)}
+                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
+                >
+                  Cover Letter
+                </button>
+              </>
+            )}
+            <div className="hidden sm:flex flex-col items-end min-w-[70px]">
+              <span className="text-[10px] font-black text-gray-300 group-hover:text-indigo-200 uppercase tracking-tighter transition-colors">
+                Updated
+              </span>
+              <span className="text-sm font-bold text-gray-900">{updatedShort}</span>
+            </div>
+          </div>
+        </div>
+      </li>
+    );
+  };
+
+  const renderSkeleton = () => (
+    <div className="px-6 py-8 border-b border-gray-100 animate-pulse">
+      <div className="h-3 w-24 bg-gray-200 rounded mb-3" />
+      <div className="h-6 w-3/4 bg-gray-200 rounded mb-3" />
+      <div className="h-3 w-40 bg-gray-100 rounded" />
+    </div>
+  );
 
   return (
     <div className="page-wrapper">

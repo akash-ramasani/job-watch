@@ -485,6 +485,12 @@ const US_STATE_ABBREVIATIONS = [
   "TX", "UT", "VA", "WA", "WI",
 ];
 
+const ALL_STATE_CODES = new Set([
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+  "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+  "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+]);
+
 const US_CITIES = [
   "Albuquerque", "Anaheim", "Ann Arbor", "Arlington", "Atlanta", "Austin", "Bakersfield", "Baltimore", "Baton Rouge", "Bellevue",
   "Birmingham", "Boise", "Boston", "Boulder", "Brooklyn", "Buffalo", "Burbank", "Cambridge", "Charlotte", "Chicago", "Cincinnati",
@@ -2161,13 +2167,23 @@ function extractStateCodes(tokens) {
 function jobMatchesLocationFilter(job) {
   const tokens = Array.isArray(job.locationTokens) ? job.locationTokens : [];
   if (tokens.length === 0) return false;
+  // When the location names a foreign country or city (and no US wording), a
+  // two-letter code in it can't make it US: "Bengaluru, IN" and
+  // "IN-Bangalore-MSO" are India, not Indiana. A real US city or state named
+  // elsewhere in the string still counts ("Mountain View, California | Munich").
+  const full = String(tokens[0] || "").replace(/[-–—_]+/g, " ");
+  const foreign = (NON_US_LOCATION_RE.test(full) || FOREIGN_CITY_RE.test(full)) && !US_SIGNAL_RE.test(full);
+  // "City, ST" with any state code, including ones left out of the loose
+  // match because they're also words or other codes (OH, OR, ME, DE, HI…).
+  const cityState = foreign ? null : String(tokens[0] || "").match(/,\s*([A-Z]{2})\s*(?:$|[,;|/(])/);
+  if (cityState && ALL_STATE_CODES.has(cityState[1])) return true;
   for (const t of tokens) {
-    if (locationTokenMatches(t)) return true;
+    if (locationTokenMatches(t, { codes: !foreign })) return true;
   }
   return false;
 }
 
-function locationTokenMatches(token) {
+function locationTokenMatches(token, { codes = true } = {}) {
   const raw = String(token || "");
   if (!raw) return false;
   const n = normalizeText(raw);
@@ -2182,7 +2198,7 @@ function locationTokenMatches(token) {
     if (n.includes(st)) return true;
   }
 
-  const abbrMatches = raw.toUpperCase().match(/\b[A-Z]{2}\b/g) || [];
+  const abbrMatches = codes ? raw.toUpperCase().match(/\b[A-Z]{2}\b/g) || [] : [];
   for (const abbr of abbrMatches) {
     if (NORM.abbr.has(abbr)) return true;
   }
@@ -2200,6 +2216,10 @@ function locationTokenMatches(token) {
 
 const US_SIGNAL_RE = /\b(united states|usa|u\.\s?s\.(\s?a\.)?|us|north america|nationwide)\b/i;
 const ANYWHERE_RE = /\b(remote|anywhere|worldwide|global|distributed|work from home|wfh|americas)\b/i;
+// Big foreign job hubs with no common US namesake (so not London, Paris,
+// Dublin, Berlin, Vancouver, Toronto — "Vancouver, WA" is a US job).
+const FOREIGN_CITY_RE = /\b(bangalore|bengaluru|hyderabad|pune|chennai|mumbai|new delhi|delhi|gurgaon|gurugram|noida|kolkata|ahmedabad|tel aviv|warsaw|krakow|kraków|wroclaw|prague|lisbon|madrid|barcelona|zurich|zürich|geneva|stockholm|copenhagen|oslo|helsinki|brussels|vienna|budapest|bucharest|istanbul|dubai|abu dhabi|riyadh|cairo|lagos|nairobi|tokyo|osaka|seoul|singapore|sydney|melbourne|brisbane|auckland|s[aã]o paulo|buenos aires|bogot[aá]|medell[ií]n|mexico city|guadalajara|manila|jakarta|kuala lumpur|bangkok|ho chi minh|hanoi|taipei|shanghai|beijing|shenzhen|hong kong|munich|m[uü]nchen|hamburg|frankfurt|amsterdam|rotterdam|edinburgh|manchester|montreal|montréal|calgary|ottawa)\b/i;
+
 // More non-US places, only for remote-style locations ("Remote - Germany").
 // Not merged into NON_US_LOCATION_RE: some share names with US towns (Dublin, OH).
 const NON_US_REMOTE_RE = /\b(germany|deutschland|uk|u\.k\.|england|scotland|wales|britain|hong kong|(latin|south|central) america|london|berlin|munich|hamburg|paris|dublin|amsterdam|toronto|vancouver|montreal|ottawa|calgary|sydney|melbourne|tokyo|seoul|bangalore|bengaluru|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|tel aviv|warsaw|krakow|prague|lisbon|madrid|barcelona|zurich|stockholm|copenhagen|oslo|helsinki|brussels|vienna|budapest|bucharest|istanbul|dubai|abu dhabi|cairo|lagos|nairobi|s[aã]o paulo|buenos aires|bogot[aá]|mexico city|manila|jakarta|kuala lumpur|bangkok|taipei|shanghai|beijing|shenzhen|canadian|british|czechia)\b/i;
