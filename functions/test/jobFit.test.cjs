@@ -121,6 +121,29 @@ test("garbage input is handled", () => {
   assert.equal(r.score, 0);
 });
 
+test("reason counts partial matches separately", () => {
+  const reason = reasonFor({ requirements: [
+    { requirement: "Python", need: "must", covered: "yes" },
+    { requirement: "Go", need: "must", covered: "partial" },
+    { requirement: "Rust", need: "must", covered: "no" },
+    { requirement: "Terraform", need: "nice", covered: "no" },
+  ] });
+  assert.equal(reason, "Covers 1 of 3 must-haves, 1 partly · missing Rust");
+  assert.equal(reasonFor({ capNote: "Asks for 8+ years; your resume shows about 5", requirements: [{ requirement: "Go", need: "must", covered: "partial" }] }),
+    "Asks for 8+ years; your resume shows about 5 · covers 0 of 1 must-haves, 1 partly");
+});
+
+test("missing requirements are named briefly", () => {
+  const one = (requirement) => reasonFor({ requirements: [{ requirement, need: "must", covered: "no" }] }).replace(/^Covers 0 of 1 must-haves · missing /, "");
+  assert.equal(one("Hands-on experience with Kubernetes"), "Kubernetes");
+  assert.equal(one("Proven experience with LangChain/LangGraph"), "LangChain/LangGraph");
+  assert.equal(one("Strong understanding of distributed systems"), "Distributed systems");
+  assert.equal(one("8+ years of backend development"), "8+ years of backend development");
+  assert.equal(one("Active TS/SCI clearance (with polygraph)"), "Active TS/SCI clearance");
+  const long = one("Experience designing and operating low-maintenance data pipelines at scale");
+  assert.ok(long.length <= 38 && long.endsWith("…") && !/\s…$/.test(long), long);
+});
+
 test("reason lists up to two gaps and counts the rest", () => {
   const reason = reasonFor({
     requirements: ["A", "B", "C", "D"].map((x) => ({ requirement: `Tool ${x}`, need: "must", covered: "no" })),

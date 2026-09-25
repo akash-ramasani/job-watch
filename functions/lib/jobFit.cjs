@@ -198,16 +198,23 @@ function reasonFor({ requirements, capNote }) {
   const reqs = requirements || [];
   const must = reqs.filter((q) => q.need === "must");
   const base = must.length ? must : reqs;
-  const covered = base.filter((q) => q.covered === "yes").length + base.filter((q) => q.covered === "partial").length * 0.5;
+  const yes = base.filter((q) => q.covered === "yes").length;
+  const partly = base.filter((q) => q.covered === "partial").length;
   const missing = base.filter((q) => q.covered === "no").map((q) => shortReq(q.requirement));
-  const head = `Covers ${formatCount(covered)} of ${base.length} ${must.length ? "must-haves" : "requirements"}`;
+  const head = `Covers ${yes} of ${base.length} ${must.length ? "must-haves" : "requirements"}${partly ? `, ${partly} partly` : ""}`;
   const tail = missing.length ? ` · missing ${missing.slice(0, 2).join(", ")}${missing.length > 2 ? ` +${missing.length - 2}` : ""}` : "";
   return capNote ? `${capNote} · ${head.toLowerCase()}` : `${head}${tail}`;
 }
-const formatCount = (n) => (Number.isInteger(n) ? String(n) : n.toFixed(1).replace(/\.0$/, ""));
+const QUALIFIER_RE = /^(?:proven|demonstrated|hands-on|strong|solid|deep|extensive|practical|working|professional|excellent|good|advanced|expert|prior|significant|some)\s+/i;
+const LEAD_RE = /^(?:experience|expertise|knowledge|familiarity|proficiency|understanding|background|track record)(?:\s+(?:with|in|of|using|on))?\s+/i;
 function shortReq(s) {
-  const t = String(s || "").replace(/\s*\(.*?\)\s*/g, " ").replace(/^(experience with|experience in|knowledge of|familiarity with|proficiency in|strong|solid|deep|hands-on)\s+/i, "").trim();
-  return t.length > 38 ? `${t.slice(0, 36).trim()}…` : t;
+  let t = String(s || "").replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+/g, " ").trim();
+  // "Hands-on experience with Kubernetes" → "Kubernetes"; years stay ("5+ years backend").
+  for (let prev = ""; prev !== t; ) { prev = t; t = t.replace(QUALIFIER_RE, "").replace(LEAD_RE, ""); }
+  t = t.charAt(0).toUpperCase() + t.slice(1);
+  if (t.length <= 38) return t;
+  const cut = t.slice(0, 37);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : 37).replace(/[\s,;:/-]+$/, "")}…`;
 }
 
 const SYSTEM_PROMPT = `You compare one job description with one candidate's profile. You are strict and literal.
