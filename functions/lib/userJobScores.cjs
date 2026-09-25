@@ -26,7 +26,7 @@ const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 /**
  * Upsert a batch of scores for a user and refresh their aggregation doc.
  * @param {string} userId
- * @param {Array<{ jobId: string, score: number, reason: string }>} entries
+ * @param {Array<{ jobId: string, score: number, reason: string, fit?: object }>} entries
  * @param {FirebaseFirestore.Firestore} [dbInstance]
  */
 async function writeUserScores(userId, entries, dbInstance) {
@@ -41,7 +41,7 @@ async function writeUserScores(userId, entries, dbInstance) {
   const CHUNK = 400;
   for (let i = 0; i < entries.length; i += CHUNK) {
     const batch = db.batch();
-    for (const { jobId, score, reason } of entries.slice(i, i + CHUNK)) {
+    for (const { jobId, score, reason, fit } of entries.slice(i, i + CHUNK)) {
       if (!jobId) continue;
       batch.set(
         scoresRef.doc(jobId),
@@ -49,6 +49,9 @@ async function writeUserScores(userId, entries, dbInstance) {
           score: typeof score === "number" ? score : null,
           reason: reason || "",
           scoredAt,
+          // Full requirement-by-requirement assessment (functions/lib/jobFit.cjs).
+          // Kept on the per-job doc only; the rollup below stays { score, reason }.
+          ...(fit ? { fit } : {}),
         },
         { merge: true }
       );

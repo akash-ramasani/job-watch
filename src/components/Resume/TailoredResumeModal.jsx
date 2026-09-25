@@ -95,9 +95,12 @@ function ResumePreview({ resume, contact }) {
 function MatchSummary({ report }) {
   const [open, setOpen] = useState(false);
   const reqs = report?.requirements || [];
-  const yes = reqs.filter((q) => q.covered === "yes").length;
-  const partial = reqs.filter((q) => q.covered === "partial").length;
-  const gaps = reqs.filter((q) => q.covered === "no").map((q) => q.requirement);
+  // Count must-haves when the report marks them (same basis as the job card's line).
+  const musts = reqs.filter((q) => q.need === "must");
+  const basis = musts.length ? musts : reqs;
+  const yes = basis.filter((q) => q.covered === "yes").length;
+  const partial = basis.filter((q) => q.covered === "partial").length;
+  const gaps = [...basis, ...reqs.filter((q) => !basis.includes(q))].filter((q) => q.covered === "no").map((q) => q.requirement);
   const pct = report?.coveragePct ?? null;
   const t = tone(pct);
   const leftOut = [...(report?.removedBullets || []), ...(report?.trimmedBullets || [])];
@@ -111,8 +114,9 @@ function MatchSummary({ report }) {
       <div className="mt-2 h-1.5 w-full rounded-full bg-white/70 overflow-hidden">
         <div className={`h-full ${t.bar}`} style={{ width: `${pct || 0}%` }} />
       </div>
-      <p className="mt-3 text-sm text-gray-800">
-        Your resume covers <strong>{yes}</strong>{partial ? <> (and partly <strong>{partial}</strong>)</> : null} of the <strong>{reqs.length}</strong> things this job asks for.
+      {report?.capNote && <p className={`mt-3 text-sm font-semibold ${t.text}`}>{report.capNote}.</p>}
+      <p className={`${report?.capNote ? "mt-1" : "mt-3"} text-sm text-gray-800`}>
+        Your resume covers <strong>{yes}</strong>{partial ? <> (and partly <strong>{partial}</strong>)</> : null} of the <strong>{basis.length}</strong> {musts.length ? "must-haves" : "things this job asks for"}.
       </p>
       {gaps.length > 0 && (
         <p className="mt-1 text-sm text-gray-700">
@@ -133,7 +137,8 @@ function MatchSummary({ report }) {
                 </span>
                 <span className="text-gray-800">
                   {q.requirement}
-                  {q.evidence && <span className="block text-xs text-gray-500">{q.evidence}</span>}
+                  {q.need === "nice" && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-wide text-gray-400">nice to have</span>}
+                  {q.evidence && <span className="block text-xs text-gray-500">“{q.evidence}”</span>}
                 </span>
               </li>
             ))}

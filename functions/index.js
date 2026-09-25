@@ -67,6 +67,7 @@ function requireOpenAI() {
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
+const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf } = require("./lib/jobFit.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
@@ -85,6 +86,13 @@ const FEED_CONCURRENCY = 15;
 
 const RECENT_WINDOW_MINUTES = 20;
 const TTL_DAYS = 3;
+
+// Job scoring (functions/lib/jobFit.cjs). Each assessment is one ~3-5 s model
+// call; a few in flight keeps a full run inside the function's 540 s limit.
+const SCORING_CONCURRENCY = 4;
+const SYNC_TIME_BUDGET_MS = 470 * 1000; // leave room for aggregation rebuilds after scoring
+const BACKLOG_SCAN = 600; // newest jobs checked for stale scores per run
+const BACKLOG_MAX_PER_RUN = 60;
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
 // by req ID against users/{uid}/feedState/{feedId} instead of by the
@@ -696,11 +704,94 @@ exports.runSyncNow = onRequest(
 
 
 /**
+ * Admin-only: score chosen jobs (or the stale backlog) with the job-fit
+ * assessment and return old vs new side by side. `dryRun` computes without
+ * writing — used to evaluate the scorer on real jobs before trusting it.
+ *
+ * POST { jobIds?: string[], limit?: number, dryRun?: boolean }
+ *   jobIds  → exactly those jobs
+ *   else    → the newest stale jobs (see rescoreBacklog), up to `limit`
+ */
+exports.rescoreJobs = onRequest(
+  // invoker "public" only opens the URL; verifyToken below still restricts it to the admin.
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 1, cors: CORS_ORIGINS, invoker: "public", secrets: [OPENAI_API_KEY] },
+  async (req, res) => {
+    let decoded;
+    try {
+      decoded = await verifyToken(req);
+    } catch (err) {
+      return res.status(err.statusCode || 401).json({ error: err.message });
+    }
+    if (decoded.uid !== ADMIN_UID) return res.status(403).json({ error: "Forbidden: Admin only." });
+
+    const body = typeof req.body === "object" && req.body ? req.body : {};
+    const dryRun = body.dryRun === true;
+    const limit = Math.max(1, Math.min(400, Number(body.limit) || 50));
+    const deadlineMs = Date.now() + 500 * 1000;
+    const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
+
+    const profileSnap = await db.collection("users").doc(ADMIN_UID).collection("resume").doc("profile").get();
+    if (!profileSnap.exists) return res.status(400).json({ error: "No resume profile." });
+    const profile = profileSnap.data();
+
+    let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
+    if (!ids) {
+      const stamp = profileStampOf(profile);
+      const snap = await jobsCol.orderBy("fetchedAt", "desc").limit(Math.max(BACKLOG_SCAN, limit * 4))
+        .select("relevanceScore", "scoreVersion", "scoreProfileStamp").get();
+      ids = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((j) => j.scoreVersion !== FIT_VERSION || j.scoreProfileStamp !== stamp)
+        .filter((j) => typeof j.relevanceScore !== "number" || j.relevanceScore < 0 || j.relevanceScore >= 30 || j.scoreVersion === FIT_VERSION)
+        .slice(0, limit)
+        .map((j) => j.id);
+    }
+    const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
+    const jobs = snaps.filter((s) => s.exists).map((s) => ({ jobDocId: s.id, ...s.data() }));
+
+    if (!dryRun) {
+      const before = new Map(jobs.map((j) => [j.jobDocId, j.relevanceScore]));
+      const scored = await scoreNewJobsForUser(ADMIN_UID, jobs.map((j) => ({
+        jobDocId: j.jobDocId, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "",
+      })), { deadlineMs, force: true });
+      const after = await db.getAll(...jobs.map((j) => jobsCol.doc(j.jobDocId)));
+      return res.json({
+        ok: true, dryRun, requested: ids.length, scored,
+        results: after.map((s) => ({ id: s.id, title: s.data()?.title, company: s.data()?.companyName, old: before.get(s.id) ?? null, new: s.data()?.relevanceScore ?? null, reason: s.data()?.scoreReason || "" })),
+      });
+    }
+
+    const client = requireOpenAI();
+    const profileText = buildProfileText(profile);
+    const limiter = pLimit(SCORING_CONCURRENCY);
+    const results = await Promise.all(jobs.map((j) => limiter(async () => {
+      if (Date.now() > deadlineMs) return { id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null, new: null, reason: "skipped (time)" };
+      try {
+        const fit = j.fullDescription
+          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), jobTitle: j.title, jobDescription: j.fullDescription })
+          : null;
+        return {
+          id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null,
+          new: fit ? fit.score : null, coverage: fit?.coverage ?? null, roleFit: fit?.roleFit, seniorityFit: fit?.seniorityFit, minYears: fit?.minYears ?? null,
+          reason: fit?.reason || (j.fullDescription ? "assessment failed" : "no description"),
+          downgraded: fit?.downgraded ?? null,
+          requirements: fit?.requirements?.map((q) => `${q.covered === "yes" ? "✓" : q.covered === "partial" ? "~" : "✗"} [${q.need}] ${q.requirement}${q.evidence ? ` — "${q.evidence}"` : ""}`),
+        };
+      } catch (err) {
+        return { id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null, new: null, reason: `error: ${err?.message}` };
+      }
+    })));
+    return res.json({ ok: true, dryRun, requested: ids.length, results });
+  }
+);
+
+/**
  * ----------------------------
  * USER SYNC CORE
  * ----------------------------
  */
 async function syncUserRecentJobs({ userId, now, recentCutoff }) {
+  const deadlineMs = now.toMillis() + SYNC_TIME_BUDGET_MS;
   const feedsSnap = await db
     .collection("users")
     .doc(userId)
@@ -884,7 +975,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
   // AWAIT scoring — Cloud Functions terminate any un-awaited Promises immediately upon return!
   if (newJobsForScoring.length > 0) {
-    await scoreNewJobsForUser(userId, newJobsForScoring).catch((err) =>
+    await scoreNewJobsForUser(userId, newJobsForScoring, { deadlineMs }).catch((err) =>
       logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
     );
 
@@ -896,7 +987,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
       try {
         const otherUids = (await listAiEnabledUserIds()).filter((u) => u !== ADMIN_UID);
         for (const uid of otherUids) {
-          await scoreNewJobsForUser(uid, newJobsForScoring).catch((err) =>
+          await scoreNewJobsForUser(uid, newJobsForScoring, { deadlineMs }).catch((err) =>
             logger.error(`scoreNewJobsForUser fan-out failed userId=${uid}: ${err?.message || err}`)
           );
         }
@@ -904,6 +995,11 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
         logger.warn(`scoring fan-out failed: ${err?.message}`);
       }
     }
+  }
+
+  // Spare time: move older scores onto the current method / current profile.
+  if (userId === ADMIN_UID && Date.now() < deadlineMs - 30 * 1000) {
+    await rescoreBacklog(userId, { deadlineMs }).catch((err) => logger.warn(`rescoreBacklog failed: ${err?.message || err}`));
   }
 
   // Rebuild the /jobs page aggregation docs so clients can render with a single read.
@@ -2071,79 +2167,17 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
 }
 
 /**
- * Score a single job against a resume using OpenAI.
- * Returns { score: number, reason: string } or null.
+ * Score jobs for one user with the requirement-coverage assessment
+ * (functions/lib/jobFit.cjs). Writes:
+ *   - users/{userId}/jobScores/{jobId}: { score, reason, fit } (+ the myJobScores rollup)
+ *   - admin only, legacy: relevanceScore / scoreReason / scoreVersion / scoreProfileStamp on the job doc
+ *
+ * `jobs` items: { jobDocId, source, externalId, feedUrl, jobUrl, fullDescription? }.
+ * Stops starting new jobs after `deadlineMs`; those stay unscored and are
+ * picked up by rescoreBacklog on a later run. Returns the number scored.
  */
-async function scoreJobWithAI(jobTitle, jobDescription, resumeText) {
-  const systemPrompt = `You are a technical recruiting expert. Score this job's relevance for the candidate. Be fast and decisive.
-
-SCORING RUBRIC (apply in order — first match wins):
-
-HARD CAPS (override everything else):
-- Title has "Intern", "New Grad", "PhD Intern", "University Graduate", "Co-op" → score 0-20
-- Title has "Product Manager", "Program Manager", "Data Scientist", "Analyst", "Sales", "Marketing", "Finance", "Recruiter", "Designer" → score 0-15
-- Title has "Principal", "Distinguished", "VP", "Director", "Head of", "C-level" → score 0-30
-
-SCORE BANDS:
-- 85-100: Core tech stack is a strong match AND right seniority level (SWE 0-8 yrs)
-- 65-84: Good overlap, 1-2 missing but learnable tools
-- 40-64: Partial match — right field but tech stack gaps
-- 20-39: Weak match — misaligned role OR requires 10+ years experience not in resume
-- 0-19: Wrong field entirely
-
-KEY RULES:
-- Ignore lack of domain knowledge (AdTech, FinTech, HealthTech) if core SWE skills match — engineers learn domains
-- Judge primarily on: languages, frameworks, cloud tools, system design experience
-- Be decisive. Do not hedge with mid-range scores like 50 unless truly uncertain
-
-## Candidate Resume
-${resumeText}`;
-
-  const userPrompt = `## Job Title
-${jobTitle}
-
-## Job Description
-${jobDescription}
-
-Reply with ONLY valid JSON: {"score": <0-100>, "reason": "<15 words max>"}`;
-
-  const client = requireOpenAI();
-  const completion = await client.chat.completions.create(
-    {
-      model: OPENAI_FAST_MODEL,
-      max_tokens: 120,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    },
-    { timeout: 30000 } // 30 second timeout — generous enough for slow AI responses
-  );
-
-  const raw = completion.choices?.[0]?.message?.content?.trim() || "";
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    return null;
-  }
-  const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score))));
-  if (Number.isNaN(score)) return null;
-  return { score, reason: String(parsed.reason || "").slice(0, 120) };
-}
-
-/**
- * Main scoring orchestrator — runs after every sync, fire-and-forget.
- * Fetches JDs, scores with OpenAI, writes score back to job doc.
- * Never stores the JD itself.
- */
-async function scoreNewJobsForUser(userId, newJobs) {
-  if (!newJobs || newJobs.length === 0) return;
-
+async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false } = {}) {
+  if (!newJobs || newJobs.length === 0) return 0;
   const isAdmin = userId === ADMIN_UID;
 
   // Permission gate — non-admin users must have aiAccess === true on their user doc.
@@ -2152,304 +2186,241 @@ async function scoreNewJobsForUser(userId, newJobs) {
       const userDoc = await db.collection("users").doc(userId).get();
       if (!userDoc.exists || userDoc.data()?.aiAccess !== true) {
         logger.info(`scoreNewJobsForUser: aiAccess not granted for userId=${userId}, skipping`);
-        return;
+        return 0;
       }
     } catch (err) {
       logger.warn(`scoreNewJobsForUser: could not read user doc for userId=${userId}: ${err?.message}`);
-      return;
+      return 0;
     }
   }
 
-  // Check user's AI scoring toggle — stored at users/{uid}/settings/preferences
+  // User's AI scoring toggle — users/{uid}/settings/preferences
   try {
     const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
     if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
       logger.info(`scoreNewJobsForUser: AI scoring disabled for userId=${userId}, skipping`);
-      return;
+      return 0;
     }
   } catch (err) {
     logger.warn(`scoreNewJobsForUser: could not read settings for userId=${userId}: ${err?.message}`);
   }
 
-  // Load user's saved resume profile
-  let resumeProfile = null;
+  let profile;
   try {
     const resumeSnap = await db.collection("users").doc(userId).collection("resume").doc("profile").get();
     if (!resumeSnap.exists) {
       logger.info(`scoreNewJobsForUser: no resume for userId=${userId}, skipping`);
-      return;
+      return 0;
     }
-    resumeProfile = resumeSnap.data();
+    profile = resumeSnap.data();
   } catch (err) {
     logger.warn(`scoreNewJobsForUser: failed to load resume for userId=${userId}: ${err?.message}`);
-    return;
+    return 0;
   }
-
-  // Build a compact resume text for the prompt
-  const resumeText = [
-    resumeProfile.summary ? `Summary: ${resumeProfile.summary}` : "",
-    resumeProfile.skills?.length ? `Skills: ${resumeProfile.skills.slice(0, 40).join(", ")}` : "",
-    resumeProfile.roles?.length
-      ? `Experience:\n${resumeProfile.roles.slice(0, 4).map((r) => `  - ${r.title} at ${r.company}: ${(r.description || "").slice(0, 200)}`).join("\n")}`
-      : "",
-    resumeProfile.education?.length
-      ? `Education: ${resumeProfile.education.map((e) => `${e.degree} at ${e.institution}`).join("; ")}`
-      : "",
-    resumeProfile.projects?.length
-      ? `Projects: ${resumeProfile.projects.slice(0, 3).map((p) => `${p.name} (${p.techStack})`).join("; ")}`
-      : "",
-  ].filter(Boolean).join("\n").slice(0, 15000);
-
-  if (!resumeText) {
+  const profileText = buildProfileText(profile);
+  const profileStamp = profileStampOf(profile);
+  const candidateYears = candidateYearsOf(profile);
+  if (profileText.length < 80) {
     logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
-    return;
+    return 0;
   }
 
-  // ─── OPTIMIZATION 1: Batch pre-read all job docs in ONE Firestore round-trip ──
-  // Jobs ALWAYS live under the admin user (shared corpus). Scores are written
-  // per-user to users/{userId}/jobScores/*.
+  // Jobs always live under the admin user (shared corpus).
   const sharedJobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
   const userScoresCol = db.collection("users").doc(userId).collection("jobScores");
 
-  // Deduplicate before batch read to prevent db.getAll duplicate ref errors
-  const uniqueJobsMap = new Map();
-  for (const job of newJobs) {
-    uniqueJobsMap.set(job.jobDocId, job);
-  }
-  const uniqueNewJobs = Array.from(uniqueJobsMap.values());
-  const jobRefs = uniqueNewJobs.map((job) => sharedJobsCol.doc(job.jobDocId));
-
-  // db.getAll() uses JS spread — chunk to 300 to guard against call stack overflow on large syncs
+  const uniqueJobs = [...new Map(newJobs.map((j) => [j.jobDocId, j])).values()];
   const CHUNK = 300;
-  const jobSnapshots = [];
-  for (let i = 0; i < jobRefs.length; i += CHUNK) {
-    const batch = await db.getAll(...jobRefs.slice(i, i + CHUNK));
-    jobSnapshots.push(...batch);
-  }
+  const readAll = async (refs) => {
+    const out = [];
+    for (let i = 0; i < refs.length; i += CHUNK) out.push(...(await db.getAll(...refs.slice(i, i + CHUNK))));
+    return out;
+  };
+  const jobSnaps = await readAll(uniqueJobs.map((j) => sharedJobsCol.doc(j.jobDocId)));
+  const scoreSnaps = await readAll(uniqueJobs.map((j) => userScoresCol.doc(j.jobDocId)));
 
-  // For non-admin: batch-read this user's existing score docs to detect
-  // already-scored jobs. (Admin's "already scored" check uses the legacy
-  // relevanceScore field on the job doc itself.)
-  const alreadyScoredIds = new Set();
-  if (!isAdmin) {
-    const scoreRefs = uniqueNewJobs.map((job) => userScoresCol.doc(job.jobDocId));
-    const scoreSnaps = [];
-    for (let i = 0; i < scoreRefs.length; i += CHUNK) {
-      const batch = await db.getAll(...scoreRefs.slice(i, i + CHUNK));
-      scoreSnaps.push(...batch);
-    }
-    scoreSnaps.forEach((s) => {
-      if (s.exists && typeof s.data()?.score === "number" && s.data().score >= 0) {
-        alreadyScoredIds.add(s.id);
-      }
-    });
-  }
+  // Skip jobs already assessed with this method against this version of the profile.
+  const todo = [];
+  uniqueJobs.forEach((job, i) => {
+    const jobData = jobSnaps[i].exists ? jobSnaps[i].data() : null;
+    if (!jobData) return;
+    const fit = scoreSnaps[i].exists ? scoreSnaps[i].data()?.fit : null;
+    if (!force && fit && fit.version === FIT_VERSION && fit.profileStamp === profileStamp) return;
+    todo.push({ ...job, title: jobData.title || "", fullDescription: job.fullDescription || jobData.fullDescription || null });
+  });
+  if (todo.length === 0) return 0;
+  logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}`);
 
-  const titleMap = {};
-  const unscoredJobs = [];
-
-  for (let i = 0; i < jobSnapshots.length; i++) {
-    const snap = jobSnapshots[i];
-    const job = uniqueNewJobs[i];
-
-    if (isAdmin) {
-      const existingScore = snap.exists ? snap.data()?.relevanceScore : null;
-      if (existingScore !== null && existingScore >= 0) {
-        logger.info(`scoreNewJobsForUser: ${job.jobDocId} already has valid score (${existingScore}), skipping`);
-        continue;
-      }
-    } else if (alreadyScoredIds.has(job.jobDocId)) {
-      continue;
-    }
-
-    const title = snap.exists ? (snap.data()?.title || "") : "";
-    titleMap[job.jobDocId] = title;
-
-    unscoredJobs.push(job);
-  }
-
-  if (unscoredJobs.length === 0) {
-    logger.info(`scoreNewJobsForUser: all ${newJobs.length} jobs already scored for ${userId}, nothing to do`);
-    return;
-  }
-
-  logger.info(`scoreNewJobsForUser: ${unscoredJobs.length} unscored / ${uniqueNewJobs.length} total — starting for userId=${userId}`);
-
-  // OpenAI Tier: use concurrency of 1 to avoid rate limits
-  const concurrency = 1;
-  const scoringLimiter = pLimit(concurrency);
+  const client = requireOpenAI();
+  const limiter = pLimit(SCORING_CONCURRENCY);
   const scoredAt = admin.firestore.Timestamp.now();
+  const results = []; // { jobId, score, reason, fit }
+  let skippedForTime = 0;
 
-  // Accumulate results across tasks so we can do a single per-user score
-  // write at the end (one batched aggregation rebuild instead of N).
-  const computedResults = []; // [{ jobId, score, reason }]
-
-  const scoringTasks = unscoredJobs.map((job) =>
-    scoringLimiter(async () => {
-      try {
-        // Title pre-loaded from batch read — no Firestore read needed here
-        const jobTitle = titleMap[job.jobDocId];
-
-        // 1. Fetch JD (Greenhouse & Ashby natively injected via Sync loop; others via HTTPS)
-        let description = job.fullDescription;
-
-        if (!description) {
-          description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
-
-          // Universal Web Scraper Fallback (Jina Reader API) for Workday, Lever, etc.
-          if (!description && job.jobUrl) {
-            logger.info(`scoreNewJobsForUser: falling back to Universal Scraper for ${job.jobUrl}`);
-            try {
-              const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
-              if (jinaReq.ok) {
-                const jinaText = await jinaReq.text();
-                if (jinaText.length > 50) description = stripHtml(jinaText);
-              }
-            } catch (e) {
-              logger.warn(`Jina reader fallback failed for ${job.jobUrl}: ${e?.message || e}`);
-            }
-          }
-        }
-        if (!description || description.length < 50) {
-          logger.info(`scoreNewJobsForUser: empty JD for ${job.jobDocId}, writing fallback score`);
-          if (isAdmin) {
-            await sharedJobsCol.doc(job.jobDocId).set(
-              { relevanceScore: -1, scoreReason: "Could not fetch Job Description directly.", scoredAt },
-              { merge: true }
-            );
-          }
-          computedResults.push({ jobId: job.jobDocId, score: -1, reason: "Could not fetch Job Description directly." });
-          return;
-        }
-        // Trim to 2000 chars — enough context for scoring, fast enough to avoid timeouts
-        const jd = description.slice(0, 2000);
-
-        // Score — up to 5 attempts, handles rate limits AND timeouts
-        let result = null;
-        let attempts = 0;
-
-        while (attempts < 5) {
-          attempts++;
+  await Promise.all(todo.map((job) => limiter(async () => {
+    if (Date.now() > deadlineMs) { skippedForTime++; return; }
+    try {
+      let description = job.fullDescription;
+      if (!description) {
+        description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
+        if (!description && job.jobUrl) {
           try {
-            result = await scoreJobWithAI(jobTitle, jd, resumeText);
-            if (result) break;
-            logger.warn(`scoreJobWithAI: attempt ${attempts}/5 returned invalid format for ${job.jobDocId}, retrying...`);
-            await new Promise((r) => setTimeout(r, 1000));
-          } catch (apiErr) {
-            const isRetryable =
-              apiErr.status === 429 ||
-              apiErr.status === 529 ||
-              apiErr.status === 408 ||
-              apiErr.message?.toLowerCase().includes("rate") ||
-              apiErr.message?.toLowerCase().includes("timeout") ||
-              apiErr.message?.toLowerCase().includes("timed out") ||
-              apiErr.constructor?.name === "APIConnectionTimeoutError" ||
-              apiErr.constructor?.name === "APIConnectionError";
-            if (isRetryable && attempts < 5) {
-              const waitSec = 10 * attempts;
-              logger.warn(`scoreJobWithAI: attempt ${attempts}/5 failed (${apiErr.message?.slice(0, 60)}), retrying in ${waitSec}s...`);
-              await new Promise((r) => setTimeout(r, 1000 * waitSec));
-            } else {
-              logger.warn(`scoreJobWithAI: non-retryable error: ${apiErr.message?.slice(0, 100)}`);
-              break;
+            const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
+            if (jinaReq.ok) {
+              const jinaText = await jinaReq.text();
+              if (jinaText.length > 50) description = stripHtml(jinaText);
             }
+          } catch (e) {
+            logger.warn(`Jina reader fallback failed for ${job.jobUrl}: ${e?.message || e}`);
           }
         }
-
-        if (!result) {
-          logger.warn(`scoreNewJobsForUser: AI returned no score/error for ${job.jobDocId}`);
-          if (isAdmin) {
-            await sharedJobsCol.doc(job.jobDocId).set(
-              { relevanceScore: -1, scoreReason: "AI returned invalid response format or rate limited.", scoredAt },
-              { merge: true }
-            );
-          }
-          computedResults.push({ jobId: job.jobDocId, score: -1, reason: "AI returned invalid response format or rate limited." });
-          return;
-        }
-
-        // 3. Write ONLY score + reason (no JD) back to job doc (admin only — legacy fallback)
-        if (isAdmin) {
-          await sharedJobsCol.doc(job.jobDocId).set(
-            { relevanceScore: result.score, scoreReason: result.reason, scoredAt },
-            { merge: true }
-          );
-        }
-        computedResults.push({ jobId: job.jobDocId, score: result.score, reason: result.reason });
-
-        logger.info(`Scored ${job.jobDocId} for ${userId}: ${result.score}/100 — ${result.reason}`);
-      } catch (err) {
-        logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
-        if (isAdmin) {
-          await sharedJobsCol.doc(job.jobDocId).set(
-            { relevanceScore: -1, scoreReason: "AI timeout or processing error.", scoredAt },
-            { merge: true }
-          ).catch(() => { });
-        }
-        computedResults.push({ jobId: job.jobDocId, score: -1, reason: "AI timeout or processing error." });
       }
-    })
-  );
+      if (!description || description.length < 50) {
+        results.push({ jobId: job.jobDocId, score: -1, reason: "Couldn't read the job description." });
+        return;
+      }
 
-  await Promise.all(scoringTasks);
-  logger.info(`scoreNewJobsForUser: done — scored ${unscoredJobs.length}/${uniqueNewJobs.length} jobs for userId=${userId}`);
+      let fit = null;
+      for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
+        try {
+          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, jobTitle: job.title, jobDescription: description });
+          if (!fit) await new Promise((r) => setTimeout(r, 800));
+        } catch (err) {
+          const retryable = err?.status === 429 || err?.status >= 500 || /rate|timeout|timed out|connection/i.test(err?.message || "");
+          if (!retryable || attempt === 4 || Date.now() > deadlineMs) {
+            logger.warn(`assessJobFit failed for ${job.jobDocId}: ${err?.message?.slice(0, 120)}`);
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 4000 * attempt));
+        }
+      }
+      if (!fit) {
+        results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
+        return;
+      }
+      const stored = { ...fit, profileStamp, scoredAt };
+      results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit: stored });
+      logger.info(`Scored ${job.jobDocId} for ${userId}: ${fit.score} (coverage ${fit.coverage}, ${fit.roleFit}/${fit.seniorityFit}) — ${fit.reason}`);
+    } catch (err) {
+      logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
+      results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
+    }
+  })));
 
-  // Write scoring status aggregation (frontend listens via onSnapshot)
+  // Admin's job docs carry the legacy fields other readers (worker, MCP) use.
+  if (isAdmin && results.length) {
+    const batch = db.bulkWriter();
+    for (const r of results) {
+      batch.set(sharedJobsCol.doc(r.jobId), {
+        relevanceScore: r.score,
+        scoreReason: r.reason,
+        scoredAt,
+        ...(r.fit ? { scoreVersion: FIT_VERSION, scoreProfileStamp: profileStamp } : {}),
+      }, { merge: true });
+    }
+    await batch.close();
+  }
+
+  const good = results.filter((r) => r.score >= 0);
   try {
-    const allScores = computedResults
-      .filter((r) => typeof r.score === "number")
-      .map((r) => ({ id: r.jobId, score: r.score, reason: r.reason || "" }));
-    // Status doc only shows recent activity — but ALL scores must reach jobScores.
-    const recentScores = allScores.slice(0, 50);
-
-    if (recentScores.length > 0) {
+    if (results.length) {
       await db.collection("users").doc(userId).collection("aggregations").doc("scoringStatus").set({
-        recentScores,
-        pendingCount: 0,
+        recentScores: results.slice(0, 50).map((r) => ({ id: r.jobId, score: r.score, reason: r.reason })),
+        pendingCount: skippedForTime,
         scoringInProgress: false,
         updatedAt: admin.firestore.Timestamp.now(),
       });
-
-      // Refresh recentJobs/allJobs (shared metadata) FIRST so the just-synced
-      // jobs are present in the job aggregations. The myJobScores rollup below
-      // is keyed off those aggregations' job ids, so order matters.
-      // Only admin owns these docs — non-admin runs never touch admin's data.
+    }
+    if (good.length) {
+      // Refresh recentJobs/allJobs first so the myJobScores rollup (keyed off
+      // their ids) includes jobs synced this run. Only admin owns those docs.
       if (isAdmin) {
-        try {
-          const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
-          await rebuildRecentJobs(userId);
-          await rebuildAllJobs(userId);
-        } catch (err) {
-          logger.warn(`recentJobs/allJobs rebuild after scoring failed: ${err?.message}`);
-        }
+        const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
+        await rebuildRecentJobs(userId).catch((err) => logger.warn(`rebuildRecentJobs after scoring failed: ${err?.message}`));
+        await rebuildAllJobs(userId).catch((err) => logger.warn(`rebuildAllJobs after scoring failed: ${err?.message}`));
       }
-
-      // Mirror the just-computed scores into the per-user jobScores collection
-      // and refresh /users/{userId}/aggregations/myJobScores. The Jobs page
-      // reads scores from there, NOT from the shared job docs, so each user
-      // (with AI enabled) gets their own personalized view. Failed scores (-1)
-      // are kept out of the mirror — they retry on the next sync anyway.
-      try {
-        const { writeUserScores } = require("./lib/userJobScores.cjs");
-        await writeUserScores(userId, allScores.filter((s) => s.score >= 0).map((s) => ({
-          jobId: s.id,
-          score: s.score,
-          reason: s.reason,
-        })));
-      } catch (err) {
-        logger.warn(`writeUserScores failed for ${userId}: ${err?.message}`);
-      }
+      const { writeUserScores } = require("./lib/userJobScores.cjs");
+      await writeUserScores(userId, good.map((r) => ({ jobId: r.jobId, score: r.score, reason: r.reason, fit: r.fit })));
     }
   } catch (err) {
-    logger.warn(`scoringStatus aggregation write failed: ${err?.message}`);
+    logger.warn(`score aggregation write failed for ${userId}: ${err?.message}`);
   }
+
+  logger.info(`scoreNewJobsForUser: userId=${userId} scored=${good.length} failed=${results.length - good.length} deferred=${skippedForTime}`);
+  return good.length;
 }
 
 /**
- * ----------------------------
- * PUSH NOTIFICATIONS
- * ----------------------------
+ * The current job-fit assessment for (user, job): the stored one when it was
+ * made with this method against this version of the profile, else a fresh
+ * one — stored for the job card too.
  */
+async function getOrAssessFit({ uid, jobId, job, profile, client }) {
+  const profileStamp = profileStampOf(profile);
+  const scoreRef = db.collection("users").doc(uid).collection("jobScores").doc(jobId);
+  const existing = (await scoreRef.get()).data()?.fit;
+  if (existing && existing.version === FIT_VERSION && existing.profileStamp === profileStamp) return existing;
+
+  let description = job.fullDescription;
+  if (!description) description = await fetchJobDescription(job.source, job.externalId, "", null);
+  if (!description || description.length < 50) return null;
+  const fit = await assessJobFit({
+    client: client || requireOpenAI(),
+    model: OPENAI_FAST_MODEL,
+    profileText: buildProfileText(profile),
+    candidateYears: candidateYearsOf(profile),
+    jobTitle: job.title,
+    jobDescription: description,
+  });
+  if (!fit) return null;
+  const stored = { ...fit, profileStamp, scoredAt: admin.firestore.Timestamp.now() };
+  const { writeUserScores } = require("./lib/userJobScores.cjs");
+  await writeUserScores(uid, [{ jobId, score: fit.score, reason: fit.reason, fit: stored }]);
+  if (uid === ADMIN_UID) {
+    await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).set({
+      relevanceScore: fit.score, scoreReason: fit.reason, scoredAt: stored.scoredAt, scoreVersion: FIT_VERSION, scoreProfileStamp: profileStamp,
+    }, { merge: true });
+  }
+  return stored;
+}
+
+/**
+ * Re-score recent jobs whose score predates the current method or the
+ * user's latest profile edit, newest first, while time remains. Only jobs
+ * that might matter are revisited: unscored, failed, or old scores ≥ 30
+ * (the old scorer was reliable at the bottom, not at the top).
+ * A marker in users/{uid}/settings/scoring skips the scan for a few hours
+ * once nothing is left for the current profile.
+ */
+async function rescoreBacklog(userId, { deadlineMs }) {
+  if (userId !== ADMIN_UID) return 0; // corpus + legacy fields live under admin
+  const profileSnap = await db.collection("users").doc(userId).collection("resume").doc("profile").get();
+  if (!profileSnap.exists) return 0;
+  const profileStamp = profileStampOf(profileSnap.data());
+
+  const markerRef = db.collection("users").doc(userId).collection("settings").doc("scoring");
+  const marker = (await markerRef.get()).data() || {};
+  if (marker.backlogClearedFor === profileStamp && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) return 0;
+
+  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs")
+    .orderBy("fetchedAt", "desc")
+    .limit(BACKLOG_SCAN)
+    .select("relevanceScore", "scoreVersion", "scoreProfileStamp", "source", "externalId", "jobUrl")
+    .get();
+  const stale = snap.docs
+    .map((d) => ({ id: d.id, ...d.data() }))
+    .filter((j) => j.scoreVersion !== FIT_VERSION || j.scoreProfileStamp !== profileStamp)
+    .filter((j) => typeof j.relevanceScore !== "number" || j.relevanceScore < 0 || j.relevanceScore >= 30 || j.scoreVersion === FIT_VERSION);
+
+  if (stale.length === 0) {
+    await markerRef.set({ backlogClearedFor: profileStamp, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
+    return 0;
+  }
+  const batch = stale.slice(0, BACKLOG_MAX_PER_RUN).map((j) => ({ jobDocId: j.id, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "" }));
+  logger.info(`rescoreBacklog: ${stale.length} stale in the newest ${BACKLOG_SCAN}; rescoring up to ${batch.length}`);
+  return scoreNewJobsForUser(userId, batch, { deadlineMs });
+}
+
 async function sendPushNotification(userId, summary, durationMs) {
   try {
     const userDoc = await db.collection("users").doc(userId).get();
@@ -3061,7 +3032,7 @@ ${builtResumeStr}
  * changes or the user asks to regenerate.
  * ═══════════════════════════════════════════════════════════════════════════
  */
-const TAILORED_RESUME_VERSION = 1;
+const TAILORED_RESUME_VERSION = 2; // 2: match report comes from the shared job-fit assessment
 
 function normalizeSkillText(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9+#]+/g, " ").replace(/\s+/g, " ").trim();
@@ -3147,7 +3118,7 @@ exports.generateTailoredResume = onCall(
     if (roles.length === 0) {
       throw new HttpsError("failed-precondition", "Your resume profile has no work experience yet. Add your roles on the Profile page.");
     }
-    const profileStamp = profile.updatedAt?.toMillis ? profile.updatedAt.toMillis() : 0;
+    const profileStamp = profileStampOf(profile);
 
     const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
     if (!jobSnap.exists) throw new HttpsError("not-found", "Job not found in database.");
@@ -3199,6 +3170,14 @@ exports.generateTailoredResume = onCall(
 
     const client = requireOpenAI();
 
+    // The match report is the same assessment that scores the job card, so the
+    // two always agree. Reuse it when it's current; otherwise assess now, in
+    // parallel with the rewrite, and store it for the card too.
+    const fitPromise = getOrAssessFit({ uid, jobId, job, profile, client }).catch((err) => {
+      logger.warn(`generateTailoredResume: fit assessment failed for ${jobId}: ${err?.message}`);
+      return null;
+    });
+
     // ── Pass 1: tailor. Roles come back by index only. ────────────────────
     const systemPrompt = `You are an expert technical resume writer. You tailor a candidate's REAL resume to one job description.
 
@@ -3209,7 +3188,7 @@ Hard rules — violating any of them makes the output unusable:
 2. You do not write employers, titles, dates or locations. Refer to roles and projects by their "index" only.
 3. Rewrite each role's experience as 3-6 concise bullets that foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's. Lead with impact; keep numbers only if the profile has them. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Split a dense paragraph into several bullets rather than one long one. Wrap the 2-4 most job-relevant terms of each bullet in **double asterisks** for emphasis; nothing else.
 4. Skills: keep the candidate's skill groups (same labels), reorder within each group so the most job-relevant come first, and drop skills irrelevant to this job only if the group still has at least 3. Never add a skill or a group the candidate doesn't have.
-5. If the job needs something the candidate lacks, say so in the requirements list. Do not paper over gaps.
+5. If the job needs something the candidate lacks, leave it out. Do not paper over gaps.
 6. Write like a human engineer: plain, specific, no buzzword padding, no em dashes.
 7. The summary is a rephrasing of the candidate's existing summary and skills for this job. It may only name domains, technologies and responsibilities that appear in the profile; if the job's domain (e.g. "video understanding") is not in the profile, the summary must not mention it.
 8. Return ONLY a JSON object with this shape:
@@ -3217,12 +3196,8 @@ Hard rules — violating any of them makes the output unusable:
   "summary": "2-3 sentence professional summary for this job, only claims the profile supports, with 3-5 key terms wrapped in **double asterisks**",
   "skillGroups": [{ "label": "same label as the profile", "skills": ["ordered", "list"] }],
   "roles": [{ "index": 0, "bullets": ["...", "..."] }],
-  "projects": [{ "index": 0, "bullets": ["..."] }],
-  "requirements": [
-    { "requirement": "one key requirement from the job description", "covered": "yes" | "partial" | "no", "evidence": "where the profile shows it, or empty" }
-  ]
-}
-List 8-14 requirements covering the job's must-haves and main nice-to-haves.`;
+  "projects": [{ "index": 0, "bullets": ["..."] }]
+}`;
 
     const userPrompt = `## Job: ${jobTitle} at ${companyName}
 ${jobDesc}
@@ -3413,16 +3388,13 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       if (builtRoles[i].bullets.length === 0) builtRoles[i].bullets = splitDescriptionToBullets(roles[i].description);
     }
 
-    const requirements = (Array.isArray(draft.requirements) ? draft.requirements : [])
-      .map((q) => ({
-        requirement: String(q.requirement || "").trim(),
-        covered: ["yes", "partial", "no"].includes(q.covered) ? q.covered : "no",
-        evidence: String(q.evidence || "").trim(),
-      }))
-      .filter((q) => q.requirement);
-    const score = requirements.reduce((acc, q) => acc + (q.covered === "yes" ? 1 : q.covered === "partial" ? 0.5 : 0), 0);
+    const fit = await fitPromise;
+    const requirements = fit?.requirements || [];
     const matchReport = {
-      coveragePct: requirements.length ? Math.round((score / requirements.length) * 100) : null,
+      coveragePct: fit ? fit.score : null, // the job card's number: coverage after role/seniority caps
+      coverage: fit ? fit.coverage : null, // raw requirement coverage before caps
+      reason: fit?.reason || "",
+      capNote: fit?.capNote || null,
       requirements,
       gaps: requirements.filter((q) => q.covered === "no").map((q) => q.requirement),
       removedBullets,
