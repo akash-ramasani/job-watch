@@ -290,6 +290,11 @@ const LogoImage = ({ src, alt, company }) => {
   );
 };
 
+/** "HTTP 404 Not Found for https://… Body: …" → "HTTP 404 Not Found". */
+function shortFeedError(msg) {
+  return String(msg || "").split(". Body:")[0].replace(/ for https?:\/\/\S+/, "").slice(0, 120);
+}
+
 export default function Feeds({ user }) {
   const { showToast } = useToast();
   const [searchParams] = useSearchParams();
@@ -316,6 +321,12 @@ export default function Feeds({ user }) {
 
   const activeFeeds = useMemo(() => feeds.filter((f) => !f.archivedAt), [feeds]);
   const archivedFeeds = useMemo(() => feeds.filter((f) => !!f.archivedAt), [feeds]);
+  // Feeds whose last sync failed (the sync writes lastError only when a feed's
+  // health changes, and clears it when the feed recovers).
+  const failingFeeds = useMemo(
+    () => activeFeeds.filter((f) => f.lastError).sort((a, b) => (a.company || "").localeCompare(b.company || "")),
+    [activeFeeds]
+  );
 
   // Live-check the built endpoint on every company/radio change (debounced).
   useEffect(() => {
@@ -401,7 +412,7 @@ export default function Feeds({ user }) {
     }
 
     try {
-      await addDoc(collection(db, "users", ADMIN_UID, "feeds"), {
+      const added = await addDoc(collection(db, "users", ADMIN_UID, "feeds"), {
         company: cleanCompany,
         url: v.normalizedUrl,
         source,
@@ -411,14 +422,29 @@ export default function Feeds({ user }) {
         lastError: null,
       });
       showToast(
-        `${cleanCompany} (${prettySourceLabel(source)}) feed added successfully`,
+        `${cleanCompany} (${prettySourceLabel(source)}) feed added. Bringing in its current openings…`,
         "success"
       );
+      backfillFeed(added.id);
       setCompany("");
       setCareerSiteUrl("");
     } catch (err) {
       console.error(err);
       showToast("Failed to add feed. Please try again.", "error");
+    }
+  }
+
+  // A new feed only sees jobs updated from now on; pull in the last 3 days'
+  // openings once (fire and forget — the sync can take a minute).
+  async function backfillFeed(feedId) {
+    try {
+      const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || db.app.options.projectId;
+      const idToken = await user.getIdToken();
+      fetch(`https://us-central1-${projectId}.cloudfunctions.net/runSyncNow?feedIds=${encodeURIComponent(feedId)}&lookbackHours=72`, {
+        headers: { Authorization: `Bearer ${idToken}`, "X-Session-Token": localStorage.getItem("jw_session_token") || "" },
+      }).catch(() => {});
+    } catch {
+      /* the next scheduled sync picks the feed up anyway */
     }
   }
 
@@ -629,6 +655,42 @@ export default function Feeds({ user }) {
         </div>
       </div>
 
+      {failingFeeds.length > 0 && (
+        <div className="mt-16 rounded-2xl ring-1 ring-red-100 bg-red-50/40 p-6">
+          <h3 className="text-sm font-bold text-gray-900">Needs attention · {failingFeeds.length} failing</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            These boards errored on their last sync, so their jobs aren't coming in. A 404 usually means the company renamed its board or moved to another job system. Boards that return 404 for 14 days are archived automatically.
+          </p>
+          <ul className="mt-4 divide-y divide-red-100">
+            {failingFeeds.map((feed) => {
+              const since = feed.lastErrorAt?.toDate ? feed.lastErrorAt.toDate() : null;
+              return (
+                <li key={feed.id} className="py-2.5 flex items-center gap-3">
+                  <span className="h-2 w-2 flex-shrink-0 rounded-full bg-red-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-gray-900 truncate">
+                      {feed.company} <span className="font-normal text-gray-400">· {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}</span>
+                    </p>
+                    <p className="text-xs text-gray-500 truncate" title={feed.lastError}>
+                      {shortFeedError(feed.lastError)}{since ? ` · since ${since.toLocaleDateString()}` : ""}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => copyToClipboard(feed.url)} className="text-xs text-gray-500 hover:text-indigo-600">Copy URL</button>
+                  <button
+                    type="button"
+                    onClick={() => archiveFeed(feed.id)}
+                    disabled={busyArchiveId === feed.id}
+                    className="text-xs font-semibold text-amber-700 hover:text-amber-800 disabled:opacity-50"
+                  >
+                    Archive
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
       <div className="mt-16">
         <div className="flex items-center justify-between mb-8">
           <div>
@@ -675,7 +737,10 @@ export default function Feeds({ user }) {
                         company={feed.company}
                       />
                     </div>
-                    <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">{feed.company}</h4>
+                    <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">
+                      {feed.lastError && <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-400 align-middle" title={feed.lastError} />}
+                      {feed.company}
+                    </h4>
                     <span className="mt-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-indigo-600 ring-1 ring-inset ring-indigo-700/10">
                       {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
                     </span>

@@ -641,8 +641,13 @@ exports.runSyncNow = onRequest(
     const runRef = db.collection("users").doc(userId).collection("syncRuns").doc(runId);
 
     const now = admin.firestore.Timestamp.now();
+    // Optional: ?feedIds=a,b&lookbackHours=72 syncs just those feeds and takes
+    // jobs updated in the last N hours (max 72, the job TTL) — used to bring in
+    // current openings when a feed is added or repointed.
+    const onlyFeedIds = String(req.query.feedIds || "").split(",").map((x) => x.trim()).filter(Boolean).slice(0, 100);
+    const lookbackHours = Math.min(72, Math.max(0, Number(req.query.lookbackHours) || 0));
     const recentCutoff = admin.firestore.Timestamp.fromDate(
-      new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
+      new Date(Date.now() - (lookbackHours ? lookbackHours * 3600 * 1000 : RECENT_WINDOW_MINUTES * 60 * 1000))
     );
 
     await runRef.set(
@@ -650,6 +655,7 @@ exports.runSyncNow = onRequest(
         ok: true,
         userId,
         source: "runSyncNow",
+        ...(onlyFeedIds.length ? { onlyFeedIds, lookbackHours } : {}),
         expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + SYNC_RUN_TTL_DAYS * 86400000),
         runType: "manual",
         status: "RUNNING",
@@ -662,7 +668,7 @@ exports.runSyncNow = onRequest(
     );
 
     try {
-      const summary = await syncUserRecentJobs({ userId, now, recentCutoff });
+      const summary = await syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds: onlyFeedIds.length ? onlyFeedIds : null });
 
       const finishedAt = admin.firestore.Timestamp.now();
       const durationMs = finishedAt.toMillis() - startedAt.toMillis();
@@ -849,9 +855,15 @@ exports.rescoreJobs = onRequest(
  * USER SYNC CORE
  * ----------------------------
  */
-async function syncUserRecentJobs({ userId, now, recentCutoff }) {
+async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = null }) {
   const deadlineMs = now.toMillis() + SYNC_TIME_BUDGET_MS;
-  const feeds = await loadActiveFeeds(userId);
+  // A targeted sync (e.g. a just-added feed) reads those feed docs directly,
+  // so it doesn't depend on the feed-list cache having caught up.
+  const feeds = onlyFeedIds
+    ? (await db.getAll(...onlyFeedIds.map((id) => db.collection("users").doc(userId).collection("feeds").doc(id))))
+      .filter((d) => d.exists && !d.data().archivedAt)
+      .map((d) => ({ id: d.id, ...feedListEntry(d.data()) }))
+    : await loadActiveFeeds(userId);
   const feedsCount = feeds.length;
 
   if (feedsCount === 0) {
@@ -1103,6 +1115,28 @@ function errorKey(msg) {
   return msg ? String(msg).split(". Body:")[0].trim() : "";
 }
 
+/**
+ * Nightly: archive boards that have answered 404/410 for DEAD_FEED_DAYS in a
+ * row (lastErrorAt is when the current error first appeared; a recovery
+ * clears it). Archived feeds can be restored from the Feeds page.
+ */
+const DEAD_FEED_DAYS = 14;
+async function archiveDeadFeeds(userId) {
+  const cutoff = Date.now() - DEAD_FEED_DAYS * 86400000;
+  const snap = await db.collection("users").doc(userId).collection("feeds").where("archivedAt", "==", null).get();
+  const dead = snap.docs.filter((d) => {
+    const x = d.data();
+    return /^HTTP (404|410)\b/.test(x.lastError || "") && x.lastErrorAt?.toMillis?.() < cutoff;
+  });
+  if (!dead.length) return 0;
+  const now = admin.firestore.Timestamp.now();
+  const bw = db.bulkWriter();
+  for (const d of dead) bw.set(d.ref, { archivedAt: now, archivedReason: `Board returned ${d.data().lastError.slice(0, 8)} for ${DEAD_FEED_DAYS}+ days` }, { merge: true });
+  await bw.close();
+  logger.info(`archiveDeadFeeds: archived ${dead.length} feeds: ${dead.map((d) => d.data().companyName || d.data().company).join(", ")}`);
+  return dead.length;
+}
+
 exports.onFeedWritten = onDocumentWritten(
   { document: "users/{uid}/feeds/{feedId}", region: REGION },
   async (event) => {
@@ -1319,6 +1353,8 @@ async function workdayFetchJson(url, { method = "GET", body = null, maxRetries =
           accept: "application/json",
           "content-type": "application/json",
           "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          // Some tenants (GEICO, Truist, Choice Hotels, ODFL) answer 500 without it.
+          "accept-language": "en-US",
         },
         body: body ? JSON.stringify(body) : undefined,
       });
@@ -4150,6 +4186,7 @@ exports.dailyAggregationReconciliation = onSchedule(
       try {
         const result = await rebuildAggregations(userId);
         logger.info(`Aggregation rebuilt for ${userId}: ${result.totalJobs} jobs, ${result.cities} cities, ${result.companies} companies`);
+        await archiveDeadFeeds(userId).catch((err) => logger.error(`archiveDeadFeeds failed: ${err?.message || err}`));
         await rebuildFeedList(userId);
       } catch (err) {
         logger.error(`Aggregation rebuild failed for ${userId}: ${err?.message || err}`);

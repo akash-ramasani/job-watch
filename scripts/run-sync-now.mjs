@@ -7,6 +7,7 @@
 // calls the runSyncNow HTTP function. The sync can take several minutes.
 //
 // Usage: node scripts/run-sync-now.mjs
+//        node scripts/run-sync-now.mjs --feeds id1,id2 --hours 72   # just those feeds, jobs from the last N hours
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -45,7 +46,9 @@ const signIn = await fetch(
 if (!signIn.ok) throw new Error(`signInWithCustomToken failed: ${signIn.status} ${await signIn.text()}`);
 const { idToken } = await signIn.json();
 
-const url = `https://${REGION}-${PROJECT_ID}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}`;
+const argAfter = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
+const extra = argAfter("--feeds") ? `&feedIds=${encodeURIComponent(argAfter("--feeds"))}&lookbackHours=${encodeURIComponent(argAfter("--hours") || "72")}` : "";
+const url = `https://${REGION}-${PROJECT_ID}.cloudfunctions.net/runSyncNow?userId=${encodeURIComponent(ADMIN_UID)}${extra}`;
 console.log(`POST ${url}\n(waiting — a full sync can take a few minutes)`);
 const startedAt = Date.now();
 let resp;
