@@ -188,6 +188,20 @@ const ADJACENT = {
 // analyst's "Analyst" or a developer's "Engineer" should land on one type.
 const ROLE_PRIORITY = ["ml_ai", "data_science", "data_engineering", "data_analytics", "security", "devops_cloud", "qa_test", "software", "solutions", "it_support", "product", "program_project", "design"];
 
+/** The profile's own job type: the type most of its role titles read as (ties → most recent). */
+function ownFamilyForProfile(profile) {
+  const counts = new Map();
+  (profile?.roles || []).forEach((r, i) => {
+    const fams = classifyTitle(r.title || "");
+    const pick = ROLE_PRIORITY.find((f) => f !== "ml_ai" && fams.includes(f)) || (fams.includes("ml_ai") ? "ml_ai" : fams[0]);
+    if (!pick) return;
+    const c = counts.get(pick) || { n: 0, first: i };
+    c.n++;
+    counts.set(pick, c);
+  });
+  return [...counts.entries()].sort((a, b) => b[1].n - a[1].n || a[1].first - b[1].first)[0]?.[0] || null;
+}
+
 /** Job types a profile should see scored, from its own role titles (most recent first). */
 function familiesForProfile(profile) {
   const titles = (profile?.roles || []).map((r) => r.title || "").filter(Boolean).slice(0, 4);
@@ -245,4 +259,4 @@ const targetsKey = (targets) => [...(targets || [])].sort().join(",");
 
 const familyLabel = (id) => FAMILIES[id]?.label || id;
 
-module.exports = { FAMILIES, FAMILY_IDS, ADJACENT, classifyTitle, familiesForProfile, shouldAssess, descriptionFits, targetsKey, familyLabel };
+module.exports = { FAMILIES, FAMILY_IDS, ADJACENT, classifyTitle, familiesForProfile, ownFamilyForProfile, shouldAssess, descriptionFits, targetsKey, familyLabel };

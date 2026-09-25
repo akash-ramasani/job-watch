@@ -73,8 +73,9 @@ if (arg("--csv")) {
   }
   const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const sorted = rows.sort((a, b) => (scores.get(b.id)?.score ?? -1) - (scores.get(a.id)?.score ?? -1) || b.sourceUpdatedTs.toMillis() - a.sourceUpdatedTs.toMillis());
-  const lines = ["score,title,company,location,posted_pt,apply_url,why", ...sorted.map((r) => [
-    scores.get(r.id)?.score ?? "", r.title, r.companyName, r.locationName,
+  const by = (x) => (!x ? "" : x.fit?.method === "rule" ? "rules" : x.fit?.version === 2 ? "AI" : "AI (old method)");
+  const lines = ["score,scored_by,title,company,location,posted_pt,apply_url,why", ...sorted.map((r) => [
+    scores.get(r.id)?.score ?? "", by(scores.get(r.id)), r.title, r.companyName, r.locationName,
     r.sourceUpdatedTs.toDate().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }),
     r.applyUrl || r.jobUrl, scores.get(r.id)?.reason || "",
   ].map(q).join(","))];

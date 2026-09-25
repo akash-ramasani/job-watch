@@ -10,7 +10,9 @@
  *
  * Aggregation doc:
  *   /users/{userId}/aggregations/myJobScores
- *   { scores: { [jobId]: { score, reason, k? } }, count, updatedAt }
+ *   { scores: { [jobId]: { score, reason, k?, t?, m?, p? } }, count, updatedAt }
+ *   t = job types the result was made for (type skips and rule scores),
+ *   m = "r" for a rule score, p = 1 when that rule score still wants the AI.
  *   k = "{fit version}:{profile stamp}" when the score came from jobFit, so the
  *   sync can tell which scores are stale with this one read.
  *
@@ -87,7 +89,8 @@ async function updateUserScoreRollup(userId, entries, dbInstance, { listedIds = 
         score: typeof score === "number" ? score : null,
         reason: reason || "",
         ...(fit?.version ? { k: freshnessKey(fit.version, fit.profileStamp) } : {}),
-        ...(fit?.screened ? { t: fit.targetsKey || "" } : {}),
+        ...(fit?.screened || fit?.method === "rule" ? { t: fit.targetsKey || "" } : {}),
+        ...(fit?.method === "rule" ? { m: "r", ...(fit.aiPending ? { p: 1 } : {}) } : {}),
       };
     }
     for (const id of Object.keys(scores)) if (!listedIds.has(id)) delete scores[id];
@@ -135,7 +138,8 @@ async function rebuildUserJobScores(userId, dbInstance) {
           score: typeof x.score === "number" ? x.score : null,
           reason: x.reason || "",
           ...(x.fit?.version ? { k: freshnessKey(x.fit.version, x.fit.profileStamp) } : {}),
-          ...(x.fit?.screened ? { t: x.fit.targetsKey || "" } : {}),
+          ...(x.fit?.screened || x.fit?.method === "rule" ? { t: x.fit.targetsKey || "" } : {}),
+          ...(x.fit?.method === "rule" ? { m: "r", ...(x.fit.aiPending ? { p: 1 } : {}) } : {}),
         };
         count++;
       }
