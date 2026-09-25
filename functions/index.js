@@ -2473,7 +2473,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       if (fit.version === FIT_VERSION && (!fit.screened || fit.targetsKey === tk)) return;
       if (fit.version === RULE_FIT_VERSION && fit.targetsKey === tk && !fit.aiPending) return;
     }
-    todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null });
+    todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null, existingFit: fit || null });
   });
   if (todo.length === 0) return 0;
   logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}`);
@@ -2524,6 +2524,12 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const mine = profileSkills(profile);
   let ruleOnly = 0;
   // A rule result to store: final below the cutoff, else waiting for the AI.
+  // The job already has this rule score and is still waiting for the AI:
+  // nothing to write (avoids rewriting the same doc every run while the AI is down).
+  const alreadyWaiting = (job) => {
+    const f = job.existingFit;
+    return f && f.version === RULE_FIT_VERSION && f.profileStamp === profileStamp && f.targetsKey === tk && f.aiPending;
+  };
   const ruleResult = (job, rule, aiPending) => ({
     jobId: job.jobDocId, score: rule.score, reason: rule.reason,
     fit: { ...rule, version: RULE_FIT_VERSION, profileStamp, targetsKey: tk, scoredAt, sig: job.sig || null, ...(aiPending ? { aiPending: true } : {}) },
@@ -2561,7 +2567,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       const rule = ruleAssessJob({ profile, jobTitle: job.title, description, targets, mine });
       const wantsAi = force || audits.has(job.jobDocId) || rule.aiWorthy;
       if (!wantsAi) { ruleOnly++; results.push(ruleResult(job, rule, false)); return; }
-      if (outOfCredits) { results.push(ruleResult(job, rule, true)); return; }
+      if (outOfCredits) { if (alreadyWaiting(job)) skippedForTime++; else results.push(ruleResult(job, rule, true)); return; }
 
       let fit = await priorFitFor(job.sig).catch(() => null); // scored before under another id
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
@@ -2580,7 +2586,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       }
       if (!fit) {
         // AI unavailable (no credits, errors): show the rule score meanwhile.
-        results.push(ruleResult(job, rule, true));
+        if (alreadyWaiting(job)) skippedForTime++; else results.push(ruleResult(job, rule, true));
         return;
       }
       const stored = { ...fit, profileStamp, scoredAt, sig: job.sig || null, rule: { score: rule.score, version: RULE_VERSION }, ...(audits.has(job.jobDocId) ? { audit: true, families: job.families || [] } : {}) };
@@ -2593,7 +2599,11 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
     }
   })));
-  if (outOfCredits) logger.error(`scoreNewJobsForUser: OpenAI account is out of credits; jobs above the rule cutoff keep their rule score for now (userId=${userId})`);
+  if (outOfCredits) {
+    logger.error(`scoreNewJobsForUser: OpenAI account is out of credits; jobs keep their rule score for now (userId=${userId})`);
+    await db.collection("users").doc(userId).collection("settings").doc("scoring")
+      .set({ aiOutOfCreditsAt: admin.firestore.Timestamp.now() }, { merge: true }).catch(() => {});
+  }
   if (ruleOnly) logger.info(`hybrid userId=${userId}: ${ruleOnly} jobs scored by rules only`);
 
   // Duplicates take their primary's assessment.
@@ -2688,7 +2698,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
  * whose score for this user is missing, or came from an older method or an
  * older version of their resume. Costs two document reads.
  */
-async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = "" } = {}) {
+async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = "", skipAiPending = false } = {}) {
   const { freshnessKey } = require("./lib/userJobScores.cjs");
   const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
   const [recentSnap, allSnap, mineSnap] = await Promise.all([
@@ -2708,7 +2718,7 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
       const s = scores[j.id];
       const skippedByType = s && s.t !== undefined;
       if (s && s.k === key && (!skippedByType || s.t === tk)) continue; // current
-      if (s && s.k === ruleKey && s.rt === tk && !s.p) continue; // final rule score (the AI isn't needed)
+      if (s && s.k === ruleKey && s.rt === tk && (!s.p || skipAiPending)) continue; // final rule score, or waiting while the AI is down
       // A full assessment that found a different field survives resume edits.
       // Type-filter skips are redone (free) whenever the resume or job types change.
       if (s && !skippedByType && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue;
@@ -2743,7 +2753,9 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   // Jobs that failed repeatedly for this resume (no readable description, etc.).
   const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
   const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
-  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk });
+  // After an out-of-credits error, don't retry AI-waiting jobs for an hour.
+  const aiDown = marker.aiOutOfCreditsAt?.toMillis?.() > Date.now() - 3600 * 1000;
+  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk, skipAiPending: aiDown });
 
   if (stale.length === 0) {
     await markerRef.set({ backlogClearedFor: clearKey, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
