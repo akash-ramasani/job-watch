@@ -11,6 +11,8 @@ import PhoneInput from "../components/PhoneInput.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
+import { parseLatexResume, looksLikeLatexResume } from "../lib/latexResume.js";
+import { buildResumeLatex } from "../lib/resumeLatex.js";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -18,7 +20,7 @@ const PARSE_RESUME_URL =
 const GEN_PRONUNCIATION_URL =
   `https://us-central1-${import.meta.env.VITE_FIREBASE_PROJECT_ID}.cloudfunctions.net/generateNamePronunciation`;
 
-const ACCEPTED_TYPES = [".pdf", ".docx", ".txt"];
+const ACCEPTED_TYPES = [".pdf", ".docx", ".txt", ".tex"];
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 // ─── URL Slug Helpers ──────────────────────────────────────────────────────────
@@ -53,8 +55,15 @@ function formatPhone(raw) {
   return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
 }
 
+// Skills are edited as groups; a profile that only has the flat list becomes one group.
+function groupsForEdit(data) {
+  const groups = Array.isArray(data.skillGroups) ? data.skillGroups : [];
+  if (groups.length) return groups;
+  return data.skills?.length ? [{ label: "Skills", skills: data.skills }] : [];
+}
+
 function emptyResume() {
-  return { summary: "", skills: [], roles: [], education: [], projects: [], certifications: [], extraExperience: "", rawText: "", fileName: "" };
+  return { header: {}, summary: "", skills: [], skillGroups: [], roles: [], education: [], projects: [], certifications: [], extraExperience: "", rawText: "", fileName: "" };
 }
 
 // ─── Auto-expanding Textarea ───────────────────────────────────────────────────
@@ -139,7 +148,8 @@ export default function Profile({ user, userMeta }) {
   const [savedResumeFull, setSavedResumeFull] = useState(null);
   const [uploadingFileName, setUploadingFileName] = useState("");
   const [savingResume, setSavingResume] = useState(false);
-  const [skillInput, setSkillInput] = useState("");
+  const [showLatexPaste, setShowLatexPaste] = useState(false);
+  const [latexPaste, setLatexPaste] = useState("");
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
   const [togglingAi, setTogglingAi] = useState(false);
   const isAdmin = user?.uid === ADMIN_UID;
@@ -341,11 +351,40 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
+  // A resume in the JobWatch LaTeX template is parsed here, deterministically:
+  // every bullet, skill group, location, project link and the header survive.
+  // (The PDF/DOCX path goes through AI extraction and is lossy by nature.)
+  function handleLatexText(text, fileName = "resume.tex") {
+    if (!looksLikeLatexResume(text)) {
+      showToast("That doesn't look like the JobWatch LaTeX resume template (no \\resumeSubheading / \\resumeItem).", "error");
+      return false;
+    }
+    const parsed = parseLatexResume(text);
+    if (!parsed.roles.length && !parsed.summary) {
+      showToast("Parsed the LaTeX but found no roles or summary — check the section names.", "error");
+      return false;
+    }
+    setResumeData({ ...emptyResume(), ...savedResumeFull, ...parsed, fileName, resumeUrl: savedResumeFull?.resumeUrl || null, extraExperience: savedResumeFull?.extraExperience || "" });
+    setLatexPaste("");
+    setShowLatexPaste(false);
+    setResumePhase("review");
+    track("resume_parsed", { file_type: "tex", roles: parsed.roles.length });
+    return true;
+  }
+
   async function handleResumeFile(file) {
     if (!file) return;
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
     if (!ACCEPTED_TYPES.includes(`.${ext}`)) { showToast(`Unsupported file type ".${ext}"`, "error"); return; }
     if (file.size > MAX_FILE_BYTES) { showToast("File too large (Max 10MB)", "error"); return; }
+    if (ext === "tex") {
+      try {
+        handleLatexText(await file.text(), file.name);
+      } catch (err) {
+        showToast(err.message || "Could not read the .tex file", "error");
+      }
+      return;
+    }
     setUploadingFileName(file.name);
     setResumePhase("parsing");
     try {
@@ -376,10 +415,41 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
+  // The saved profile rendered in the LaTeX template, untailored: the master
+  // resume. Edit in the app, export whenever you want the file.
+  function handleExportMasterTex() {
+    const profile = savedResumeFull;
+    if (!profile) return;
+    const contact = {
+      name: userMeta?.fullName || user?.displayName || "",
+      location: userMeta?.city || "",
+      phone: userMeta?.phone || "",
+      email: userMeta?.email || user?.email || "",
+      github: userMeta?.github || "",
+      linkedin: userMeta?.linkedin || "",
+    };
+    const roles = (profile.roles || []).map((r) => ({ ...r, bullets: String(r.description || "").split("\n").map((b) => b.trim()).filter(Boolean) }));
+    const projects = (profile.projects || []).map((p) => ({ ...p, technologies: p.techStack || "", bullets: String(p.description || "").split("\n").map((b) => b.trim()).filter(Boolean) }));
+    const tex = buildResumeLatex({ ...profile, roles, projects }, contact);
+    const blob = new Blob([tex], { type: "application/x-tex;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(profile.header?.name || contact.name || "Resume").replace(/[<>:"/\\|?*]/g, "_")} - Resume.tex`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    track("resume_master_exported");
+  }
+
   async function handleSaveResume() {
     setSavingResume(true);
     try {
-      const payload = { ...resumeData, savedAt: serverTimestamp(), updatedAt: serverTimestamp() };
+      // Skill groups are the source of truth when present; the flat list is derived for the generator/scorer.
+      const groups = (resumeData.skillGroups || []).map((g) => ({ label: String(g.label || "").trim() || "Skills", skills: (g.skills || []).map((s) => String(s).trim()).filter(Boolean) })).filter((g) => g.skills.length);
+      const flatSkills = groups.length ? [...new Set(groups.flatMap((g) => g.skills))] : (resumeData.skills || []);
+      const payload = { ...resumeData, skillGroups: groups, skills: flatSkills, savedAt: serverTimestamp(), updatedAt: serverTimestamp() };
       await setDoc(doc(db, "users", user.uid, "resume", "profile"), payload, { merge: true });
       // Mirror resumeUrl on the top-level user doc for quick extension access
       if (resumeData.resumeUrl) {
@@ -388,7 +458,7 @@ export default function Profile({ user, userMeta }) {
           resumeFileName: resumeData.fileName,
         }, { merge: true });
       }
-      setSavedResumeFull({ ...resumeData, savedAt: new Date() });
+      setSavedResumeFull({ ...payload, savedAt: new Date() });
       track("resume_saved");
       showToast("Resume saved!", "success");
       setResumePhase("idle");
@@ -396,19 +466,7 @@ export default function Profile({ user, userMeta }) {
     finally { setSavingResume(false); }
   }
 
-  function addSkill() {
-    const s = skillInput.trim();
-    if (!s) return;
-    const incoming = s.split(",").map(x => x.trim()).filter(Boolean);
-    setResumeData({ ...resumeData, skills: [...new Set([...(resumeData.skills || []), ...incoming])] });
-    setSkillInput("");
-  }
 
-  function removeSkill(idx) {
-    const skills = [...(resumeData.skills || [])];
-    skills.splice(idx, 1);
-    setResumeData({ ...resumeData, skills });
-  }
 
   function updateResumeArray(field, idx, key, val) {
     const arr = [...(resumeData[field] || [])];
@@ -697,7 +755,7 @@ export default function Profile({ user, userMeta }) {
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
         <ProfileCard
           title="Resume & Professional Profile"
-          description="Upload your resume for AI extraction. Review and save your structured profile."
+          description="Import your resume (PDF via AI extraction, or .tex for an exact import), edit the structured profile, export it back as LaTeX."
           headerAction={
             savedResumeFull && resumePhase === "idle" ? (
               <button
@@ -731,16 +789,52 @@ export default function Profile({ user, userMeta }) {
                     <p className="text-sm font-semibold text-gray-900">
                       <span className="text-indigo-600">Upload a file</span> or drag and drop
                     </p>
-                    <p className="mt-1 text-xs text-gray-400">PDF, DOCX, TXT up to 10MB</p>
+                    <p className="mt-1 text-xs text-gray-400">PDF, DOCX, TXT (AI extraction) or .tex in the JobWatch template (exact import) · up to 10MB</p>
                   </div>
-                  <input ref={dropzoneInputRef} type="file" className="sr-only" accept=".pdf,.docx,.txt" onChange={(e) => handleResumeFile(e.target.files[0])} />
+                  <input ref={dropzoneInputRef} type="file" className="sr-only" accept=".pdf,.docx,.txt,.tex" onChange={(e) => handleResumeFile(e.target.files[0])} />
+                </div>
+
+                {/* Paste LaTeX — same parser as .tex upload, no file needed */}
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setShowLatexPaste((v) => !v)}
+                    className="w-full flex items-center justify-between px-5 py-3 text-left"
+                  >
+                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Paste LaTeX instead</span>
+                    <span className="text-xs text-gray-400">{showLatexPaste ? "Hide" : "Your resume in the JobWatch template → exact import"}</span>
+                  </button>
+                  {showLatexPaste && (
+                    <div className="px-5 pb-5 space-y-3">
+                      <textarea
+                        className="input-standard font-mono text-xs min-h-[160px]"
+                        value={latexPaste}
+                        onChange={(e) => setLatexPaste(e.target.value)}
+                        placeholder={"\\documentclass[a4paper,11pt]{article}\n…\n\\resumeSubheading{Company}{Jun 2026 -- Present}{Title}{City, ST}\n\\resumeItem{…}"}
+                        spellCheck={false}
+                      />
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[11px] text-gray-400">Bullets, skill groups, locations, project links and the header are kept exactly; \textbf becomes **bold**.</p>
+                        <button type="button" onClick={() => handleLatexText(latexPaste)} disabled={!latexPaste.trim()} className="btn-primary whitespace-nowrap disabled:opacity-50">Parse LaTeX</button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Saved Snapshot */}
                 {savedResumeFull && (
                   <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
+                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between gap-3">
                       <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Saved Snapshot</p>
+                      <div className="flex items-center gap-4">
+                      <button
+                        type="button"
+                        onClick={handleExportMasterTex}
+                        className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors"
+                        title="Your saved profile rendered in the LaTeX template (untailored)"
+                      >
+                        Export master .tex
+                      </button>
                       {savedResumeFull.resumeUrl && (
                         <a
                           href={savedResumeFull.resumeUrl}
@@ -754,6 +848,7 @@ export default function Profile({ user, userMeta }) {
                           {savedResumeFull.fileName || "View File"}
                         </a>
                       )}
+                      </div>
                     </div>
                     <div className="p-5 space-y-5">
                       {savedResumeFull.summary && (
@@ -813,7 +908,7 @@ export default function Profile({ user, userMeta }) {
                 <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
                   <div>
                     <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Review Extraction</p>
-                    <p className="text-sm font-semibold text-gray-900 mt-0.5">Verify the AI's output before saving.</p>
+                    <p className="text-sm font-semibold text-gray-900 mt-0.5">{resumeData.fileName?.endsWith(".tex") ? "Imported exactly from LaTeX — review and save." : "Verify the AI's output before saving."}</p>
                   </div>
                   <button onClick={() => setResumePhase("idle")} className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
                 </div>
@@ -831,6 +926,23 @@ export default function Profile({ user, userMeta }) {
                     />
                   </div>
 
+                  {/* Resume header — what the .tex/PDF exports print under your name. Location is replaced per job. */}
+                  <div>
+                    <label className="caps-label block mb-2">Resume header</label>
+                    <div className="grid grid-cols-2 gap-4">
+                      {[["name", "Name"], ["location", "Location (default)"], ["phone", "Phone"], ["email", "Email"], ["github", "GitHub"], ["linkedin", "LinkedIn"]].map(([key, label]) => (
+                        <LabeledInput
+                          key={key}
+                          label={label}
+                          value={resumeData.header?.[key] || ""}
+                          onChange={(e) => setResumeData({ ...resumeData, header: { ...(resumeData.header || {}), [key]: e.target.value } })}
+                          placeholder={key === "location" ? "e.g. Columbus, OH 43212" : ""}
+                        />
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[11px] text-gray-400">Blank fields fall back to your account details above. The location on a tailored resume follows the job's city.</p>
+                  </div>
+
                   {/* Extra real experience — feeds the tailored-resume generator only */}
                   <div>
                     <label htmlFor="resume-extra" className="caps-label block mb-2">More you've actually done (not on the resume)</label>
@@ -843,24 +955,55 @@ export default function Profile({ user, userMeta }) {
                     />
                   </div>
 
-                  {/* Skills */}
+                  {/* Skills — grouped like the resume ("Languages:", "Cloud / DevOps:"). The flat list is derived on save. */}
                   <div>
-                    <label className="caps-label block mb-3">Skills</label>
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {resumeData.skills.map((s, i) => (
-                        <span key={i} className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-3 py-1 text-[11px] font-bold text-indigo-700 ring-1 ring-indigo-100">
-                          {s}
-                          <button type="button" onClick={() => removeSkill(i)} className="text-indigo-300 hover:text-indigo-600 transition-colors leading-none">✕</button>
-                        </span>
+                    <div className="flex items-center justify-between mb-3">
+                      <label className="caps-label">Skills</label>
+                      <button
+                        type="button"
+                        onClick={() => setResumeData({ ...resumeData, skillGroups: [...groupsForEdit(resumeData), { label: "", skills: [] }] })}
+                        className="btn-secondary whitespace-nowrap"
+                      >
+                        Add group
+                      </button>
+                    </div>
+                    <div className="space-y-3">
+                      {groupsForEdit(resumeData).map((g, gi) => (
+                        <div key={gi} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-start">
+                          <input
+                            type="text"
+                            className="input-standard sm:col-span-1"
+                            placeholder="Group (e.g. Languages)"
+                            value={g.label}
+                            onChange={(e) => {
+                              const groups = groupsForEdit(resumeData).map((x, i) => (i === gi ? { ...x, label: e.target.value } : x));
+                              setResumeData({ ...resumeData, skillGroups: groups });
+                            }}
+                          />
+                          <div className="sm:col-span-3 flex gap-2">
+                            <input
+                              type="text"
+                              className="input-standard flex-1"
+                              placeholder="Comma-separated skills"
+                              value={g.text ?? g.skills.join(", ")}
+                              onChange={(e) => {
+                                const groups = groupsForEdit(resumeData).map((x, i) => (i === gi ? { ...x, text: e.target.value, skills: e.target.value.split(",").map((t) => t.trim()).filter(Boolean) } : x));
+                                setResumeData({ ...resumeData, skillGroups: groups });
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setResumeData({ ...resumeData, skillGroups: groupsForEdit(resumeData).filter((_, i) => i !== gi) })}
+                              className="text-gray-300 hover:text-red-500 transition-colors px-1"
+                              title="Remove group"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
                       ))}
                     </div>
-                    <div className="flex gap-2">
-                      <input type="text" className="input-standard" placeholder="Add skills (comma separated)…"
-                        value={skillInput} onChange={(e) => setSkillInput(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addSkill())}
-                      />
-                      <button type="button" onClick={addSkill} className="btn-secondary whitespace-nowrap">Add</button>
-                    </div>
+                    <p className="mt-2 text-[11px] text-gray-400">The tailored resume keeps your groups and only reorders or trims within them; it never adds a skill you haven't listed.</p>
                   </div>
 
                   {/* Work Experience */}
@@ -883,7 +1026,7 @@ export default function Profile({ user, userMeta }) {
                           <LabeledInput label="Location" value={role.location || ""} onChange={(e) => updateResumeArray("roles", i, "location", e.target.value)} placeholder="e.g. Sunnyvale, CA" />
                         </div>
                         <div className="mt-4">
-                          <label className="caps-label block mb-2">Description</label>
+                          <label className="caps-label block mb-2">Description <span className="normal-case font-medium tracking-normal text-gray-400">— one bullet per line; wrap terms in **double asterisks** to bold them on the resume</span></label>
                           <AutoTextarea className="input-standard" value={role.description} onChange={(e) => updateResumeArray("roles", i, "description", e.target.value)} />
                         </div>
                       </ResumeCard>
@@ -900,7 +1043,8 @@ export default function Profile({ user, userMeta }) {
                       <ResumeCard key={i} onRemove={() => removeResumeArrayItem("projects", i)}>
                         <div className="grid grid-cols-2 gap-4">
                           <LabeledInput label="Project Name" value={proj.name} onChange={(e) => updateResumeArray("projects", i, "name", e.target.value)} />
-                          <LabeledInput label="Tech Stack" value={proj.techStack} onChange={(e) => updateResumeArray("projects", i, "techStack", e.target.value)} />
+                          <LabeledInput label="Tech Stack" value={proj.techStack || ""} onChange={(e) => updateResumeArray("projects", i, "techStack", e.target.value)} />
+                          <LabeledInput label="Link" value={proj.link || ""} onChange={(e) => updateResumeArray("projects", i, "link", e.target.value)} placeholder="https://github.com/you/project" />
                         </div>
                         <div className="mt-4">
                           <label className="caps-label block mb-2">Description</label>
@@ -923,6 +1067,7 @@ export default function Profile({ user, userMeta }) {
                           <LabeledInput label="Institution" value={edu.institution} onChange={(e) => updateResumeArray("education", i, "institution", e.target.value)} />
                           <LabeledInput label="Start Year" value={edu.startDate} onChange={(e) => updateResumeArray("education", i, "startDate", e.target.value)} />
                           <LabeledInput label="End Year" value={edu.endDate} onChange={(e) => updateResumeArray("education", i, "endDate", e.target.value)} />
+                          <LabeledInput label="Location" value={edu.location || ""} onChange={(e) => updateResumeArray("education", i, "location", e.target.value)} placeholder="e.g. Hayward, California" />
                         </div>
                       </ResumeCard>
                     ))}
