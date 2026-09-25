@@ -8,7 +8,7 @@
 //   node scripts/rescore-jobs.mjs --backlog 200 --write   # rescore the 200 newest stale jobs for real
 //   node scripts/rescore-jobs.mjs --stale --write     # rescore every stale job (old method or old profile), in batches
 //   node scripts/rescore-jobs.mjs --user someone@x.com --backlog 300 --write   # another user's Jobs page
-//   node scripts/rescore-jobs.mjs --screen-eval 800   # how the title screen does on already-scored jobs
+//   node scripts/rescore-jobs.mjs --types [--user x@y.com]   # what the job-type filter skips, plus the audit of skipped jobs (free)
 //   add --verbose to print each job's requirements
 
 import { readFile } from "node:fs/promises";
@@ -50,7 +50,7 @@ if (flag("--stale")) {
   body.jobIds = staleQueue.slice(0, 250);
 } else if (flag("--ids")) body.jobIds = String(flag("--ids")).split(",");
 else if (flag("--backlog")) body.limit = Number(flag("--backlog")) || 50;
-else if (flag("--screen-eval")) { body.screenEval = true; body.limit = Number(flag("--screen-eval")) || 800; }
+else if (flag("--types")) body.typesEval = true;
 else if (flag("--sample")) {
   // A spread: old top scores, the middle, titles that should be capped, and a few low ones.
   const snap = await firestore.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("fetchedAt", "desc").limit(1500)
@@ -68,7 +68,7 @@ else if (flag("--sample")) {
     ...pick((r) => r.relevanceScore < 30 && /engineer/i.test(r.title), 2),
   ])];
 } else {
-  console.error("Pass --sample, --ids a,b, --backlog N or --screen-eval N (add --write to save).");
+  console.error("Pass --sample, --ids a,b, --backlog N or --types (add --write to save).");
   process.exit(1);
 }
 
@@ -118,7 +118,7 @@ let out;
 try { out = JSON.parse(text); } catch { console.log(`HTTP ${resp.status}`, text.slice(0, 400)); process.exit(1); }
 console.log(`HTTP ${resp.status} in ${Math.round((Date.now() - started) / 1000)}s\n`);
 if (!out.ok) { console.log(out); process.exit(1); }
-if (body.screenEval) { console.log(JSON.stringify(out, null, 1)); process.exit(0); }
+if (body.typesEval) { console.log(JSON.stringify(out, null, 1)); process.exit(0); }
 
 const pad = (s, n) => String(s ?? "").slice(0, n).padEnd(n);
 console.log(`${pad("old", 4)} ${pad("new", 4)} ${pad("cov", 4)} ${pad("fit", 18)} ${pad("job", 58)} reason`);

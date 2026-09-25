@@ -28,6 +28,7 @@
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const nodeCrypto = require("crypto");
 const { defineSecret } = require("firebase-functions/params");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
@@ -68,7 +69,8 @@ function requireOpenAI() {
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
-const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenJobTitles, screenedFit, isSoftwareCandidate, profileHeadline, otherFieldForSoftware } = require("./lib/jobFit.cjs");
+const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenedFit, isSoftwareCandidate } = require("./lib/jobFit.cjs");
+const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./lib/jobFamilies.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
@@ -91,19 +93,38 @@ const TTL_DAYS = 3;
 // Job scoring (functions/lib/jobFit.cjs). Each assessment is one ~3-5 s model
 // call; a few in flight keeps a full run inside the function's 540 s limit.
 const SCORING_CONCURRENCY = 4;
-const SCREEN_BATCH = 40; // job titles per title-screen call
-// The model-based title screen for non-software candidates. Off until it's
-// been evaluated (scripts/rescore-jobs.mjs --screen-eval): its first version
-// dropped good matches.
-const LLM_TITLE_SCREEN = false;
+// Share of jobs skipped by the job-type filter that get a full assessment
+// anyway, to measure what the filter misses (settings/scoring.audit*).
+const AUDIT_PERCENT = 3;
 const SYNC_RUN_TTL_DAYS = 30; // syncRuns docs expire via the TTL policy on expireAt
 const SYNC_TIME_BUDGET_MS = 470 * 1000; // leave room for aggregation rebuilds after scoring
-const BACKLOG_MAX_PER_RUN = 100; // per user per sync run
+// Jobs per user per sync run. Most are sorted out by job type for free; the
+// AI calls among them are bounded by the run's time budget.
+const BACKLOG_MAX_PER_RUN = 400;
 // A score this low means "different field". A resume edit rarely changes
 // that, so those jobs aren't rescored when only the profile changed.
 const SKIP_RESCORE_BELOW = 15;
 const MAX_SCORING_ATTEMPTS = 3; // per job per resume version, then give up
 const NO_DESCRIPTION = "Couldn't read the job description.";
+
+/** Job types this user wants scored: their saved choice, else read from their resume. */
+function jobTypesFor(profile, prefs) {
+  const saved = Array.isArray(prefs?.jobTypes) ? prefs.jobTypes.filter((f) => FAMILY_IDS.includes(f) || f === "engineering_general") : [];
+  return saved.length ? saved : familiesForProfile(profile);
+}
+
+/** Same posting (company + title + description) → same assessment. */
+function jobSignature(job) {
+  const desc = String(job.fullDescription || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  if (desc.length < 200) return null;
+  const title = String(job.title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return nodeCrypto.createHash("sha1").update(`${job.companyKey || ""}|${title}|${desc.slice(0, 4000)}`).digest("hex").slice(0, 20);
+}
+
+/** Deterministic ~AUDIT_PERCENT% sample of (user, job) pairs. */
+function auditPick(userId, jobId) {
+  return nodeCrypto.createHash("sha1").update(`${userId}|${jobId}`).digest()[0] % 100 < AUDIT_PERCENT;
+}
 const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota/i.test(err?.message || "");
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
@@ -748,39 +769,33 @@ exports.rescoreJobs = onRequest(
     const targetUid = typeof body.userId === "string" && body.userId ? body.userId : ADMIN_UID;
 
     const profileSnap = await db.collection("users").doc(targetUid).collection("resume").doc("profile").get();
-    if (!profileSnap.exists) return res.status(400).json({ error: `No resume profile for ${targetUid}.` });
-    const profile = profileSnap.data();
+    if (!profileSnap.exists && body.typesEval !== true) return res.status(400).json({ error: `No resume profile for ${targetUid}.` });
+    const profile = profileSnap.exists ? profileSnap.data() : {};
 
-    // screenEval: run the title screen on jobs that already have a full
-    // assessment and report which good matches it would have dropped.
-    if (body.screenEval === true) {
-      // Jobs on the Jobs page with this user's current score (full assessments only count as "good").
-      const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
-      const [allSnap, mineSnap] = await Promise.all([aggs.doc("allJobs").get(), db.collection("users").doc(targetUid).collection("aggregations").doc("myJobScores").get()]);
-      const scores = mineSnap.data()?.scores || {};
-      const evalRows = (allSnap.data()?.jobs || []).slice(0, Math.min(Number(body.limit) || 800, 1500))
-        .map((j) => ({ id: j.id, title: j.title || "", score: scores[j.id]?.score ?? null, full: !!scores[j.id]?.k, reason: scores[j.id]?.reason || "" }));
-      const client = requireOpenAI();
-      const headline = profileHeadline(profile);
-      const batches = [];
-      for (let i = 0; i < evalRows.length; i += SCREEN_BATCH) batches.push(evalRows.slice(i, i + SCREEN_BATCH));
-      const limiter = pLimit(4);
-      const raws = [];
-      const keep = (await Promise.all(batches.map((b, bi) => limiter(() => screenJobTitles({ client, model: OPENAI_FAST_MODEL, headline, titles: b.map((r) => r.title), onRaw: bi < 2 ? (t, f) => raws.push(`${f}: ${String(t).slice(0, 400)}`) : null }))))).flat();
-      const dropped = evalRows.filter((_, i) => !keep[i]);
-      const band = (lo, hi) => (list) => list.filter((r) => r.score != null && r.score >= lo && r.score < hi).length;
-      const bands = [[60, 101], [40, 60], [15, 40], [0, 15]].map(([lo, hi]) => ({ band: `${lo}-${hi - 1}`, total: band(lo, hi)(evalRows), dropped: band(lo, hi)(dropped) }));
+    const prefs = (await db.collection("users").doc(targetUid).collection("settings").doc("preferences").get()).data() || {};
+    const targets = jobTypesFor(profile, prefs);
+
+    // typesEval: free report of what the job-type filter does to this user's
+    // Jobs page list, plus the running audit of skipped jobs.
+    if (body.typesEval === true) {
+      const allSnap = await db.collection("users").doc(ADMIN_UID).collection("aggregations").doc("allJobs").get();
+      const list = allSnap.data()?.jobs || [];
+      const docs = list.length ? await db.getAll(...list.map((j) => jobsCol.doc(j.id)), { fieldMask: ["title", "fullDescription"] }) : [];
+      const gates = docs.filter((d) => d.exists).map((d) => ({ title: d.get("title") || "", ...shouldAssess(d.get("title"), targets, d.get("fullDescription") || "") }));
+      const skipped = gates.filter((g) => !g.assess);
+      const byType = {};
+      for (const g of skipped) for (const f of (g.families.length ? g.families.slice(0, 1) : ["(description)"])) byType[f] = (byType[f] || 0) + 1;
+      const scoring = (await db.collection("users").doc(targetUid).collection("settings").doc("scoring").get()).data() || {};
       return res.json({
-        ok: true, userId: targetUid, evaluated: evalRows.length, dropped: dropped.length, bands,
-        droppedGood: dropped.filter((r) => r.full && r.score >= 40).map((r) => `${r.score} ${r.title} | ${r.reason}`),
-        droppedSample: dropped.slice(0, 25).map((r) => `${r.score ?? "-"} ${r.title}`),
-        raws,
-        keptLowSample: evalRows.filter((r, i) => keep[i] && r.score != null && r.score < 15).slice(0, 40).map((r) => `${r.score} ${r.title}`),
+        ok: true, userId: targetUid, targets, jobs: gates.length, assessed: gates.length - skipped.length, skipped: skipped.length, skippedByType: byType,
+        assessedSample: gates.filter((g) => g.assess).slice(0, 20).map((g) => g.title),
+        skippedSample: skipped.slice(0, 20).map((g) => `${g.title} [${g.families.join(",") || "description"}]`),
+        audit: { sampled: scoring.auditSampled || 0, missed: scoring.auditMissed || 0, misses: scoring.auditMisses || [] },
       });
     }
 
     let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
-    if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile))).slice(0, limit).map((j) => j.id);
+    if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile), { tk: targetsKey(targets) })).slice(0, limit).map((j) => j.id);
     const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
     const jobs = snaps.filter((s) => s.exists).map((s) => ({ jobDocId: s.id, ...s.data() }));
 
@@ -2276,10 +2291,12 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     }
   }
 
-  // User's AI scoring toggle — users/{uid}/settings/preferences
+  // User's AI scoring toggle and job types — users/{uid}/settings/preferences
+  let prefs = {};
   try {
     const settingsSnap = await db.collection("users").doc(userId).collection("settings").doc("preferences").get();
-    if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
+    prefs = settingsSnap.exists ? settingsSnap.data() || {} : {};
+    if (prefs.aiScoringEnabled === false) {
       logger.info(`scoreNewJobsForUser: AI scoring disabled for userId=${userId}, skipping`);
       return 0;
     }
@@ -2303,6 +2320,8 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const profileStamp = profileStampOf(profile);
   const candidateYears = candidateYearsOf(profile);
   const softwareCandidate = isSoftwareCandidate(profile);
+  const targets = jobTypesFor(profile, prefs);
+  const tk = targetsKey(targets);
   if (profileText.length < 80) {
     logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
     return 0;
@@ -2328,8 +2347,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     const jobData = jobSnaps[i].exists ? jobSnaps[i].data() : null;
     if (!jobData) return;
     const fit = scoreSnaps[i].exists ? scoreSnaps[i].data()?.fit : null;
-    if (!force && fit && fit.version === FIT_VERSION && fit.profileStamp === profileStamp) return;
-    todo.push({ ...job, title: jobData.title || "", fullDescription: job.fullDescription || jobData.fullDescription || null });
+    // Skipped-by-type results are only current for the same job types.
+    if (!force && fit && fit.version === FIT_VERSION && fit.profileStamp === profileStamp && (!fit.screened || fit.targetsKey === tk)) return;
+    todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null });
   });
   if (todo.length === 0) return 0;
   logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}`);
@@ -2340,30 +2360,43 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const results = []; // { jobId, score, reason, fit }
   let skippedForTime = 0;
 
-  // Title screen: jobs clearly outside this candidate's field skip the full
-  // assessment (which reads the whole description). Software candidates get a
-  // free title rule (skips ~64% of jobs); others would get a batched model
-  // screen, which stays off until it's been checked on real data.
+  // Job types: jobs are shared, so each title is sorted once, in code, for
+  // free (jobFamilies.cjs). Only jobs of a type this user targets — or whose
+  // type can't be told — get the AI assessment. A small audit sample of the
+  // skipped ones is assessed anyway to measure what the filter misses.
   let toAssess = todo;
-  if (screen && (softwareCandidate || LLM_TITLE_SCREEN)) {
-    const keep = [];
-    if (softwareCandidate) {
-      for (const j of todo) keep.push(!otherFieldForSoftware(j.title));
-    } else {
-      const headline = profileHeadline(profile);
-      for (let i = 0; i < todo.length; i += SCREEN_BATCH) {
-        const chunk = todo.slice(i, i + SCREEN_BATCH);
-        keep.push(...await screenJobTitles({ client, model: OPENAI_FAST_MODEL, headline, titles: chunk.map((j) => j.title) }));
-      }
-    }
-    toAssess = todo.filter((_, i) => keep[i]);
-    todo.forEach((job, i) => {
-      if (keep[i]) return;
-      const fit = { ...screenedFit(), profileStamp, scoredAt };
+  const audits = new Set();
+  if (screen) {
+    toAssess = [];
+    for (const job of todo) {
+      const gate = shouldAssess(job.title, targets, job.fullDescription);
+      job.families = gate.families;
+      if (gate.assess) { toAssess.push(job); continue; }
+      if (auditPick(userId, job.jobDocId)) { audits.add(job.jobDocId); toAssess.push(job); continue; }
+      const fit = { ...screenedFit(gate), profileStamp, targetsKey: tk, scoredAt };
       results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit });
-    });
-    if (toAssess.length < todo.length) logger.info(`title screen userId=${userId}: ${todo.length - toAssess.length} of ${todo.length} outside the candidate's field`);
+    }
+    if (results.length) logger.info(`job types userId=${userId}: ${results.length} of ${todo.length} skipped (targets ${tk}); ${audits.size} audited`);
   }
+
+  // The same posting listed in several cities is assessed once.
+  const primaryBySig = new Map();
+  const duplicates = []; // [job, primary]
+  toAssess = toAssess.filter((job) => {
+    job.sig = jobSignature(job);
+    if (!job.sig) return true;
+    const primary = primaryBySig.get(job.sig);
+    if (primary) { duplicates.push([job, primary]); return false; }
+    primaryBySig.set(job.sig, job);
+    return true;
+  });
+  const priorFitFor = async (sig) => {
+    if (!sig) return null;
+    const snap = await userScoresCol.where("fit.sig", "==", sig).where("fit.profileStamp", "==", profileStamp).limit(1).get();
+    const prior = snap.empty ? null : snap.docs[0].data()?.fit;
+    return prior && !prior.screened && prior.version === FIT_VERSION ? prior : null;
+  };
+  const auditMisses = [];
 
   // Out of OpenAI credits: stop at the first such error instead of retrying
   // every job; the jobs stay unscored and are picked up once credits return.
@@ -2391,7 +2424,8 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         return;
       }
 
-      let fit = null;
+      if (!job.sig) job.sig = jobSignature({ ...job, fullDescription: description });
+      let fit = await priorFitFor(job.sig).catch(() => null); // scored before under another id
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
         try {
           fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, softwareCandidate, jobTitle: job.title, jobDescription: description });
@@ -2411,8 +2445,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
         return;
       }
-      const stored = { ...fit, profileStamp, scoredAt };
+      const stored = { ...fit, profileStamp, scoredAt, sig: job.sig || null, ...(audits.has(job.jobDocId) ? { audit: true, families: job.families || [] } : {}) };
       results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit: stored });
+      if (audits.has(job.jobDocId) && fit.score >= 40) auditMisses.push({ jobId: job.jobDocId, title: job.title, score: fit.score, families: job.families || [] });
       logger.info(`Scored ${job.jobDocId} for ${userId}: ${fit.score} (coverage ${fit.coverage}, ${fit.roleFit}/${fit.seniorityFit}) — ${fit.reason}`);
     } catch (err) {
       if (isOutOfCredits(err)) { outOfCredits = true; skippedForTime++; return; }
@@ -2421,6 +2456,25 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     }
   })));
   if (outOfCredits) logger.error(`scoreNewJobsForUser: OpenAI account is out of credits; ${skippedForTime} jobs left unscored for userId=${userId}`);
+
+  // Duplicates take their primary's assessment.
+  const byJob = new Map(results.map((r) => [r.jobId, r]));
+  for (const [dup, primary] of duplicates) {
+    const r = byJob.get(primary.jobDocId);
+    if (r?.fit && !r.fit.screened) results.push({ jobId: dup.jobDocId, score: r.score, reason: r.reason, fit: { ...r.fit, audit: false, duplicateOf: primary.jobDocId } });
+    else skippedForTime++;
+  }
+
+  // Audit bookkeeping: how often a skipped job would have been a real match.
+  const auditedDone = results.filter((r) => r.fit?.audit).length;
+  if (auditedDone) {
+    for (const m of auditMisses) logger.warn(`job-type audit MISS userId=${userId}: "${m.title}" scored ${m.score} but was typed ${m.families.join(",") || "unknown"} (targets ${tk})`);
+    await db.collection("users").doc(userId).collection("settings").doc("scoring").set({
+      auditSampled: admin.firestore.FieldValue.increment(auditedDone),
+      auditMissed: admin.firestore.FieldValue.increment(auditMisses.length),
+      ...(auditMisses.length ? { auditMisses: admin.firestore.FieldValue.arrayUnion(...auditMisses.map((m) => `${m.score} ${m.title} [${m.families.join(",") || "unknown"}]`)) } : {}),
+    }, { merge: true }).catch(() => {});
+  }
 
   // Admin's job docs carry the legacy fields other readers (worker, MCP) use.
   if (isAdmin && results.length) {
@@ -2494,7 +2548,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
  * whose score for this user is missing, or came from an older method or an
  * older version of their resume. Costs two document reads.
  */
-async function staleJobsFor(userId, profileStamp, { skipIds = new Set() } = {}) {
+async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = "" } = {}) {
   const { freshnessKey } = require("./lib/userJobScores.cjs");
   const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
   const [recentSnap, allSnap, mineSnap] = await Promise.all([
@@ -2511,8 +2565,11 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set() } = {}) 
       if (!j?.id || seen.has(j.id) || skipIds.has(j.id)) continue;
       seen.add(j.id);
       const s = scores[j.id];
-      if (s && s.k === key) continue; // current
-      if (s && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue; // different field
+      const skippedByType = s && s.t !== undefined;
+      if (s && s.k === key && (!skippedByType || s.t === tk)) continue; // current
+      // A full assessment that found a different field survives resume edits.
+      // Type-filter skips are redone (free) whenever the resume or job types change.
+      if (s && !skippedByType && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue;
       stale.push(j);
     }
   }
@@ -2526,21 +2583,28 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set() } = {}) 
  * (a resume edit changes the stamp and ends the skip).
  */
 async function rescoreBacklog(userId, { deadlineMs }) {
-  const profileSnap = await db.collection("users").doc(userId).collection("resume").doc("profile").get();
+  const userRef = db.collection("users").doc(userId);
+  const [profileSnap, prefsSnap] = await Promise.all([userRef.collection("resume").doc("profile").get(), userRef.collection("settings").doc("preferences").get()]);
   if (!profileSnap.exists) return 0;
-  const profileStamp = profileStampOf(profileSnap.data());
+  const profile = profileSnap.data();
+  const profileStamp = profileStampOf(profile);
+  const tk = targetsKey(jobTypesFor(profile, prefsSnap.data() || {}));
+  const clearKey = `${profileStamp}|${tk}`;
 
-  const markerRef = db.collection("users").doc(userId).collection("settings").doc("scoring");
+  const markerRef = userRef.collection("settings").doc("scoring");
   const marker = (await markerRef.get()).data() || {};
-  if (marker.backlogClearedFor === profileStamp && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) return 0;
+  // The Profile page shows these as the default job types.
+  const autoJobTypes = familiesForProfile(profile);
+  if (JSON.stringify(marker.autoJobTypes || []) !== JSON.stringify(autoJobTypes)) await markerRef.set({ autoJobTypes }, { merge: true });
+  if (marker.backlogClearedFor === clearKey && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) return 0;
 
   // Jobs that failed repeatedly for this resume (no readable description, etc.).
   const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
   const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
-  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp });
+  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk });
 
   if (stale.length === 0) {
-    await markerRef.set({ backlogClearedFor: profileStamp, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
+    await markerRef.set({ backlogClearedFor: clearKey, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
     return 0;
   }
   const batch = stale.slice(0, BACKLOG_MAX_PER_RUN).map((j) => ({ jobDocId: j.id, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "" }));

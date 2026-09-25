@@ -1,0 +1,35 @@
+// Job types the scorer sorts jobs into. Mirrors functions/lib/jobFamilies.cjs
+// (ids and labels only; a functions test checks they match).
+export const JOB_TYPES = [
+  { id: "software", label: "Software engineering" },
+  { id: "ml_ai", label: "Machine learning & AI" },
+  { id: "data_engineering", label: "Data engineering" },
+  { id: "data_science", label: "Data science" },
+  { id: "data_analytics", label: "Data & business analytics" },
+  { id: "devops_cloud", label: "DevOps, SRE & cloud" },
+  { id: "security", label: "Security" },
+  { id: "qa_test", label: "QA & test automation" },
+  { id: "solutions", label: "Solutions & customer engineering" },
+  { id: "it_support", label: "IT & help desk" },
+  { id: "product", label: "Product management" },
+  { id: "program_project", label: "Program & project management" },
+  { id: "design", label: "Design & UX" },
+  { id: "sales", label: "Sales & business development" },
+  { id: "customer_success", label: "Customer success & support" },
+  { id: "marketing", label: "Marketing & communications" },
+  { id: "hr_recruiting", label: "HR & recruiting" },
+  { id: "finance", label: "Finance, accounting & insurance" },
+  { id: "legal_compliance", label: "Legal, compliance & policy" },
+  { id: "healthcare", label: "Healthcare & clinical" },
+  { id: "hardware_eng", label: "Hardware & other engineering" },
+  { id: "operations", label: "Operations, supply chain & logistics" },
+  { id: "trades_field", label: "Trades, field & technician" },
+  { id: "retail_hospitality", label: "Retail, food & hospitality" },
+  { id: "admin_office", label: "Administrative & office" },
+  { id: "science_research", label: "Science & research (non-software)" },
+  { id: "education", label: "Education & training" },
+  { id: "executive_general", label: "General management" },
+  { id: "engineering_general", label: "Other engineering" },
+];
+
+export const jobTypeLabel = (id) => JOB_TYPES.find((t) => t.id === id)?.label || id;

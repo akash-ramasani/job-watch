@@ -87,6 +87,7 @@ async function updateUserScoreRollup(userId, entries, dbInstance, { listedIds = 
         score: typeof score === "number" ? score : null,
         reason: reason || "",
         ...(fit?.version ? { k: freshnessKey(fit.version, fit.profileStamp) } : {}),
+        ...(fit?.screened ? { t: fit.targetsKey || "" } : {}),
       };
     }
     for (const id of Object.keys(scores)) if (!listedIds.has(id)) delete scores[id];
@@ -134,6 +135,7 @@ async function rebuildUserJobScores(userId, dbInstance) {
           score: typeof x.score === "number" ? x.score : null,
           reason: x.reason || "",
           ...(x.fit?.version ? { k: freshnessKey(x.fit.version, x.fit.profileStamp) } : {}),
+          ...(x.fit?.screened ? { t: x.fit.targetsKey || "" } : {}),
         };
         count++;
       }

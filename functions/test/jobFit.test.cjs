@@ -2,7 +2,7 @@
 // Run: npm test (in functions/)
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf, isSoftwareCandidate, otherFieldForSoftware } = require("../lib/jobFit.cjs");
+const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf, isSoftwareCandidate } = require("../lib/jobFit.cjs");
 
 const PROFILE = buildProfileText({
   summary: "Software engineer with 5+ years of experience **shipping production backend systems**.",
@@ -176,18 +176,4 @@ test("profile text keeps every role and bullet, without bold markers", () => {
   assert.match(PROFILE, /Machine Learning Engineer at ICAR/);
   assert.match(PROFILE, /- Designed high-volume REST APIs/);
   assert.doesNotMatch(PROFILE, /\*\*/);
-});
-
-test("software title screen skips other professions and keeps software in any domain", () => {
-  for (const t of ["Grad Pharmacist", "Family Nurse Practitioner - NP/PA (Part-time)", "Senior Electrical Engineer (Onsite)", "GTM Recruiter (Fixed Term)",
-    "Partner Marketing Manager, Online & Regional Events", "Account Executive, Mid-Market", "Demand Planner II (Hybrid)", "Mechanical Engineering Intern (Summer 2027)"]) {
-    assert.equal(otherFieldForSoftware(t), true, t);
-  }
-  for (const t of ["Software Engineer, Agent - Retail", "Staff Software Engineer, Tax Experiences", "Senior Staff Software Engineer - Pricing and Packaging",
-    "Software Engineer, Robot Manufacturing", "Sr. Forward Deployed Engineer (FDE) - Manufacturing", "Globalization Tech Lead", "Senior Data Engineer - US",
-    "Machine Learning Engineer, Core Experimentation", "Solutions Architect", "Senior Implementation Engineer", "", "Engineer"]) {
-    assert.equal(otherFieldForSoftware(t), false, t);
-  }
-  // Known miss: a generic posting with no field in its title is skipped.
-  assert.equal(otherFieldForSoftware("Open Call"), true);
 });

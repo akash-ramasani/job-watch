@@ -12,6 +12,7 @@ import UserAvatar from "../components/UserAvatar.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
 import ResumeProfileSection from "../components/Resume/ResumeProfileSection.jsx";
+import JobTypesCard from "../components/JobTypesCard.jsx";
 import { contactFromUser, downloadResumePdf, downloadResumeTex, profileToResume } from "../lib/resumeDownloads.js";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -714,6 +715,8 @@ export default function Profile({ user, userMeta }) {
                 ) : "Enable Scoring"}
               </button>
             </div>
+
+            {(isAdmin || aiScoringEnabled) && <JobTypesCard user={user} />}
 
             {/* User ID Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

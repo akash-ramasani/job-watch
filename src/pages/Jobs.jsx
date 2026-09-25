@@ -86,6 +86,8 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [jobs, setJobs] = useState([]);
   const [myScores, setMyScores] = useState({}); // { [jobId]: { score, reason } }
   const [hasResume, setHasResume] = useState(null); // null = not known yet
+  // Jobs the scorer skipped as another job type (rollup entries with `t`).
+  const [showOtherTypes, setShowOtherTypes] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState(() => searchParams.get("title") || "");
@@ -405,14 +407,18 @@ export default function Jobs({ user, userMeta, preferences }) {
     // Merge in the current user's personal AI scores from myJobScores. Jobs
     // without a personal score render as "unscored" (which is correct for
     // any user who hasn't enabled AI / hasn't been backfilled).
-    const merged = filtered.map((j) => {
-      const s = myScores[j.id];
-      if (!s) return j;
-      return { ...j, relevanceScore: s.score, scoreReason: s.reason };
-    });
+    const merged = filtered
+      .filter((j) => showOtherTypes || myScores[j.id]?.t === undefined)
+      .map((j) => {
+        const s = myScores[j.id];
+        if (!s) return j;
+        return { ...j, relevanceScore: s.score, scoreReason: s.reason };
+      });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe]);
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, showOtherTypes]);
+
+  const otherTypeCount = useMemo(() => jobs.filter((j) => myScores[j.id]?.t !== undefined).length, [jobs, myScores]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
   const scoredShare = jobs.length ? jobs.filter((j) => myScores[j.id]).length / jobs.length : 1;
@@ -769,6 +775,15 @@ export default function Jobs({ user, userMeta, preferences }) {
                 </span>
               )}
             </h3>
+            {!loading && otherTypeCount > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowOtherTypes((v) => !v)}
+                className="mt-1 text-[11px] font-medium text-gray-400 hover:text-indigo-600"
+              >
+                {showOtherTypes ? "Hide jobs outside your job types" : `${otherTypeCount} jobs outside your job types hidden · Show`}
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
