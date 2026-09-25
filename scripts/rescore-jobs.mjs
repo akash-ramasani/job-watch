@@ -7,6 +7,7 @@
 //   node scripts/rescore-jobs.mjs --ids a,b,c         # dry run on specific job doc ids
 //   node scripts/rescore-jobs.mjs --backlog 200 --write   # rescore the 200 newest stale jobs for real
 //   node scripts/rescore-jobs.mjs --stale --write     # rescore every stale job (old method or old profile), in batches
+//   node scripts/rescore-jobs.mjs --user someone@x.com --backlog 300 --write   # another user's Jobs page
 //   add --verbose to print each job's requirements
 
 import { readFile } from "node:fs/promises";
@@ -26,6 +27,10 @@ const verbose = args.includes("--verbose");
 
 const firestore = await db();
 let body = { dryRun: !write };
+if (flag("--user")) {
+  const who = String(flag("--user"));
+  body.userId = who.includes("@") ? (await getAuth().getUserByEmail(who)).uid : who;
+}
 let staleQueue = null;
 if (flag("--stale")) {
   // Same rule as the sync backlog: jobs whose score predates this method or the

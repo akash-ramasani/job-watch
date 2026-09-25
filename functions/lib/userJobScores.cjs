@@ -10,14 +10,19 @@
  *
  * Aggregation doc:
  *   /users/{userId}/aggregations/myJobScores
- *   { scores: { [jobId]: { score, reason } }, count, updatedAt }
+ *   { scores: { [jobId]: { score, reason, k? } }, count, updatedAt }
+ *   k = "{fit version}:{profile stamp}" when the score came from jobFit, so the
+ *   sync can tell which scores are stale with this one read.
  *
  * Read cost: 1 document per /jobs session per user, regardless of corpus size.
  */
 
 const admin = require("firebase-admin");
 
-const MAX_SCORES_IN_AGG = 2000; // keep the aggregation doc well under 1 MiB
+const MAX_SCORES_IN_AGG = 2000;
+
+/** Which scoring method + which version of the resume produced a score. */
+const freshnessKey = (version, profileStamp) => `${version}:${profileStamp ?? ""}`; // keep the aggregation doc well under 1 MiB
 
 // Owner of the shared job corpus and the recentJobs/allJobs aggregations.
 // Must match ADMIN_UID in functions/index.js.
@@ -100,6 +105,7 @@ async function rebuildUserJobScores(userId, dbInstance) {
         scores[s.id] = {
           score: typeof x.score === "number" ? x.score : null,
           reason: x.reason || "",
+          ...(x.fit?.version ? { k: freshnessKey(x.fit.version, x.fit.profileStamp) } : {}),
         };
         count++;
       }
@@ -132,4 +138,4 @@ async function rebuildUserJobScores(userId, dbInstance) {
   return count;
 }
 
-module.exports = { writeUserScores, rebuildUserJobScores, MAX_SCORES_IN_AGG };
+module.exports = { writeUserScores, rebuildUserJobScores, freshnessKey, MAX_SCORES_IN_AGG };

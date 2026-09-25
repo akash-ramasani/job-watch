@@ -1,6 +1,6 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { jsPDF } from "jspdf";
@@ -85,6 +85,7 @@ export default function Jobs({ user, userMeta, preferences }) {
 
   const [jobs, setJobs] = useState([]);
   const [myScores, setMyScores] = useState({}); // { [jobId]: { score, reason } }
+  const [hasResume, setHasResume] = useState(null); // null = not known yet
   const [loading, setLoading] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState(() => searchParams.get("title") || "");
@@ -238,6 +239,16 @@ export default function Jobs({ user, userMeta, preferences }) {
       }
     );
     return () => unsub();
+  }, [user?.uid]);
+
+  // Whether this user has a resume yet — scores are measured against it.
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return onSnapshot(
+      doc(db, "users", user.uid, "resume", "profile"),
+      (snap) => setHasResume(snap.exists()),
+      () => setHasResume(null)
+    );
   }, [user?.uid]);
 
   const handleGenerateCoverLetter = async (e, job) => {
@@ -402,6 +413,9 @@ export default function Jobs({ user, userMeta, preferences }) {
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
   }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe]);
+
+  const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
+  const scoredShare = jobs.length ? jobs.filter((j) => myScores[j.id]).length / jobs.length : 1;
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "N/A";
@@ -761,6 +775,17 @@ export default function Jobs({ user, userMeta, preferences }) {
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Feed</span>
           </div>
         </div>
+        {!loading && aiOn && hasResume === false && (
+          <div className="px-6 py-3 border-b border-gray-100 bg-indigo-50/60 text-sm text-gray-700">
+            Add your resume to see how well each job fits you.{" "}
+            <Link to="/profile" className="font-semibold text-indigo-600 hover:text-indigo-700">Go to Profile</Link>
+          </div>
+        )}
+        {!loading && aiOn && hasResume && jobs.length > 0 && scoredShare < 0.5 && (
+          <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 text-sm text-gray-600">
+            Scoring these jobs against your resume. Scores fill in over the next few hours.
+          </div>
+        )}
         {loading ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (

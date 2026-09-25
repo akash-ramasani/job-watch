@@ -91,8 +91,11 @@ const TTL_DAYS = 3;
 // call; a few in flight keeps a full run inside the function's 540 s limit.
 const SCORING_CONCURRENCY = 4;
 const SYNC_TIME_BUDGET_MS = 470 * 1000; // leave room for aggregation rebuilds after scoring
-const BACKLOG_SCAN = 600; // newest jobs checked for stale scores per run
-const BACKLOG_MAX_PER_RUN = 60;
+const BACKLOG_MAX_PER_RUN = 100; // per user per sync run
+// A score this low means "different field". A resume edit rarely changes
+// that, so those jobs aren't rescored when only the profile changed.
+const SKIP_RESCORE_BELOW = 15;
+const MAX_SCORING_ATTEMPTS = 3; // per job per resume version, then give up
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
 // by req ID against users/{uid}/feedState/{feedId} instead of by the
@@ -708,9 +711,10 @@ exports.runSyncNow = onRequest(
  * assessment and return old vs new side by side. `dryRun` computes without
  * writing — used to evaluate the scorer on real jobs before trusting it.
  *
- * POST { jobIds?: string[], limit?: number, dryRun?: boolean }
+ * POST { jobIds?: string[], limit?: number, dryRun?: boolean, userId?: string }
  *   jobIds  → exactly those jobs
- *   else    → the newest stale jobs (see rescoreBacklog), up to `limit`
+ *   else    → the newest stale jobs on the Jobs page (see staleJobsFor), up to `limit`
+ *   userId  → whose scores (default: admin); lets the admin backfill a new user
  */
 exports.rescoreJobs = onRequest(
   // invoker "public" only opens the URL; verifyToken below still restricts it to the admin.
@@ -729,35 +733,36 @@ exports.rescoreJobs = onRequest(
     const limit = Math.max(1, Math.min(400, Number(body.limit) || 50));
     const deadlineMs = Date.now() + 500 * 1000;
     const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
+    // Whose scores: the admin by default, or any user (for their first backfill).
+    const targetUid = typeof body.userId === "string" && body.userId ? body.userId : ADMIN_UID;
 
-    const profileSnap = await db.collection("users").doc(ADMIN_UID).collection("resume").doc("profile").get();
-    if (!profileSnap.exists) return res.status(400).json({ error: "No resume profile." });
+    const profileSnap = await db.collection("users").doc(targetUid).collection("resume").doc("profile").get();
+    if (!profileSnap.exists) return res.status(400).json({ error: `No resume profile for ${targetUid}.` });
     const profile = profileSnap.data();
 
     let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
-    if (!ids) {
-      const stamp = profileStampOf(profile);
-      const snap = await jobsCol.orderBy("fetchedAt", "desc").limit(Math.max(BACKLOG_SCAN, limit * 4))
-        .select("relevanceScore", "scoreVersion", "scoreProfileStamp").get();
-      ids = snap.docs
-        .map((d) => ({ id: d.id, ...d.data() }))
-        .filter((j) => j.scoreVersion !== FIT_VERSION || j.scoreProfileStamp !== stamp)
-        .filter((j) => typeof j.relevanceScore !== "number" || j.relevanceScore < 0 || j.relevanceScore >= 30 || j.scoreVersion === FIT_VERSION)
-        .slice(0, limit)
-        .map((j) => j.id);
-    }
+    if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile))).slice(0, limit).map((j) => j.id);
     const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
     const jobs = snaps.filter((s) => s.exists).map((s) => ({ jobDocId: s.id, ...s.data() }));
 
     if (!dryRun) {
-      const before = new Map(jobs.map((j) => [j.jobDocId, j.relevanceScore]));
-      const scored = await scoreNewJobsForUser(ADMIN_UID, jobs.map((j) => ({
+      if (!jobs.length) return res.json({ ok: true, dryRun, userId: targetUid, requested: 0, scored: 0, results: [] });
+      const scoresCol = db.collection("users").doc(targetUid).collection("jobScores");
+      const readScores = async () => new Map((await db.getAll(...jobs.map((j) => scoresCol.doc(j.jobDocId)))).map((s) => [s.id, s.exists ? s.data() : {}]));
+      const before = await readScores();
+      const scored = await scoreNewJobsForUser(targetUid, jobs.map((j) => ({
         jobDocId: j.jobDocId, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "",
       })), { deadlineMs, force: true });
-      const after = await db.getAll(...jobs.map((j) => jobsCol.doc(j.jobDocId)));
+      const after = await readScores();
       return res.json({
-        ok: true, dryRun, requested: ids.length, scored,
-        results: after.map((s) => ({ id: s.id, title: s.data()?.title, company: s.data()?.companyName, old: before.get(s.id) ?? null, new: s.data()?.relevanceScore ?? null, reason: s.data()?.scoreReason || "" })),
+        ok: true, dryRun, userId: targetUid, requested: ids.length, scored,
+        results: jobs.map((j) => ({
+          id: j.jobDocId, title: j.title, company: j.companyName,
+          old: before.get(j.jobDocId)?.score ?? null,
+          new: after.get(j.jobDocId)?.score ?? null,
+          reason: after.get(j.jobDocId)?.reason || "",
+          scoreVersion: after.get(j.jobDocId)?.fit?.version ?? null,
+        })),
       });
     }
 
@@ -997,9 +1002,13 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     }
   }
 
-  // Spare time: move older scores onto the current method / current profile.
-  if (userId === ADMIN_UID && Date.now() < deadlineMs - 30 * 1000) {
-    await rescoreBacklog(userId, { deadlineMs }).catch((err) => logger.warn(`rescoreBacklog failed: ${err?.message || err}`));
+  // Spare time: fill in and refresh each AI-enabled user's scores for the Jobs page.
+  if (userId === ADMIN_UID) {
+    const uids = await listAiEnabledUserIds().catch(() => [ADMIN_UID]);
+    for (const uid of uids) {
+      if (Date.now() > deadlineMs - 30 * 1000) break;
+      await rescoreBacklog(uid, { deadlineMs }).catch((err) => logger.warn(`rescoreBacklog failed userId=${uid}: ${err?.message || err}`));
+    }
   }
 
   // Rebuild the /jobs page aggregation docs so clients can render with a single read.
@@ -2176,7 +2185,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
  * Stops starting new jobs after `deadlineMs`; those stay unscored and are
  * picked up by rescoreBacklog on a later run. Returns the number scored.
  */
-async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false } = {}) {
+async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null } = {}) {
   if (!newJobs || newJobs.length === 0) return 0;
   const isAdmin = userId === ADMIN_UID;
 
@@ -2322,6 +2331,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   }
 
   const good = results.filter((r) => r.score >= 0);
+  if (failedIds) failedIds.push(...results.filter((r) => r.score < 0).map((r) => r.jobId));
   try {
     if (results.length) {
       await db.collection("users").doc(userId).collection("aggregations").doc("scoringStatus").set({
@@ -2385,15 +2395,42 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
 }
 
 /**
- * Re-score recent jobs whose score predates the current method or the
- * user's latest profile edit, newest first, while time remains. Only jobs
- * that might matter are revisited: unscored, failed, or old scores ≥ 30
- * (the old scorer was reliable at the bottom, not at the top).
- * A marker in users/{uid}/settings/scoring skips the scan for a few hours
- * once nothing is left for the current profile.
+ * Jobs on the Jobs page (the admin's recentJobs + allJobs lists, newest first)
+ * whose score for this user is missing, or came from an older method or an
+ * older version of their resume. Costs two document reads.
+ */
+async function staleJobsFor(userId, profileStamp, { skipIds = new Set() } = {}) {
+  const { freshnessKey } = require("./lib/userJobScores.cjs");
+  const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
+  const [recentSnap, allSnap, mineSnap] = await Promise.all([
+    aggs.doc("recentJobs").get(),
+    aggs.doc("allJobs").get(),
+    db.collection("users").doc(userId).collection("aggregations").doc("myJobScores").get(),
+  ]);
+  const scores = mineSnap.data()?.scores || {};
+  const key = freshnessKey(FIT_VERSION, profileStamp);
+  const seen = new Set();
+  const stale = [];
+  for (const snap of [recentSnap, allSnap]) {
+    for (const j of snap.data()?.jobs || []) {
+      if (!j?.id || seen.has(j.id) || skipIds.has(j.id)) continue;
+      seen.add(j.id);
+      const s = scores[j.id];
+      if (s && s.k === key) continue; // current
+      if (s && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue; // different field
+      stale.push(j);
+    }
+  }
+  return stale;
+}
+
+/**
+ * Spare sync time: score the Jobs page for one user — a new user's whole list
+ * after they add a resume, or the jobs affected by a resume edit. Works for
+ * every AI-enabled user. Once nothing is stale the check is skipped for 6 hours
+ * (a resume edit changes the stamp and ends the skip).
  */
 async function rescoreBacklog(userId, { deadlineMs }) {
-  if (userId !== ADMIN_UID) return 0; // corpus + legacy fields live under admin
   const profileSnap = await db.collection("users").doc(userId).collection("resume").doc("profile").get();
   if (!profileSnap.exists) return 0;
   const profileStamp = profileStampOf(profileSnap.data());
@@ -2402,23 +2439,27 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   const marker = (await markerRef.get()).data() || {};
   if (marker.backlogClearedFor === profileStamp && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) return 0;
 
-  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs")
-    .orderBy("fetchedAt", "desc")
-    .limit(BACKLOG_SCAN)
-    .select("relevanceScore", "scoreVersion", "scoreProfileStamp", "source", "externalId", "jobUrl")
-    .get();
-  const stale = snap.docs
-    .map((d) => ({ id: d.id, ...d.data() }))
-    .filter((j) => j.scoreVersion !== FIT_VERSION || j.scoreProfileStamp !== profileStamp)
-    .filter((j) => typeof j.relevanceScore !== "number" || j.relevanceScore < 0 || j.relevanceScore >= 30 || j.scoreVersion === FIT_VERSION);
+  // Jobs that failed repeatedly for this resume (no readable description, etc.).
+  const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
+  const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
+  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp });
 
   if (stale.length === 0) {
     await markerRef.set({ backlogClearedFor: profileStamp, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
     return 0;
   }
   const batch = stale.slice(0, BACKLOG_MAX_PER_RUN).map((j) => ({ jobDocId: j.id, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "" }));
-  logger.info(`rescoreBacklog: ${stale.length} stale in the newest ${BACKLOG_SCAN}; rescoring up to ${batch.length}`);
-  return scoreNewJobsForUser(userId, batch, { deadlineMs });
+  logger.info(`rescoreBacklog: userId=${userId} ${stale.length} stale on the Jobs page; scoring up to ${batch.length}`);
+  const failedIds = [];
+  const scored = await scoreNewJobsForUser(userId, batch, { deadlineMs, failedIds });
+  if (failedIds.length) {
+    const listed = new Set(stale.map((j) => j.id));
+    const next = Object.fromEntries(Object.entries(failures).filter(([id]) => listed.has(id)));
+    for (const id of failedIds) next[id] = (next[id] || 0) + 1;
+    // mergeFields replaces the whole map, so pruned ids really go away.
+    await markerRef.set({ failuresFor: profileStamp, failures: next }, { mergeFields: ["failuresFor", "failures"] });
+  }
+  return scored;
 }
 
 async function sendPushNotification(userId, summary, durationMs) {
