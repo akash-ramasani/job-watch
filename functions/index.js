@@ -27,6 +27,7 @@
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
@@ -67,7 +68,7 @@ function requireOpenAI() {
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
-const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf } = require("./lib/jobFit.cjs");
+const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenJobTitles, screenedFit, isSoftwareCandidate, profileHeadline, otherFieldForSoftware } = require("./lib/jobFit.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
@@ -90,12 +91,20 @@ const TTL_DAYS = 3;
 // Job scoring (functions/lib/jobFit.cjs). Each assessment is one ~3-5 s model
 // call; a few in flight keeps a full run inside the function's 540 s limit.
 const SCORING_CONCURRENCY = 4;
+const SCREEN_BATCH = 40; // job titles per title-screen call
+// The model-based title screen for non-software candidates. Off until it's
+// been evaluated (scripts/rescore-jobs.mjs --screen-eval): its first version
+// dropped good matches.
+const LLM_TITLE_SCREEN = false;
+const SYNC_RUN_TTL_DAYS = 30; // syncRuns docs expire via the TTL policy on expireAt
 const SYNC_TIME_BUDGET_MS = 470 * 1000; // leave room for aggregation rebuilds after scoring
 const BACKLOG_MAX_PER_RUN = 100; // per user per sync run
 // A score this low means "different field". A resume edit rarely changes
 // that, so those jobs aren't rescored when only the profile changed.
 const SKIP_RESCORE_BELOW = 15;
 const MAX_SCORING_ATTEMPTS = 3; // per job per resume version, then give up
+const NO_DESCRIPTION = "Couldn't read the job description.";
+const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota/i.test(err?.message || "");
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
 // by req ID against users/{uid}/feedState/{feedId} instead of by the
@@ -515,6 +524,7 @@ exports.syncRecentJobsHourly = onSchedule(
           ok: true,
           userId,
           source: "syncRecentJobsHourly",
+          expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + SYNC_RUN_TTL_DAYS * 86400000),
           runType: "scheduled",
           status: "RUNNING",
           startedAt,
@@ -619,6 +629,7 @@ exports.runSyncNow = onRequest(
         ok: true,
         userId,
         source: "runSyncNow",
+        expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + SYNC_RUN_TTL_DAYS * 86400000),
         runType: "manual",
         status: "RUNNING",
         startedAt,
@@ -740,6 +751,34 @@ exports.rescoreJobs = onRequest(
     if (!profileSnap.exists) return res.status(400).json({ error: `No resume profile for ${targetUid}.` });
     const profile = profileSnap.data();
 
+    // screenEval: run the title screen on jobs that already have a full
+    // assessment and report which good matches it would have dropped.
+    if (body.screenEval === true) {
+      // Jobs on the Jobs page with this user's current score (full assessments only count as "good").
+      const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
+      const [allSnap, mineSnap] = await Promise.all([aggs.doc("allJobs").get(), db.collection("users").doc(targetUid).collection("aggregations").doc("myJobScores").get()]);
+      const scores = mineSnap.data()?.scores || {};
+      const evalRows = (allSnap.data()?.jobs || []).slice(0, Math.min(Number(body.limit) || 800, 1500))
+        .map((j) => ({ id: j.id, title: j.title || "", score: scores[j.id]?.score ?? null, full: !!scores[j.id]?.k, reason: scores[j.id]?.reason || "" }));
+      const client = requireOpenAI();
+      const headline = profileHeadline(profile);
+      const batches = [];
+      for (let i = 0; i < evalRows.length; i += SCREEN_BATCH) batches.push(evalRows.slice(i, i + SCREEN_BATCH));
+      const limiter = pLimit(4);
+      const raws = [];
+      const keep = (await Promise.all(batches.map((b, bi) => limiter(() => screenJobTitles({ client, model: OPENAI_FAST_MODEL, headline, titles: b.map((r) => r.title), onRaw: bi < 2 ? (t, f) => raws.push(`${f}: ${String(t).slice(0, 400)}`) : null }))))).flat();
+      const dropped = evalRows.filter((_, i) => !keep[i]);
+      const band = (lo, hi) => (list) => list.filter((r) => r.score != null && r.score >= lo && r.score < hi).length;
+      const bands = [[60, 101], [40, 60], [15, 40], [0, 15]].map(([lo, hi]) => ({ band: `${lo}-${hi - 1}`, total: band(lo, hi)(evalRows), dropped: band(lo, hi)(dropped) }));
+      return res.json({
+        ok: true, userId: targetUid, evaluated: evalRows.length, dropped: dropped.length, bands,
+        droppedGood: dropped.filter((r) => r.full && r.score >= 40).map((r) => `${r.score} ${r.title} | ${r.reason}`),
+        droppedSample: dropped.slice(0, 25).map((r) => `${r.score ?? "-"} ${r.title}`),
+        raws,
+        keptLowSample: evalRows.filter((r, i) => keep[i] && r.score != null && r.score < 15).slice(0, 40).map((r) => `${r.score} ${r.title}`),
+      });
+    }
+
     let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
     if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile))).slice(0, limit).map((j) => j.id);
     const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
@@ -773,7 +812,7 @@ exports.rescoreJobs = onRequest(
       if (Date.now() > deadlineMs) return { id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null, new: null, reason: "skipped (time)" };
       try {
         const fit = j.fullDescription
-          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), jobTitle: j.title, jobDescription: j.fullDescription })
+          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), softwareCandidate: isSoftwareCandidate(profile), jobTitle: j.title, jobDescription: j.fullDescription })
           : null;
         return {
           id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null,
@@ -797,14 +836,7 @@ exports.rescoreJobs = onRequest(
  */
 async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   const deadlineMs = now.toMillis() + SYNC_TIME_BUDGET_MS;
-  const feedsSnap = await db
-    .collection("users")
-    .doc(userId)
-    .collection("feeds")
-    .where("archivedAt", "==", null)
-    .get();
-
-  const feeds = feedsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const feeds = await loadActiveFeeds(userId);
   const feedsCount = feeds.length;
 
   if (feedsCount === 0) {
@@ -837,6 +869,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
   // Scoring metadata — collected during sync, consumed after bw.close()
   const newJobsForScoring = [];
+  const writtenJobs = []; // for the incremental job-list update
 
   const tasks = feeds.map((feed) =>
     limiter(async () => {
@@ -856,20 +889,6 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
         }
 
         feedsProcessed += 1;
-
-        // Upsert companies doc (for UI filter)
-        const companyRef = db.collection("users").doc(userId).collection("companies").doc(feedId);
-        bw.set(
-          companyRef,
-          {
-            companyName,
-            source,
-            isActive: true,
-            lastSeenAt: now,
-            lastJobSyncAt: now,
-          },
-          { merge: true }
-        );
 
         const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
         const isIdSource = source === "workday" || source === "oracle";
@@ -927,6 +946,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
 
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
+          writtenJobs.push({ ...job, fetchedAt: now, expireAt });
 
           bw.set(
             jobRef,
@@ -951,26 +971,16 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
           });
         }
 
-        await feedRef.set(
-          {
-            lastCheckedAt: now,
-            lastError: null,
-            lastJobCount: recentOnly.length,
-          },
-          { merge: true }
-        );
+        // Feed docs are written only when their health changes (the feed-list
+        // cache trigger picks that up), not on every run.
+        if (feed.lastError) await feedRef.set({ lastError: null, lastRecoveredAt: now }, { merge: true });
       } catch (e) {
         failedFeeds += 1;
         const msg = e instanceof Error ? e.message : String(e);
         logger.error(`Feed failed userId=${userId} feedId=${feed.id}: ${msg}`);
-
-        await feedRef.set(
-          {
-            lastCheckedAt: now,
-            lastError: msg,
-          },
-          { merge: true }
-        );
+        if (errorKey(msg) !== errorKey(feed.lastError)) {
+          await feedRef.set({ lastError: msg, lastErrorAt: now }, { merge: true });
+        }
       }
     })
   );
@@ -978,9 +988,21 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
   await Promise.all(tasks);
   await bw.close();
 
+  // Update the Jobs page lists in place (2 reads + 2 writes) before scoring,
+  // so the score rollups know which jobs are listed.
+  let listedIds = null;
+  if (writtenJobs.length > 0) {
+    try {
+      const { mergeIntoJobLists } = require("./lib/recentJobs.cjs");
+      listedIds = await mergeIntoJobLists(userId, writtenJobs, { ttlDays: TTL_DAYS });
+    } catch (err) {
+      logger.warn(`job list update failed for ${userId}: ${err?.message || err}`);
+    }
+  }
+
   // AWAIT scoring — Cloud Functions terminate any un-awaited Promises immediately upon return!
   if (newJobsForScoring.length > 0) {
-    await scoreNewJobsForUser(userId, newJobsForScoring, { deadlineMs }).catch((err) =>
+    await scoreNewJobsForUser(userId, newJobsForScoring, { deadlineMs, listedIds }).catch((err) =>
       logger.error(`scoreNewJobsForUser failed userId=${userId}: ${err?.message || err}`)
     );
 
@@ -992,7 +1014,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
       try {
         const otherUids = (await listAiEnabledUserIds()).filter((u) => u !== ADMIN_UID);
         for (const uid of otherUids) {
-          await scoreNewJobsForUser(uid, newJobsForScoring, { deadlineMs }).catch((err) =>
+          await scoreNewJobsForUser(uid, newJobsForScoring, { deadlineMs, listedIds }).catch((err) =>
             logger.error(`scoreNewJobsForUser fan-out failed userId=${uid}: ${err?.message || err}`)
           );
         }
@@ -1011,20 +1033,6 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     }
   }
 
-  // Rebuild the /jobs page aggregation docs so clients can render with a single read.
-  // Only rebuild if we actually wrote or scored something new — otherwise it's a no-op.
-  if (jobsWritten > 0 || newJobsForScoring.length > 0) {
-    try {
-      const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
-      const n = await rebuildRecentJobs(userId);
-      logger.info(`recentJobs aggregation rebuilt for ${userId}: ${n} jobs`);
-      const m = await rebuildAllJobs(userId);
-      logger.info(`allJobs aggregation rebuilt for ${userId}: ${m} jobs`);
-    } catch (err) {
-      logger.warn(`recentJobs/allJobs rebuild failed for ${userId}: ${err?.message || err}`);
-    }
-  }
-
   return {
     ok: true,
     feedsCount,
@@ -1035,6 +1043,71 @@ async function syncUserRecentJobs({ userId, now, recentCutoff }) {
     jobsWritten,
   };
 }
+
+/**
+ * ----------------------------
+ * FEED LIST CACHE
+ * ----------------------------
+ * The sync needs every active feed each run. Reading ~1,300 feed docs every
+ * 15 minutes was ~125k reads a day, so the list lives in one doc,
+ * users/{admin}/aggregations/feedList, kept current by onFeedWritten below
+ * and rebuilt nightly (and whenever it's missing or a day old).
+ */
+const FEED_LIST_MAX_AGE_MS = 26 * 3600 * 1000;
+
+function feedListEntry(d) {
+  return {
+    url: d.url || "",
+    source: d.source || "",
+    companyName: d.companyName || d.company || "",
+    lastError: d.lastError || null,
+  };
+}
+
+async function rebuildFeedList(userId) {
+  const snap = await db.collection("users").doc(userId).collection("feeds").where("archivedAt", "==", null).get();
+  const feeds = {};
+  snap.forEach((d) => { feeds[d.id] = feedListEntry(d.data()); });
+  await db.collection("users").doc(userId).collection("aggregations").doc("feedList").set({
+    feeds,
+    builtAt: admin.firestore.Timestamp.now(),
+  });
+  return feeds;
+}
+
+async function loadActiveFeeds(userId) {
+  const snap = await db.collection("users").doc(userId).collection("aggregations").doc("feedList").get();
+  const data = snap.exists ? snap.data() : null;
+  const fresh = data?.feeds && data.builtAt?.toMillis?.() > Date.now() - FEED_LIST_MAX_AGE_MS;
+  const feeds = fresh ? data.feeds : await rebuildFeedList(userId);
+  return Object.entries(feeds).map(([id, f]) => ({ id, ...f }));
+}
+
+/** Errors that differ only in a request id (Workday's errorCaseId) count as the same. */
+function errorKey(msg) {
+  return msg ? String(msg).split(". Body:")[0].trim() : "";
+}
+
+exports.onFeedWritten = onDocumentWritten(
+  { document: "users/{uid}/feeds/{feedId}", region: REGION },
+  async (event) => {
+    if (event.params.uid !== ADMIN_UID) return;
+    const listRef = db.collection("users").doc(ADMIN_UID).collection("aggregations").doc("feedList");
+    const after = event.data?.after?.exists ? event.data.after.data() : null;
+    const before = event.data?.before?.exists ? event.data.before.data() : null;
+    const active = after && !after.archivedAt;
+    // Skip writes that don't change anything the sync reads.
+    if (before && after && !before.archivedAt === !after.archivedAt &&
+        JSON.stringify(feedListEntry(before)) === JSON.stringify(feedListEntry(after))) return;
+    const path = new admin.firestore.FieldPath("feeds", event.params.feedId);
+    try {
+      await listRef.update(path, active ? feedListEntry(after) : admin.firestore.FieldValue.delete());
+    } catch (err) {
+      logger.warn(`feedList update failed (${err?.message}); rebuilding`);
+      await rebuildFeedList(ADMIN_UID);
+    }
+  }
+);
 
 /**
  * ----------------------------
@@ -2185,7 +2258,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
  * Stops starting new jobs after `deadlineMs`; those stay unscored and are
  * picked up by rescoreBacklog on a later run. Returns the number scored.
  */
-async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null } = {}) {
+async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null, listedIds = null, screen = true } = {}) {
   if (!newJobs || newJobs.length === 0) return 0;
   const isAdmin = userId === ADMIN_UID;
 
@@ -2229,6 +2302,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const profileText = buildProfileText(profile);
   const profileStamp = profileStampOf(profile);
   const candidateYears = candidateYearsOf(profile);
+  const softwareCandidate = isSoftwareCandidate(profile);
   if (profileText.length < 80) {
     logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
     return 0;
@@ -2266,8 +2340,36 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const results = []; // { jobId, score, reason, fit }
   let skippedForTime = 0;
 
-  await Promise.all(todo.map((job) => limiter(async () => {
-    if (Date.now() > deadlineMs) { skippedForTime++; return; }
+  // Title screen: jobs clearly outside this candidate's field skip the full
+  // assessment (which reads the whole description). Software candidates get a
+  // free title rule (skips ~64% of jobs); others would get a batched model
+  // screen, which stays off until it's been checked on real data.
+  let toAssess = todo;
+  if (screen && (softwareCandidate || LLM_TITLE_SCREEN)) {
+    const keep = [];
+    if (softwareCandidate) {
+      for (const j of todo) keep.push(!otherFieldForSoftware(j.title));
+    } else {
+      const headline = profileHeadline(profile);
+      for (let i = 0; i < todo.length; i += SCREEN_BATCH) {
+        const chunk = todo.slice(i, i + SCREEN_BATCH);
+        keep.push(...await screenJobTitles({ client, model: OPENAI_FAST_MODEL, headline, titles: chunk.map((j) => j.title) }));
+      }
+    }
+    toAssess = todo.filter((_, i) => keep[i]);
+    todo.forEach((job, i) => {
+      if (keep[i]) return;
+      const fit = { ...screenedFit(), profileStamp, scoredAt };
+      results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit });
+    });
+    if (toAssess.length < todo.length) logger.info(`title screen userId=${userId}: ${todo.length - toAssess.length} of ${todo.length} outside the candidate's field`);
+  }
+
+  // Out of OpenAI credits: stop at the first such error instead of retrying
+  // every job; the jobs stay unscored and are picked up once credits return.
+  let outOfCredits = false;
+  await Promise.all(toAssess.map((job) => limiter(async () => {
+    if (Date.now() > deadlineMs || outOfCredits) { skippedForTime++; return; }
     try {
       let description = job.fullDescription;
       if (!description) {
@@ -2285,16 +2387,17 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         }
       }
       if (!description || description.length < 50) {
-        results.push({ jobId: job.jobDocId, score: -1, reason: "Couldn't read the job description." });
+        results.push({ jobId: job.jobDocId, score: -1, reason: NO_DESCRIPTION });
         return;
       }
 
       let fit = null;
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
         try {
-          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, jobTitle: job.title, jobDescription: description });
+          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, softwareCandidate, jobTitle: job.title, jobDescription: description });
           if (!fit) await new Promise((r) => setTimeout(r, 800));
         } catch (err) {
+          if (isOutOfCredits(err)) { outOfCredits = true; break; }
           const retryable = err?.status === 429 || err?.status >= 500 || /rate|timeout|timed out|connection/i.test(err?.message || "");
           if (!retryable || attempt === 4 || Date.now() > deadlineMs) {
             logger.warn(`assessJobFit failed for ${job.jobDocId}: ${err?.message?.slice(0, 120)}`);
@@ -2304,6 +2407,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         }
       }
       if (!fit) {
+        if (outOfCredits) { skippedForTime++; return; }
         results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
         return;
       }
@@ -2311,10 +2415,12 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit: stored });
       logger.info(`Scored ${job.jobDocId} for ${userId}: ${fit.score} (coverage ${fit.coverage}, ${fit.roleFit}/${fit.seniorityFit}) — ${fit.reason}`);
     } catch (err) {
+      if (isOutOfCredits(err)) { outOfCredits = true; skippedForTime++; return; }
       logger.warn(`scoreNewJobsForUser: error scoring ${job.jobDocId}: ${err?.message}`);
       results.push({ jobId: job.jobDocId, score: -1, reason: "Scoring failed; will retry." });
     }
   })));
+  if (outOfCredits) logger.error(`scoreNewJobsForUser: OpenAI account is out of credits; ${skippedForTime} jobs left unscored for userId=${userId}`);
 
   // Admin's job docs carry the legacy fields other readers (worker, MCP) use.
   if (isAdmin && results.length) {
@@ -2331,29 +2437,16 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   }
 
   const good = results.filter((r) => r.score >= 0);
-  if (failedIds) failedIds.push(...results.filter((r) => r.score < 0).map((r) => r.jobId));
+  // Only unreadable descriptions count toward giving up on a job; API errors
+  // (outages, rate limits) don't, so an outage never retires jobs.
+  if (failedIds) failedIds.push(...results.filter((r) => r.score < 0 && r.reason === NO_DESCRIPTION).map((r) => r.jobId));
   try {
-    if (results.length) {
-      await db.collection("users").doc(userId).collection("aggregations").doc("scoringStatus").set({
-        recentScores: results.slice(0, 50).map((r) => ({ id: r.jobId, score: r.score, reason: r.reason })),
-        pendingCount: skippedForTime,
-        scoringInProgress: false,
-        updatedAt: admin.firestore.Timestamp.now(),
-      });
-    }
     if (good.length) {
-      // Refresh recentJobs/allJobs first so the myJobScores rollup (keyed off
-      // their ids) includes jobs synced this run. Only admin owns those docs.
-      if (isAdmin) {
-        const { rebuildRecentJobs, rebuildAllJobs } = require("./lib/recentJobs.cjs");
-        await rebuildRecentJobs(userId).catch((err) => logger.warn(`rebuildRecentJobs after scoring failed: ${err?.message}`));
-        await rebuildAllJobs(userId).catch((err) => logger.warn(`rebuildAllJobs after scoring failed: ${err?.message}`));
-      }
       const { writeUserScores } = require("./lib/userJobScores.cjs");
-      await writeUserScores(userId, good.map((r) => ({ jobId: r.jobId, score: r.score, reason: r.reason, fit: r.fit })));
+      await writeUserScores(userId, good.map((r) => ({ jobId: r.jobId, score: r.score, reason: r.reason, fit: r.fit })), db, { listedIds });
     }
   } catch (err) {
-    logger.warn(`score aggregation write failed for ${userId}: ${err?.message}`);
+    logger.warn(`score write failed for ${userId}: ${err?.message}`);
   }
 
   logger.info(`scoreNewJobsForUser: userId=${userId} scored=${good.length} failed=${results.length - good.length} deferred=${skippedForTime}`);
@@ -2369,7 +2462,8 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
   const profileStamp = profileStampOf(profile);
   const scoreRef = db.collection("users").doc(uid).collection("jobScores").doc(jobId);
   const existing = (await scoreRef.get()).data()?.fit;
-  if (existing && existing.version === FIT_VERSION && existing.profileStamp === profileStamp) return existing;
+  // A title-screen result isn't a real assessment; the Resume popup needs one.
+  if (existing && !existing.screened && existing.version === FIT_VERSION && existing.profileStamp === profileStamp) return existing;
 
   let description = job.fullDescription;
   if (!description) description = await fetchJobDescription(job.source, job.externalId, "", null);
@@ -2379,6 +2473,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
     model: OPENAI_FAST_MODEL,
     profileText: buildProfileText(profile),
     candidateYears: candidateYearsOf(profile),
+    softwareCandidate: isSoftwareCandidate(profile),
     jobTitle: job.title,
     jobDescription: description,
   });
@@ -3266,6 +3361,7 @@ ${JSON.stringify(promptProfile)}`;
       draft = parseJsonLoose(completion.choices?.[0]?.message?.content);
     } catch (err) {
       logger.error("generateTailoredResume pass 1 failed:", err);
+      if (isOutOfCredits(err)) throw new HttpsError("resource-exhausted", "The AI service is out of credits right now. Try again later.");
       throw new HttpsError("internal", "Failed to generate resume: " + err.message);
     }
 
@@ -3990,9 +4086,18 @@ exports.dailyAggregationReconciliation = onSchedule(
       try {
         const result = await rebuildAggregations(userId);
         logger.info(`Aggregation rebuilt for ${userId}: ${result.totalJobs} jobs, ${result.cities} cities, ${result.companies} companies`);
+        await rebuildFeedList(userId);
       } catch (err) {
         logger.error(`Aggregation rebuild failed for ${userId}: ${err?.message || err}`);
       }
+    }
+
+    // The sync updates these incrementally; rebuild every user's score rollup
+    // from scratch once a day so any drift is corrected.
+    const { rebuildUserJobScores } = require("./lib/userJobScores.cjs");
+    for (const uid of await listAiEnabledUserIds()) {
+      if (uid === ADMIN_UID) continue; // rebuildAggregations already did the admin's
+      await rebuildUserJobScores(uid).catch((err) => logger.error(`myJobScores rebuild failed for ${uid}: ${err?.message || err}`));
     }
   }
 );

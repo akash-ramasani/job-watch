@@ -283,7 +283,10 @@ export default function App() {
         />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} preferences={preferences} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
-        <Route path="/history" element={<FetchHistory user={user} />} />
+        <Route
+          path="/history"
+          element={user.uid === ADMIN_UID ? <FetchHistory user={user} /> : <Navigate to="/" replace />}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );

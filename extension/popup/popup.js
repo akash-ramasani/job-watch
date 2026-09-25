@@ -33,7 +33,7 @@ function setHeaderSub(text) { $("header-sub").textContent = text; }
 // ── Boot: check if already logged in ──────────────────────────────────────────
 chrome.runtime.sendMessage({ type: "GET_USER" }, (response) => {
   if (response?.ok && response.userDoc) {
-    renderProfile(response.userDoc);
+    renderProfile(response.userDoc, response.uid);
   } else {
     showScreen("login");
     setHeaderSub("Sign in to continue");
@@ -64,7 +64,7 @@ function startAuthPolling() {
         clearInterval(authPoller);
         authPoller = null;
         if (btn) btn.classList.remove("btn-syncing");
-        renderProfile(response.userDoc);
+        renderProfile(response.userDoc, response.uid);
       } else if (attempts >= MAX) {
         clearInterval(authPoller);
         authPoller = null;
@@ -89,9 +89,16 @@ $("avatar-initials").addEventListener("click", () => {
 });
 
 // ── Render profile ─────────────────────────────────────────────────────────────
-function renderProfile(userDoc) {
+// Feeds are shared and managed by the admin only.
+const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
+
+function renderProfile(userDoc, uid) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
+  const isAdmin = uid === ADMIN_UID;
+  document.querySelectorAll("#screen-profile > .field, #screen-profile > .url-preview, #btn-add-feed, #feed-status")
+    .forEach((el) => { if (!isAdmin) el.style.display = "none"; });
+  $("member-note").style.display = isAdmin ? "none" : "block";
 
   const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
 

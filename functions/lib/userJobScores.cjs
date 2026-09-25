@@ -28,17 +28,22 @@ const freshnessKey = (version, profileStamp) => `${version}:${profileStamp ?? ""
 // Must match ADMIN_UID in functions/index.js.
 const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
+// Score docs outlive their job (jobs expire 3 days after posting) only briefly.
+const SCORE_TTL_DAYS = 5;
+
 /**
- * Upsert a batch of scores for a user and refresh their aggregation doc.
+ * Upsert a batch of scores for a user and update their rollup doc in place.
  * @param {string} userId
  * @param {Array<{ jobId: string, score: number, reason: string, fit?: object }>} entries
  * @param {FirebaseFirestore.Firestore} [dbInstance]
+ * @param {{ listedIds?: Set<string> }} [opts] ids on the Jobs page, if the caller has them
  */
-async function writeUserScores(userId, entries, dbInstance) {
+async function writeUserScores(userId, entries, dbInstance, { listedIds = null } = {}) {
   const db = dbInstance || admin.firestore();
   if (!Array.isArray(entries) || entries.length === 0) return 0;
 
   const scoredAt = admin.firestore.Timestamp.now();
+  const expireAt = admin.firestore.Timestamp.fromMillis(scoredAt.toMillis() + SCORE_TTL_DAYS * 86400000);
   const userRef = db.collection("users").doc(userId);
   const scoresRef = userRef.collection("jobScores");
 
@@ -48,24 +53,47 @@ async function writeUserScores(userId, entries, dbInstance) {
     const batch = db.batch();
     for (const { jobId, score, reason, fit } of entries.slice(i, i + CHUNK)) {
       if (!jobId) continue;
-      batch.set(
-        scoresRef.doc(jobId),
-        {
-          score: typeof score === "number" ? score : null,
-          reason: reason || "",
-          scoredAt,
-          // Full requirement-by-requirement assessment (functions/lib/jobFit.cjs).
-          // Kept on the per-job doc only; the rollup below stays { score, reason }.
-          ...(fit ? { fit } : {}),
-        },
-        { merge: true }
-      );
+      // mergeFields replaces these fields whole, so a new assessment never
+      // inherits leftovers (requirements, a screened flag) from the old one.
+      const fields = { score: typeof score === "number" ? score : null, reason: reason || "", scoredAt, expireAt, fit: fit || null };
+      batch.set(scoresRef.doc(jobId), fields, { mergeFields: Object.keys(fields) });
     }
     await batch.commit();
   }
 
-  await rebuildUserJobScores(userId, db);
+  await updateUserScoreRollup(userId, entries, db, { listedIds });
   return entries.length;
+}
+
+/**
+ * Put new scores into /users/{userId}/aggregations/myJobScores without
+ * re-reading every score doc: one transaction, one read, one write. Entries
+ * for jobs no longer on the Jobs page are dropped.
+ */
+async function updateUserScoreRollup(userId, entries, dbInstance, { listedIds = null } = {}) {
+  const db = dbInstance || admin.firestore();
+  const rollupRef = db.collection("users").doc(userId).collection("aggregations").doc("myJobScores");
+  if (!listedIds) {
+    const { listedJobIds } = require("./recentJobs.cjs");
+    listedIds = await listedJobIds(db, ADMIN_UID);
+  }
+  const needsRebuild = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(rollupRef);
+    if (!snap.exists) return true;
+    const scores = { ...(snap.data().scores || {}) };
+    for (const { jobId, score, reason, fit } of entries) {
+      if (!jobId || !listedIds.has(jobId)) continue;
+      scores[jobId] = {
+        score: typeof score === "number" ? score : null,
+        reason: reason || "",
+        ...(fit?.version ? { k: freshnessKey(fit.version, fit.profileStamp) } : {}),
+      };
+    }
+    for (const id of Object.keys(scores)) if (!listedIds.has(id)) delete scores[id];
+    tx.set(rollupRef, { scores, count: Object.keys(scores).length, limit: MAX_SCORES_IN_AGG, updatedAt: admin.firestore.Timestamp.now() });
+    return false;
+  });
+  if (needsRebuild) await rebuildUserJobScores(userId, db);
 }
 
 /**
@@ -138,4 +166,4 @@ async function rebuildUserJobScores(userId, dbInstance) {
   return count;
 }
 
-module.exports = { writeUserScores, rebuildUserJobScores, freshnessKey, MAX_SCORES_IN_AGG };
+module.exports = { writeUserScores, updateUserScoreRollup, rebuildUserJobScores, freshnessKey, MAX_SCORES_IN_AGG, SCORE_TTL_DAYS };

@@ -1007,6 +1007,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
         }
 
+        const { jwUid } = await getStoredAuth();
+        if (jwUid !== ADMIN_UID) {
+          sendResponse({ ok: false, error: "Only the admin can add feeds." });
+          return;
+        }
         const { idToken } = await getFreshToken();
         if (!url) url = buildFeedUrl(source, slug);
 

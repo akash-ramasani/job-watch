@@ -96,6 +96,42 @@ const ABOVE_TITLE_RE = /\b(principal|distinguished|fellow|director|vp|vice presi
 const SOFTWARE_TITLE_RE = /\b(software (engineer|developer|development engineer)|sde|swe|back-?end (engineer|developer)|full[- ]?stack|forward[- ]deployed|platform engineer|web developer|front-?end (engineer|developer)|mobile (engineer|developer)|ios (engineer|developer)|android (engineer|developer))\b/i;
 const ADJACENT_TITLE_RE = /\b(data engineer|devops|site reliability|sre|(ml|machine learning|ai) engineer|solutions? architect|cloud engineer|infrastructure engineer|security engineer|qa automation|test automation|sdet|data scientist|analytics engineer)\b/i;
 
+// Free first pass for a software-engineering candidate: titles that are
+// clearly another profession skip the full assessment. Measured on 11.8k
+// titles: skips 64% of jobs and lost 1 of 855 jobs that scored 40+ (a
+// posting titled "Open Call").
+const TECH_WORD_RE = /\b(engineer|engineering|developer|development|software|programmer|architect|devops|sre|reliability|platform|cloud|data|machine learning|ml|ai|llm|scientist|research|researcher|technical|technology|security|infrastructure|systems?|back-?end|front-?end|full[- ]?stack|web|mobile|ios|android|api|integrations?|automation|qa|sdet|test|solutions?|implementation|forward[- ]deployed|fde|analytics|computer|network|database|dba|cyber|embedded|robotics|quant|applications?|mts|swe|sde)\b/i;
+const OTHER_FIELD_RE = /\b(mechanical|electrical|civil|structural|chemical|manufacturing|process engineer|quality engineer|hardware|rf|analog|mixed[- ]signal|asic|fpga|layout|propulsion|aerospace|materials|packaging|facilities|construction|hvac|fire protection|field service|sales|account executive|recruiter|recruiting|sourcer|marketing|nurse|nursing|clinical|pharmac\w*|physician|therapist|technician|mechanic|driver|warehouse|retail|cashier|accountant|accounting|tax|auditor|attorney|paralegal|counsel|payroll|underwriter|actuar\w*|optical|photonics|thermal|power electronics|substation|pipeline|supply chain|procurement|buyer|sourcing)\b/i;
+const ALWAYS_KEEP_RE = /\b(tech lead|technical lead|staff engineer|principal engineer|member of technical staff|solutions? architect|machine learning|data engineer|ai engineer|ml engineer)\b/i;
+
+/** For a software candidate: is this title clearly a different profession? */
+function otherFieldForSoftware(title) {
+  const t = String(title || "").trim();
+  if (t.split(/\s+/).length < 2) return false; // blank or one word: can't tell
+  if (SOFTWARE_TITLE_RE.test(t) || ALWAYS_KEEP_RE.test(t)) return false; // software in any domain
+  return !TECH_WORD_RE.test(t) || OTHER_FIELD_RE.test(t);
+}
+
+/** Does the candidate's own history read as software engineering? */
+function isSoftwareCandidate(profile) {
+  const titles = (profile?.roles || []).map((r) => r.title || "").join(" | ");
+  return SOFTWARE_TITLE_RE.test(titles) || ADJACENT_TITLE_RE.test(titles);
+}
+
+/** A few lines about the candidate — enough to tell which job titles are their field. */
+function profileHeadline(profile) {
+  const p = profile || {};
+  const titles = (p.roles || []).slice(0, 4).map((r) => [r.title, r.company].filter(Boolean).join(" at ")).filter(Boolean);
+  const skills = (Array.isArray(p.skillGroups) && p.skillGroups.length ? p.skillGroups.flatMap((g) => g.skills || []) : p.skills || []).slice(0, 25);
+  const degrees = (p.education || []).map((e) => e.degree).filter(Boolean).slice(0, 2);
+  return [
+    titles.length ? `Recent roles: ${titles.join("; ")}` : "",
+    degrees.length ? `Education: ${degrees.join("; ")}` : "",
+    skills.length ? `Skills: ${skills.join(", ")}` : "",
+    p.summary ? `Summary: ${String(p.summary).replace(/\*\*/g, "").slice(0, 300)}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 /** Change stamp for a profile: assessments made against an older profile are stale. */
 function profileStampOf(profile) {
   const t = profile?.updatedAt;
@@ -124,7 +160,7 @@ const SOFT_REQ_RE = /\b(ambiguit|exceptional|first[- ]principles|passion|curio|c
 const COVER_VALUE = { yes: 1, partial: 0.5, no: 0 };
 
 /** Pure: turn the model's raw answer into a checked, scored assessment. */
-function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = null } = {}) {
+function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = null, softwareCandidate = true } = {}) {
   const profileWords = new Set(contentWords(profileText));
   const reqs = (Array.isArray(raw?.requirements) ? raw.requirements : [])
     .map((q) => ({
@@ -151,18 +187,23 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   const got = reqs.reduce((a, q) => a + weight(q) * COVER_VALUE[q.covered], 0);
   const coverage = total ? Math.round((got / total) * 100) : 0;
 
-  // Role: the model judges the kind of work; titles overrule it for software
-  // jobs, where a different domain (BCI, pathology, ads) is not a different field.
+  // Role: the model judges the kind of work. For a software engineer, titles
+  // overrule it: a software job in another domain (BCI, pathology, ads) is
+  // not a different field. Other candidates get the model's judgement.
   let roleFit = ["same", "adjacent", "different"].includes(raw?.roleFit) ? raw.roleFit : "same";
-  if (SOFTWARE_TITLE_RE.test(jobTitle)) roleFit = "same";
-  else if (roleFit === "different" && ADJACENT_TITLE_RE.test(jobTitle)) roleFit = "adjacent";
+  if (softwareCandidate) {
+    if (SOFTWARE_TITLE_RE.test(jobTitle)) roleFit = "same";
+    else if (roleFit === "different" && ADJACENT_TITLE_RE.test(jobTitle)) roleFit = "adjacent";
+  }
 
   // Level: decided here, not by the model — titles for the clear cases,
   // the job's minimum years against the candidate's for the rest.
   const minYears = Number.isFinite(Number(raw?.minYears)) && raw?.minYears !== null && raw?.minYears !== "" ? Number(raw.minYears) : null;
+  // Entry-level titles are only "too junior" for someone with 2+ years, and
+  // principal/director titles only "too senior" for someone with under 8.
   let level = "fits";
-  if (ENTRY_TITLE_RE.test(jobTitle)) level = "entry";
-  else if (ABOVE_TITLE_RE.test(jobTitle)) level = "above";
+  if (ENTRY_TITLE_RE.test(jobTitle)) { if (candidateYears != null && candidateYears >= 2) level = "entry"; }
+  else if (ABOVE_TITLE_RE.test(jobTitle) && (candidateYears == null || candidateYears < 8)) level = "above";
   else if (minYears != null && candidateYears != null && minYears > candidateYears + 2) level = "above";
 
   let score = coverage;
@@ -241,7 +282,7 @@ Return ONLY JSON:
  * Ask the model and score its answer.
  * @param {{ client, model, profileText, jobTitle, jobDescription, timeoutMs? }} args
  */
-async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, timeoutMs = 45000 }) {
+async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, softwareCandidate = true, timeoutMs = 45000 }) {
   const completion = await client.chat.completions.create(
     {
       model,
@@ -263,12 +304,74 @@ async function assessJobFit({ client, model, profileText, jobTitle, jobDescripti
     return null;
   }
   if (!Array.isArray(raw?.requirements) || raw.requirements.length === 0) return null;
-  return scoreAssessment(raw, profileText, { jobTitle, candidateYears });
+  return scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate });
+}
+
+const SCREEN_PROMPT = `You sort job titles for one candidate before a detailed review.
+For each numbered title answer "k" (keep) or "d" (drop).
+"d" ONLY when the title is clearly a different profession from the candidate's: work their experience and education do not prepare them for at all (for a software engineer: sales, recruiting, nursing, accounting, legal, retail, mechanical or electrical hardware engineering, manufacturing).
+"k" for the candidate's own field at any seniority, in any industry or domain, for related and adjacent roles, and for anything you are unsure about.
+Return ONLY JSON with an entry for EVERY title number: {"1":"k","2":"d",...}`;
+
+/**
+ * Cheap first pass: one call judges a batch of titles, so the full
+ * assessment (which reads the whole description) only runs on jobs in the
+ * candidate's field. Returns a boolean per title (true = keep). Anything
+ * missing or unclear is kept; any failure keeps all.
+ */
+async function screenJobTitles({ client, model, headline, titles, timeoutMs = 30000, onRaw = null }) {
+  const keep = titles.map(() => true);
+  if (!titles.length || !headline) return keep;
+  try {
+    const completion = await client.chat.completions.create(
+      {
+        model,
+        temperature: 0,
+        max_tokens: 60 + titles.length * 12,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: SCREEN_PROMPT },
+          { role: "user", content: `## CANDIDATE\n${headline}\n\n## TITLES\n${titles.map((t, i) => `${i + 1}. ${String(t || "").trim().slice(0, 120)}`).join("\n")}` },
+        ],
+      },
+      { timeout: timeoutMs }
+    );
+    const text = completion.choices?.[0]?.message?.content || "{}";
+    if (onRaw) onRaw(text, completion.choices?.[0]?.finish_reason);
+    const raw = JSON.parse(text);
+    titles.forEach((_, i) => { if (/^d/i.test(String(raw[String(i + 1)] || ""))) keep[i] = false; });
+  } catch (err) {
+    if (onRaw) onRaw(`ERROR ${err?.message}`);
+    return titles.map(() => true);
+  }
+  return keep;
+}
+
+/** What gets stored for a job the title screen dropped. Not a full assessment. */
+function screenedFit() {
+  return {
+    version: FIT_VERSION,
+    screened: true,
+    score: 0,
+    coverage: null,
+    roleFit: "different",
+    seniorityFit: null,
+    minYears: null,
+    capNote: "Different field from your resume",
+    requirements: [],
+    downgraded: 0,
+    reason: "Different field from your resume",
+  };
 }
 
 module.exports = {
   FIT_VERSION,
   assessJobFit,
+  screenJobTitles,
+  screenedFit,
+  otherFieldForSoftware,
+  isSoftwareCandidate,
+  profileHeadline,
   scoreAssessment,
   buildProfileText,
   profileStampOf,

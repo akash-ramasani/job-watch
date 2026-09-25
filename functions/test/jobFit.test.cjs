@@ -2,7 +2,7 @@
 // Run: npm test (in functions/)
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf } = require("../lib/jobFit.cjs");
+const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf, isSoftwareCandidate, otherFieldForSoftware } = require("../lib/jobFit.cjs");
 
 const PROFILE = buildProfileText({
   summary: "Software engineer with 5+ years of experience **shipping production backend systems**.",
@@ -91,6 +91,27 @@ test("level comes from the title and years, not the model", () => {
   assert.equal(tooMany.capNote, "Asks for 10+ years; your resume shows about 5");
 });
 
+test("title rules follow the candidate, not a software-engineer default", () => {
+  const all = [{ r: "Excel", n: "must", c: "yes", e: "Python, TypeScript, Java" }];
+  const analyst = (jobTitle, raw = {}, candidateYears = 1) =>
+    scoreAssessment({ roleFit: "same", requirements: all, ...raw }, PROFILE, { jobTitle, candidateYears, softwareCandidate: false });
+  // A software title is not forced to "same" for someone who isn't a software engineer.
+  assert.equal(analyst("Software Engineer", { roleFit: "different" }).roleFit, "different");
+  // Entry-level roles fit someone early in their career.
+  assert.equal(analyst("Data Analyst, New Grad").score, 100);
+  assert.equal(analyst("Data Analyst Intern", {}, 3).score, 20);
+  // Director titles are fine for someone with 8+ years.
+  assert.equal(analyst("Director of Analytics", {}, 9).score, 100);
+  assert.equal(analyst("Director of Analytics", {}, 4).score, 35);
+});
+
+test("software candidate is read from role titles", () => {
+  assert.equal(isSoftwareCandidate({ roles: [{ title: "Senior Software Engineer" }] }), true);
+  assert.equal(isSoftwareCandidate({ roles: [{ title: "Machine Learning Engineer" }] }), true);
+  assert.equal(isSoftwareCandidate({ roles: [{ title: "Registered Nurse" }, { title: "Data Analyst" }] }), false);
+  assert.equal(isSoftwareCandidate({}), false);
+});
+
 test("candidate years merge overlapping roles and count to present", () => {
   const now = new Date(2026, 8, 25); // Sep 2026
   const years = candidateYearsOf({ roles: [
@@ -155,4 +176,18 @@ test("profile text keeps every role and bullet, without bold markers", () => {
   assert.match(PROFILE, /Machine Learning Engineer at ICAR/);
   assert.match(PROFILE, /- Designed high-volume REST APIs/);
   assert.doesNotMatch(PROFILE, /\*\*/);
+});
+
+test("software title screen skips other professions and keeps software in any domain", () => {
+  for (const t of ["Grad Pharmacist", "Family Nurse Practitioner - NP/PA (Part-time)", "Senior Electrical Engineer (Onsite)", "GTM Recruiter (Fixed Term)",
+    "Partner Marketing Manager, Online & Regional Events", "Account Executive, Mid-Market", "Demand Planner II (Hybrid)", "Mechanical Engineering Intern (Summer 2027)"]) {
+    assert.equal(otherFieldForSoftware(t), true, t);
+  }
+  for (const t of ["Software Engineer, Agent - Retail", "Staff Software Engineer, Tax Experiences", "Senior Staff Software Engineer - Pricing and Packaging",
+    "Software Engineer, Robot Manufacturing", "Sr. Forward Deployed Engineer (FDE) - Manufacturing", "Globalization Tech Lead", "Senior Data Engineer - US",
+    "Machine Learning Engineer, Core Experimentation", "Solutions Architect", "Senior Implementation Engineer", "", "Engineer"]) {
+    assert.equal(otherFieldForSoftware(t), false, t);
+  }
+  // Known miss: a generic posting with no field in its title is skipped.
+  assert.equal(otherFieldForSoftware("Open Call"), true);
 });

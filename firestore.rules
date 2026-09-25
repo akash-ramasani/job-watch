@@ -30,15 +30,8 @@ service cloud.firestore {
       match /jobs/{jobId} {
         allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
       }
-      match /feeds/{feedId} {
-        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
-      }
-      match /companies/{companyId} {
-        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
-      }
-      match /syncRuns/{runId} {
-        allow read: if request.auth != null && userId == "7Tojjo8l5PZIYctPmdwncf7PC133";
-      }
+      // Feeds, companies and sync history are admin-only: the owner rule above
+      // already covers the admin, so no extra read rule for anyone else.
       // Only the shared job-list rollups. The admin's own myJobScores and
       // scoringStatus are personal and stay owner-only like every user's.
       match /aggregations/{aggId} {

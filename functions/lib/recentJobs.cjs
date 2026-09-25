@@ -138,7 +138,77 @@ async function rebuildAllJobs(userId, dbInstance) {
   return jobs.length;
 }
 
+const tsMillis = (t) => (t && typeof t.toMillis === "function" ? t.toMillis() : t && typeof t._seconds === "number" ? t._seconds * 1000 : null);
+
+/**
+ * Incremental version of rebuildRecentJobs + rebuildAllJobs for the sync:
+ * merge the jobs written this run into the two lists and drop expired ones,
+ * instead of re-querying ~2,000 job docs. Costs 2 reads + 2 writes.
+ * The nightly reconciliation still does a full rebuild.
+ *
+ * @param {string} userId  corpus owner (admin)
+ * @param {Array<object>} written  job objects as written this run (with jobDocId)
+ * @param {{ ttlDays: number, dbInstance? }} opts
+ * @returns {Promise<Set<string>>} ids now on either list
+ */
+async function mergeIntoJobLists(userId, written, { ttlDays, dbInstance } = {}) {
+  const db = dbInstance || admin.firestore();
+  const aggs = db.collection("users").doc(userId).collection("aggregations");
+  const [recentSnap, allSnap] = await Promise.all([aggs.doc("recentJobs").get(), aggs.doc("allJobs").get()]);
+  if (!recentSnap.exists || !allSnap.exists) {
+    await rebuildRecentJobs(userId, db);
+    await rebuildAllJobs(userId, db);
+    return listedJobIds(db, userId);
+  }
+
+  const full = new Map((recentSnap.data().jobs || []).map((j) => [j.id, j]));
+  const entries = new Map((allSnap.data().jobs || []).map((j) => [j.id, j]));
+  for (const [id, j] of full) if (!entries.has(id)) entries.set(id, j);
+
+  for (const job of written || []) {
+    const id = job.jobDocId;
+    if (!id) continue;
+    const projected = projectJob(id, job);
+    const prev = full.get(id) || entries.get(id) || {};
+    // Fields this run didn't write keep their stored value (the doc was merged).
+    for (const k of Object.keys(projected)) if (k !== "id" && job[k] === undefined && prev[k] !== undefined) projected[k] = prev[k];
+    full.set(id, projected);
+    entries.set(id, projected);
+  }
+
+  // Same rows the query would return: has sourceUpdatedTs, not yet expired, newest first.
+  const expiredBefore = Date.now() - ttlDays * 86400000;
+  const ranked = [...entries.values()]
+    .filter((j) => tsMillis(j.sourceUpdatedTs) != null && tsMillis(j.sourceUpdatedTs) >= expiredBefore)
+    .sort((a, b) => tsMillis(b.sourceUpdatedTs) - tsMillis(a.sourceUpdatedTs))
+    .slice(0, ALL_JOBS_LIMIT);
+
+  const recent = ranked.slice(0, RECENT_JOBS_LIMIT).map((j) => full.get(j.id) || { ...j, locationTokens: [] });
+  const all = ranked.map((j) => {
+    const { locationTokens, ...lean } = j; // eslint-disable-line no-unused-vars
+    return lean;
+  });
+  const now = admin.firestore.Timestamp.now();
+  await Promise.all([
+    aggs.doc("recentJobs").set({ jobs: recent, count: recent.length, limit: RECENT_JOBS_LIMIT, updatedAt: now }),
+    aggs.doc("allJobs").set({ jobs: all, count: all.length, limit: ALL_JOBS_LIMIT, updatedAt: now }),
+  ]);
+  return new Set(ranked.map((j) => j.id));
+}
+
+/** Ids on the admin's recentJobs + allJobs lists (2 reads). */
+async function listedJobIds(dbInstance, ownerUid) {
+  const db = dbInstance || admin.firestore();
+  const aggs = db.collection("users").doc(ownerUid).collection("aggregations");
+  const [r, a] = await Promise.all([aggs.doc("recentJobs").get(), aggs.doc("allJobs").get()]);
+  const ids = new Set();
+  for (const snap of [r, a]) for (const j of (snap.exists && snap.data().jobs) || []) if (j?.id) ids.add(j.id);
+  return ids;
+}
+
 module.exports = {
+  mergeIntoJobLists,
+  listedJobIds,
   rebuildRecentJobs,
   rebuildAllJobs,
   RECENT_JOBS_LIMIT,

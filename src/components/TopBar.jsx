@@ -49,7 +49,9 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <NavButton active={location.pathname === "/jobs"} to="/jobs" icon={BriefcaseIcon}>Jobs</NavButton>
-              <NavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon}>History</NavButton>
+              {user.uid === ADMIN_UID && (
+                <NavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon}>History</NavButton>
+              )}
             </div>
           )}
 
@@ -140,7 +142,9 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" icon={BriefcaseIcon} onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
-              <MobileNavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon} onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
+              {user.uid === ADMIN_UID && (
+                <MobileNavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon} onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
+              )}
               <button
                 onClick={() => {
                   handleLogoutClick();
