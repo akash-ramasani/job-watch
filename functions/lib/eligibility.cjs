@@ -8,7 +8,8 @@
  *   - clearance:      a security clearance required ("active TS/SCI required",
  *                     "Clearance Required: Secret", "Secret clearance post-start is required")
  *   - no_sponsorship: the employer won't sponsor ("unable to sponsor", "no visa
- *                     sponsorship", "without the need for current or future sponsorship")
+ *                     sponsorship", "without the need for current or future sponsorship",
+ *                     "temporary visas including F-1 … H-1B … will not be considered")
  *
  * Built to never flag a legitimate job:
  *   - checked sentence by sentence ("U.S." no longer splits a sentence);
@@ -25,6 +26,8 @@
 
 const US = "(?:u\\.?\\s?s\\.?|united states|american)";
 const re = (s) => new RegExp(s, "i");
+// "… will not be considered", "… are not eligible", "… need not apply"
+const NOT_CONSIDERED = "(?:should not apply|need not apply|(?:are |is )?not eligible|(?:will|would|can) ?not be considered|won't be considered|cannot be considered|can't be considered)\\b";
 
 const PHRASES = {
   citizen: [
@@ -59,7 +62,9 @@ const PHRASES = {
     re(`\\bwithout (?:the )?(?:need|requirement|requiring|needing)(?: for)?(?: of)? (?:current or future |now or in the future |any )?(?:employer |visa |immigration |company )?sponsorship\\b`),
     re(`\\b(?:visa |work )?sponsorship:?\\s*(?:no|none|not (?:available|provided|offered))\\b`),
     re(`\\b(?:take over|transfer) (?:visa |h-?1b )?sponsorship\\b`),
-    re(`\\brequire\\w*[^.;]{0,60}\\bsponsorship\\b[^.;]{0,60}\\b(?:should not apply|not eligible|will not be considered)\\b`),
+    re(`\\brequir\\w*[^.;]{0,60}\\bsponsorship\\b[^.;]{0,60}\\b${NOT_CONSIDERED}`),
+    // "Individuals with temporary visas including F-1 (OPT, CPT, STEM), H-1B, H-2, or TN … will not be considered."
+    re(`\\b(?:temporary (?:work )?visas?|f-?1|h-?1b|tn visas?)\\b[^.;]{0,160}\\b${NOT_CONSIDERED}`),
   ],
 };
 

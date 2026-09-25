@@ -1914,7 +1914,7 @@ function workableRow(raw, now) {
 /**
  * Lever's description opens with the company blurb; the role, the requirement
  * lists and the closing notes (often work authorization) come after. Stored
- * descriptions are cut at 4,000 characters, so put the blurb last.
+ * descriptions are cut at DESCRIPTION_MAX_CHARS, so put the blurb last.
  */
 function leverDescriptionHtml(p) {
   if (!p) return "";
@@ -2667,6 +2667,11 @@ function simpleChecksum(s) {
 /**
  * Strip HTML tags from a string cleanly.
  */
+// Stored descriptions keep the whole posting: sponsorship and citizenship
+// statements usually sit at the end (the visa check reads them). The AI
+// prompt takes the first 6,000 characters (lib/jobFit.cjs).
+const DESCRIPTION_MAX_CHARS = 12000;
+
 function stripHtml(html) {
   if (!html) return "";
   return String(html)
@@ -2677,7 +2682,7 @@ function stripHtml(html) {
     .replace(/\n{3,}/g, "\n\n")
     .replace(/[ \t]{2,}/g, " ")
     .trim()
-    .slice(0, 4000);
+    .slice(0, DESCRIPTION_MAX_CHARS);
 }
 
 /**
@@ -2688,7 +2693,7 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
   try {
     // Ashby: description already captured from feed listing
     if (source === "ashbyhq" && descriptionHint) {
-      return descriptionHint.slice(0, 4000);
+      return descriptionHint.slice(0, DESCRIPTION_MAX_CHARS);
     }
 
     if (source === "greenhouse") {

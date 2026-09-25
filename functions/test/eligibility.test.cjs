@@ -21,6 +21,10 @@ test("firm no-sponsorship statements are caught", () => {
     "No visa sponsorship available.",
     "Permanently authorized to work in the U.S., must not require sponsorship of an employment visa (e.g., H-1B or green card) at the time of application or in the future.",
     "The company does not sponsor/support H-1B petitions, TN, or Forms I-983/STEM OPT for this role.",
+    // Fiserv (the first sentence alone is plain work authorization)
+    "You must currently possess valid and unrestricted U.S. work authorization to be considered for this role. Individuals with temporary visas including, but not limited to, F-1 (OPT, CPT, STEM), H-1B, H-2, or TN, or any candidate requiring sponsorship, now or in the future, will not be considered.",
+    "Candidates requiring sponsorship now or in the future are not eligible for this position.",
+    "Applicants on F-1 OPT or H-1B visas will not be considered for this role.",
   ]) assert.deepEqual(flagsOf(s), ["no_sponsorship"], s);
 });
 
@@ -79,6 +83,12 @@ test("legitimate jobs are never flagged", () => {
     "You will work with an executive sponsor to define the roadmap.",
     // application-form questions
     "Will you now or in the future require sponsorship for employment visa status?",
+    // visa holders welcome, or "not considered" about something else
+    "Candidates on F-1 OPT, CPT or H-1B visas will be considered for this role.",
+    "We welcome H-1B transfers; applicants requiring sponsorship will be considered.",
+    "Applicants who do not meet the minimum qualifications will not be considered.",
+    "H-1B holders may not be considered for certain government programs.",
+    "You must currently possess valid and unrestricted U.S. work authorization to be considered for this role.",
   ]) assert.deepEqual(flagsOf(s), [], s);
 });
 
