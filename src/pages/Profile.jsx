@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { doc, getDoc, serverTimestamp, setDoc, collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { getIdToken, linkWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
 import { db, messaging, auth } from "../firebase";
@@ -11,8 +11,8 @@ import PhoneInput from "../components/PhoneInput.jsx";
 import UserAvatar from "../components/UserAvatar.jsx";
 import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
-import { parseLatexResume, looksLikeLatexResume } from "../lib/latexResume.js";
-import { buildResumeLatex } from "../lib/resumeLatex.js";
+import ResumeProfileSection from "../components/Resume/ResumeProfileSection.jsx";
+import { contactFromUser, downloadResumePdf, downloadResumeTex, profileToResume } from "../lib/resumeDownloads.js";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const PARSE_RESUME_URL =
@@ -20,8 +20,6 @@ const PARSE_RESUME_URL =
 const GEN_PRONUNCIATION_URL =
   `https://us-central1-${import.meta.env.VITE_FIREBASE_PROJECT_ID}.cloudfunctions.net/generateNamePronunciation`;
 
-const ACCEPTED_TYPES = [".pdf", ".docx", ".txt", ".tex"];
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 // ─── URL Slug Helpers ──────────────────────────────────────────────────────────
 function toLinkedInSlug(url = "") {
@@ -53,39 +51,6 @@ function formatPhone(raw) {
   if (d.length <= 3) return `+1 (${d}`;
   if (d.length <= 6) return `+1 (${d.slice(0, 3)}) ${d.slice(3)}`;
   return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
-}
-
-// Skills are edited as groups; a profile that only has the flat list becomes one group.
-function groupsForEdit(data) {
-  const groups = Array.isArray(data.skillGroups) ? data.skillGroups : [];
-  if (groups.length) return groups;
-  return data.skills?.length ? [{ label: "Skills", skills: data.skills }] : [];
-}
-
-function emptyResume() {
-  return { header: {}, summary: "", skills: [], skillGroups: [], roles: [], education: [], projects: [], certifications: [], extraExperience: "", rawText: "", fileName: "" };
-}
-
-// ─── Auto-expanding Textarea ───────────────────────────────────────────────────
-function AutoTextarea({ value, onChange, placeholder, id, className }) {
-  const ref = useRef(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
-  return (
-    <textarea
-      ref={ref}
-      id={id}
-      value={value}
-      onChange={onChange}
-      placeholder={placeholder}
-      rows={1}
-      className={`${className} overflow-hidden resize-none`}
-    />
-  );
 }
 
 // ─── Section Header ────────────────────────────────────────────────────────────
@@ -143,13 +108,7 @@ export default function Profile({ user, userMeta }) {
 
   const [pushStatus, setPushStatus] = useState(typeof Notification !== "undefined" ? Notification.permission : "unsupported");
 
-  const [resumePhase, setResumePhase] = useState("idle");
-  const [resumeData, setResumeData] = useState(emptyResume());
   const [savedResumeFull, setSavedResumeFull] = useState(null);
-  const [uploadingFileName, setUploadingFileName] = useState("");
-  const [savingResume, setSavingResume] = useState(false);
-  const [showLatexPaste, setShowLatexPaste] = useState(false);
-  const [latexPaste, setLatexPaste] = useState("");
   const [aiScoringEnabled, setAiScoringEnabled] = useState(true);
   const [togglingAi, setTogglingAi] = useState(false);
   const isAdmin = user?.uid === ADMIN_UID;
@@ -161,7 +120,6 @@ export default function Profile({ user, userMeta }) {
   const [linkConfirmation, setLinkConfirmation] = useState(null);
   const [linkingBusy, setLinkingBusy] = useState(false);
 
-  const dropzoneInputRef = useRef(null);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -351,133 +309,62 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
-  // A resume in the JobWatch LaTeX template is parsed here, deterministically:
-  // every bullet, skill group, location, project link and the header survive.
-  // (The PDF/DOCX path goes through AI extraction and is lossy by nature.)
-  function handleLatexText(text, fileName = "resume.tex") {
-    if (!looksLikeLatexResume(text)) {
-      showToast("That doesn't look like the JobWatch LaTeX resume template (no \\resumeSubheading / \\resumeItem).", "error");
-      return false;
-    }
-    const parsed = parseLatexResume(text);
-    if (!parsed.roles.length && !parsed.summary) {
-      showToast("Parsed the LaTeX but found no roles or summary — check the section names.", "error");
-      return false;
-    }
-    setResumeData({ ...emptyResume(), ...savedResumeFull, ...parsed, fileName, resumeUrl: savedResumeFull?.resumeUrl || null, extraExperience: savedResumeFull?.extraExperience || "" });
-    setLatexPaste("");
-    setShowLatexPaste(false);
-    setResumePhase("review");
-    track("resume_parsed", { file_type: "tex", roles: parsed.roles.length });
-    return true;
-  }
-
-  async function handleResumeFile(file) {
-    if (!file) return;
+  // ── Your resume: read a PDF/Word file, save, download ──
+  // (LaTeX is parsed in the browser by ResumeProfileSection; only PDF/Word
+  // needs the server, which also keeps a copy of the file for the extension.)
+  async function readResumeFile(file) {
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
-    if (!ACCEPTED_TYPES.includes(`.${ext}`)) { showToast(`Unsupported file type ".${ext}"`, "error"); return; }
-    if (file.size > MAX_FILE_BYTES) { showToast("File too large (Max 10MB)", "error"); return; }
-    if (ext === "tex") {
-      try {
-        handleLatexText(await file.text(), file.name);
-      } catch (err) {
-        showToast(err.message || "Could not read the .tex file", "error");
-      }
-      return;
+    const fd = new FormData();
+    fd.append("resume", file);
+    const idToken = await getIdToken(user);
+    const resp = await fetch(PARSE_RESUME_URL, {
+      method: "POST",
+      headers: { "X-Session-Token": localStorage.getItem("jw_session_token") || "", Authorization: `Bearer ${idToken}` },
+      body: fd,
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      track("resume_parse_failed", { file_type: ext, reason: String(data.error || resp.status).slice(0, 80) });
+      throw new Error(data.error || "We couldn't read that file. Try a PDF or Word file.");
     }
-    setUploadingFileName(file.name);
-    setResumePhase("parsing");
-    try {
-      const fd = new FormData();
-      fd.append("resume", file);
-      const idToken = await getIdToken(user);
-
-      // Server parses AND uploads to Storage — no client-side CORS needed
-      const resp = await fetch(PARSE_RESUME_URL, {
-        method: "POST",
-        headers: {
-          "X-Session-Token": localStorage.getItem("jw_session_token") || "", Authorization: `Bearer ${idToken}` },
-        body: fd,
-      });
-
-      const data = await resp.json();
-      if (!resp.ok || !data.ok) throw new Error(data.error || "Parsing failed");
-
-      // resumeUrl is returned by the server after it uploads to Storage
-      const resumeUrl = data.parsed?.resumeUrl || null;
-      setResumeData({ ...emptyResume(), ...data.parsed, resumeUrl, fileName: file.name });
-      setResumePhase("review");
-      track("resume_parsed", { file_type: ext, file_size_kb: Math.round(file.size / 1024) });
-    } catch (err) {
-      track("resume_parse_failed", { file_type: ext, reason: err?.message?.slice(0, 80) || "unknown" });
-      showToast(err.message, "error");
-      setResumePhase("idle");
-    }
+    track("resume_parsed", { file_type: ext, file_size_kb: Math.round(file.size / 1024) });
+    return { ...data.parsed, resumeUrl: data.parsed?.resumeUrl || null };
   }
 
-  // The saved profile rendered in the LaTeX template, untailored: the master
-  // resume. Edit in the app, export whenever you want the file.
-  function handleExportMasterTex() {
-    const profile = savedResumeFull;
-    if (!profile) return;
-    const contact = {
-      name: userMeta?.fullName || user?.displayName || "",
-      location: userMeta?.city || "",
-      phone: userMeta?.phone || "",
-      email: userMeta?.email || user?.email || "",
-      github: userMeta?.github || "",
-      linkedin: userMeta?.linkedin || "",
+  async function saveResume(draft) {
+    // Skill groups are what the user edits; the flat list is derived for scoring.
+    const groups = (draft.skillGroups?.length ? draft.skillGroups : (draft.skills?.length ? [{ label: "Skills", skills: draft.skills }] : []))
+      .map((g) => ({ label: String(g.label || "").trim() || "Skills", skills: (g.skills || []).map((x) => String(x).trim()).filter(Boolean) }))
+      .filter((g) => g.skills.length);
+    const payload = {
+      ...draft,
+      skillGroups: groups,
+      skills: [...new Set(groups.flatMap((g) => g.skills))],
+      savedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     };
-    const roles = (profile.roles || []).map((r) => ({ ...r, bullets: String(r.description || "").split("\n").map((b) => b.trim()).filter(Boolean) }));
-    const projects = (profile.projects || []).map((p) => ({ ...p, technologies: p.techStack || "", bullets: String(p.description || "").split("\n").map((b) => b.trim()).filter(Boolean) }));
-    const tex = buildResumeLatex({ ...profile, roles, projects }, contact);
-    const blob = new Blob([tex], { type: "application/x-tex;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${(profile.header?.name || contact.name || "Resume").replace(/[<>:"/\\|?*]/g, "_")} - Resume.tex`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    track("resume_master_exported");
-  }
-
-  async function handleSaveResume() {
-    setSavingResume(true);
     try {
-      // Skill groups are the source of truth when present; the flat list is derived for the generator/scorer.
-      const groups = (resumeData.skillGroups || []).map((g) => ({ label: String(g.label || "").trim() || "Skills", skills: (g.skills || []).map((s) => String(s).trim()).filter(Boolean) })).filter((g) => g.skills.length);
-      const flatSkills = groups.length ? [...new Set(groups.flatMap((g) => g.skills))] : (resumeData.skills || []);
-      const payload = { ...resumeData, skillGroups: groups, skills: flatSkills, savedAt: serverTimestamp(), updatedAt: serverTimestamp() };
       await setDoc(doc(db, "users", user.uid, "resume", "profile"), payload, { merge: true });
-      // Mirror resumeUrl on the top-level user doc for quick extension access
-      if (resumeData.resumeUrl) {
-        await setDoc(doc(db, "users", user.uid), {
-          resumeUrl: resumeData.resumeUrl,
-          resumeFileName: resumeData.fileName,
-        }, { merge: true });
+      // Mirror the stored file on the user doc for quick extension access.
+      if (draft.resumeUrl) {
+        await setDoc(doc(db, "users", user.uid), { resumeUrl: draft.resumeUrl, resumeFileName: draft.fileName || "" }, { merge: true });
       }
-      setSavedResumeFull({ ...payload, savedAt: new Date() });
+      setSavedResumeFull({ ...payload, savedAt: new Date(), updatedAt: null });
       track("resume_saved");
-      showToast("Resume saved!", "success");
-      setResumePhase("idle");
-    } catch { showToast("Failed to save resume", "error"); }
-    finally { setSavingResume(false); }
+      showToast("Resume saved", "success");
+    } catch (err) {
+      showToast("Couldn't save your resume. Please try again.", "error");
+      throw err;
+    }
   }
 
-
-
-  function updateResumeArray(field, idx, key, val) {
-    const arr = [...(resumeData[field] || [])];
-    arr[idx] = { ...arr[idx], [key]: val };
-    setResumeData({ ...resumeData, [field]: arr });
-  }
-
-  function removeResumeArrayItem(field, idx) {
-    const arr = [...(resumeData[field] || [])];
-    arr.splice(idx, 1);
-    setResumeData({ ...resumeData, [field]: arr });
+  function downloadResume(profile, format) {
+    const contact = contactFromUser(user, userMeta);
+    const resume = profileToResume(profile);
+    const base = `${profile.header?.name || contact.name || "My"} - Resume`;
+    if (format === "tex") downloadResumeTex(resume, contact, base);
+    else downloadResumePdf(resume, contact, base);
+    track("resume_downloaded", { format });
   }
 
   return (
@@ -751,338 +638,20 @@ export default function Profile({ user, userMeta }) {
         </ProfileCard>
       </motion.div>
 
-      {/* ═══ RESUME & PROFESSIONAL PROFILE ═══ */}
+      {/* ═══ YOUR RESUME ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}>
         <ProfileCard
-          title="Resume & Professional Profile"
-          description="Import your resume (PDF via AI extraction, or .tex for an exact import), edit the structured profile, export it back as LaTeX."
-          headerAction={
-            savedResumeFull && resumePhase === "idle" ? (
-              <button
-                type="button"
-                onClick={() => { setResumeData(savedResumeFull); setResumePhase("review"); }}
-                className="btn-secondary whitespace-nowrap"
-              >
-                Edit Saved Profile
-              </button>
-            ) : null
-          }
+          title="Your resume"
+          description="We use it to rank jobs for you and to make a version for each job you apply to."
         >
-          <div className="space-y-6">
-
-            {/* ── Idle: Dropzone + Snapshot ── */}
-            {resumePhase === "idle" && (
-              <>
-                {/* Dropzone */}
-                <div
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => { e.preventDefault(); handleResumeFile(e.dataTransfer.files[0]); }}
-                  onClick={() => dropzoneInputRef.current?.click()}
-                  className="flex justify-center rounded-2xl border border-dashed border-gray-200 bg-white px-6 py-12 cursor-pointer hover:border-indigo-300 hover:bg-indigo-50/20 transition-all group shadow-sm"
-                >
-                  <div className="text-center">
-                    <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-50 group-hover:bg-indigo-100 transition-colors">
-                      <svg className="h-6 w-6 text-indigo-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                      </svg>
-                    </div>
-                    <p className="text-sm font-semibold text-gray-900">
-                      <span className="text-indigo-600">Upload a file</span> or drag and drop
-                    </p>
-                    <p className="mt-1 text-xs text-gray-400">PDF, DOCX, TXT (AI extraction) or .tex in the JobWatch template (exact import) · up to 10MB</p>
-                  </div>
-                  <input ref={dropzoneInputRef} type="file" className="sr-only" accept=".pdf,.docx,.txt,.tex" onChange={(e) => handleResumeFile(e.target.files[0])} />
-                </div>
-
-                {/* Paste LaTeX — same parser as .tex upload, no file needed */}
-                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => setShowLatexPaste((v) => !v)}
-                    className="w-full flex items-center justify-between px-5 py-3 text-left"
-                  >
-                    <span className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Paste LaTeX instead</span>
-                    <span className="text-xs text-gray-400">{showLatexPaste ? "Hide" : "Your resume in the JobWatch template → exact import"}</span>
-                  </button>
-                  {showLatexPaste && (
-                    <div className="px-5 pb-5 space-y-3">
-                      <textarea
-                        className="input-standard font-mono text-xs min-h-[160px]"
-                        value={latexPaste}
-                        onChange={(e) => setLatexPaste(e.target.value)}
-                        placeholder={"\\documentclass[a4paper,11pt]{article}\n…\n\\resumeSubheading{Company}{Jun 2026 -- Present}{Title}{City, ST}\n\\resumeItem{…}"}
-                        spellCheck={false}
-                      />
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-[11px] text-gray-400">Bullets, skill groups, locations, project links and the header are kept exactly; \textbf becomes **bold**.</p>
-                        <button type="button" onClick={() => handleLatexText(latexPaste)} disabled={!latexPaste.trim()} className="btn-primary whitespace-nowrap disabled:opacity-50">Parse LaTeX</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Saved Snapshot */}
-                {savedResumeFull && (
-                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                    <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between gap-3">
-                      <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Saved Snapshot</p>
-                      <div className="flex items-center gap-4">
-                      <button
-                        type="button"
-                        onClick={handleExportMasterTex}
-                        className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors"
-                        title="Your saved profile rendered in the LaTeX template (untailored)"
-                      >
-                        Export master .tex
-                      </button>
-                      {savedResumeFull.resumeUrl && (
-                        <a
-                          href={savedResumeFull.resumeUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M12 3v13.5m-4.5-4.5L12 16.5l4.5-4.5" />
-                          </svg>
-                          {savedResumeFull.fileName || "View File"}
-                        </a>
-                      )}
-                      </div>
-                    </div>
-                    <div className="p-5 space-y-5">
-                      {savedResumeFull.summary && (
-                        <div>
-                          <p className="caps-label mb-2">Summary</p>
-                          <p className="text-sm text-gray-600 leading-relaxed italic">"{savedResumeFull.summary}"</p>
-                        </div>
-                      )}
-                      {savedResumeFull.roles?.length > 0 && (
-                        <div>
-                          <p className="caps-label mb-2">Experience</p>
-                          <div className="space-y-2">
-                            {savedResumeFull.roles.slice(0, 3).map((r, i) => (
-                              <div key={i} className="flex items-center gap-2">
-                                <div className="h-1.5 w-1.5 rounded-full bg-indigo-400 flex-shrink-0" />
-                                <span className="text-sm text-gray-700">
-                                  <span className="font-semibold text-gray-900">{r.title}</span>
-                                  {r.company && <> at {r.company}</>}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* ── Parsing: Spinner ── */}
-            {resumePhase === "parsing" && (
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm py-16 flex flex-col items-center gap-4">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 animate-pulse">
-                  <svg className="h-7 w-7 text-indigo-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
-                  </svg>
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-bold text-gray-900">AI Resume Extraction</p>
-                  <p className="mt-1 text-xs text-gray-400 max-w-xs">
-                    Parsing <span className="font-semibold text-gray-600">{uploadingFileName}</span>…<br />Extracting skills, experience, and projects.
-                  </p>
-                </div>
-                <div className="flex gap-1.5 mt-2">
-                  {[0, 150, 300].map(d => (
-                    <div key={d} className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* ── Review: Edit Form ── */}
-            {resumePhase === "review" && (
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                {/* Header */}
-                <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Review Extraction</p>
-                    <p className="text-sm font-semibold text-gray-900 mt-0.5">{resumeData.fileName?.endsWith(".tex") ? "Imported exactly from LaTeX — review and save." : "Verify the AI's output before saving."}</p>
-                  </div>
-                  <button onClick={() => setResumePhase("idle")} className="text-xs font-bold text-gray-400 hover:text-gray-600 transition-colors">Cancel</button>
-                </div>
-
-                <div className="p-6 space-y-8">
-                  {/* Summary */}
-                  <div>
-                    <label htmlFor="resume-summary" className="caps-label block mb-2">About (Summary)</label>
-                    <AutoTextarea
-                      id="resume-summary"
-                      className="input-standard"
-                      value={resumeData.summary}
-                      onChange={(e) => setResumeData({ ...resumeData, summary: e.target.value })}
-                      placeholder="Brief professional overview…"
-                    />
-                  </div>
-
-                  {/* Resume header — what the .tex/PDF exports print under your name. Location is replaced per job. */}
-                  <div>
-                    <label className="caps-label block mb-2">Resume header</label>
-                    <div className="grid grid-cols-2 gap-4">
-                      {[["name", "Name"], ["location", "Location (default)"], ["phone", "Phone"], ["email", "Email"], ["github", "GitHub"], ["linkedin", "LinkedIn"]].map(([key, label]) => (
-                        <LabeledInput
-                          key={key}
-                          label={label}
-                          value={resumeData.header?.[key] || ""}
-                          onChange={(e) => setResumeData({ ...resumeData, header: { ...(resumeData.header || {}), [key]: e.target.value } })}
-                          placeholder={key === "location" ? "e.g. Columbus, OH 43212" : ""}
-                        />
-                      ))}
-                    </div>
-                    <p className="mt-2 text-[11px] text-gray-400">Blank fields fall back to your account details above. The location on a tailored resume follows the job's city.</p>
-                  </div>
-
-                  {/* Extra real experience — feeds the tailored-resume generator only */}
-                  <div>
-                    <label htmlFor="resume-extra" className="caps-label block mb-2">More you've actually done (not on the resume)</label>
-                    <AutoTextarea
-                      id="resume-extra"
-                      className="input-standard"
-                      value={resumeData.extraExperience || ""}
-                      onChange={(e) => setResumeData({ ...resumeData, extraExperience: e.target.value })}
-                      placeholder="Tools, systems, scale, side projects, outcomes you left off for space. The per-job resume can draw on these; it never adds anything you haven't written here."
-                    />
-                  </div>
-
-                  {/* Skills — grouped like the resume ("Languages:", "Cloud / DevOps:"). The flat list is derived on save. */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <label className="caps-label">Skills</label>
-                      <button
-                        type="button"
-                        onClick={() => setResumeData({ ...resumeData, skillGroups: [...groupsForEdit(resumeData), { label: "", skills: [] }] })}
-                        className="btn-secondary whitespace-nowrap"
-                      >
-                        Add group
-                      </button>
-                    </div>
-                    <div className="space-y-3">
-                      {groupsForEdit(resumeData).map((g, gi) => (
-                        <div key={gi} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-start">
-                          <input
-                            type="text"
-                            className="input-standard sm:col-span-1"
-                            placeholder="Group (e.g. Languages)"
-                            value={g.label}
-                            onChange={(e) => {
-                              const groups = groupsForEdit(resumeData).map((x, i) => (i === gi ? { ...x, label: e.target.value } : x));
-                              setResumeData({ ...resumeData, skillGroups: groups });
-                            }}
-                          />
-                          <div className="sm:col-span-3 flex gap-2">
-                            <input
-                              type="text"
-                              className="input-standard flex-1"
-                              placeholder="Comma-separated skills"
-                              value={g.text ?? g.skills.join(", ")}
-                              onChange={(e) => {
-                                const groups = groupsForEdit(resumeData).map((x, i) => (i === gi ? { ...x, text: e.target.value, skills: e.target.value.split(",").map((t) => t.trim()).filter(Boolean) } : x));
-                                setResumeData({ ...resumeData, skillGroups: groups });
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setResumeData({ ...resumeData, skillGroups: groupsForEdit(resumeData).filter((_, i) => i !== gi) })}
-                              className="text-gray-300 hover:text-red-500 transition-colors px-1"
-                              title="Remove group"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="mt-2 text-[11px] text-gray-400">The tailored resume keeps your groups and only reorders or trims within them; it never adds a skill you haven't listed.</p>
-                  </div>
-
-                  {/* Work Experience */}
-                  <ResumeSection
-                    label="Work Experience"
-                    onAdd={() => setResumeData({ ...resumeData, roles: [...resumeData.roles, { title: "", company: "", location: "", startDate: "", endDate: "", description: "" }] })}
-                    addLabel="Add Role"
-                  >
-                    <p className="text-xs text-gray-500 -mt-1 mb-4">
-                      The tailored-resume generator can only use what's written here. The more real detail you add per role
-                      (tools, systems, scale, outcomes), the better it can match each job without inventing anything.
-                    </p>
-                    {resumeData.roles.map((role, i) => (
-                      <ResumeCard key={i} onRemove={() => removeResumeArrayItem("roles", i)}>
-                        <div className="grid grid-cols-2 gap-4">
-                          <LabeledInput label="Title" value={role.title} onChange={(e) => updateResumeArray("roles", i, "title", e.target.value)} />
-                          <LabeledInput label="Company" value={role.company} onChange={(e) => updateResumeArray("roles", i, "company", e.target.value)} />
-                          <LabeledInput label="Start Date" value={role.startDate} onChange={(e) => updateResumeArray("roles", i, "startDate", e.target.value)} />
-                          <LabeledInput label="End Date" value={role.endDate} onChange={(e) => updateResumeArray("roles", i, "endDate", e.target.value)} />
-                          <LabeledInput label="Location" value={role.location || ""} onChange={(e) => updateResumeArray("roles", i, "location", e.target.value)} placeholder="e.g. Sunnyvale, CA" />
-                        </div>
-                        <div className="mt-4">
-                          <label className="caps-label block mb-2">Description <span className="normal-case font-medium tracking-normal text-gray-400">— one bullet per line; wrap terms in **double asterisks** to bold them on the resume</span></label>
-                          <AutoTextarea className="input-standard" value={role.description} onChange={(e) => updateResumeArray("roles", i, "description", e.target.value)} />
-                        </div>
-                      </ResumeCard>
-                    ))}
-                  </ResumeSection>
-
-                  {/* Projects */}
-                  <ResumeSection
-                    label="Projects"
-                    onAdd={() => setResumeData({ ...resumeData, projects: [...(resumeData.projects || []), { name: "", techStack: "", description: "" }] })}
-                    addLabel="Add Project"
-                  >
-                    {(resumeData.projects || []).map((proj, i) => (
-                      <ResumeCard key={i} onRemove={() => removeResumeArrayItem("projects", i)}>
-                        <div className="grid grid-cols-2 gap-4">
-                          <LabeledInput label="Project Name" value={proj.name} onChange={(e) => updateResumeArray("projects", i, "name", e.target.value)} />
-                          <LabeledInput label="Tech Stack" value={proj.techStack || ""} onChange={(e) => updateResumeArray("projects", i, "techStack", e.target.value)} />
-                          <LabeledInput label="Link" value={proj.link || ""} onChange={(e) => updateResumeArray("projects", i, "link", e.target.value)} placeholder="https://github.com/you/project" />
-                        </div>
-                        <div className="mt-4">
-                          <label className="caps-label block mb-2">Description</label>
-                          <AutoTextarea className="input-standard" value={proj.description} onChange={(e) => updateResumeArray("projects", i, "description", e.target.value)} />
-                        </div>
-                      </ResumeCard>
-                    ))}
-                  </ResumeSection>
-
-                  {/* Education */}
-                  <ResumeSection
-                    label="Education"
-                    onAdd={() => setResumeData({ ...resumeData, education: [...resumeData.education, { degree: "", institution: "", startDate: "", endDate: "" }] })}
-                    addLabel="Add Education"
-                  >
-                    {resumeData.education.map((edu, i) => (
-                      <ResumeCard key={i} onRemove={() => removeResumeArrayItem("education", i)}>
-                        <div className="grid grid-cols-2 gap-4">
-                          <LabeledInput label="Degree" value={edu.degree} onChange={(e) => updateResumeArray("education", i, "degree", e.target.value)} />
-                          <LabeledInput label="Institution" value={edu.institution} onChange={(e) => updateResumeArray("education", i, "institution", e.target.value)} />
-                          <LabeledInput label="Start Year" value={edu.startDate} onChange={(e) => updateResumeArray("education", i, "startDate", e.target.value)} />
-                          <LabeledInput label="End Year" value={edu.endDate} onChange={(e) => updateResumeArray("education", i, "endDate", e.target.value)} />
-                          <LabeledInput label="Location" value={edu.location || ""} onChange={(e) => updateResumeArray("education", i, "location", e.target.value)} placeholder="e.g. Hayward, California" />
-                        </div>
-                      </ResumeCard>
-                    ))}
-                  </ResumeSection>
-
-                  {/* Save */}
-                  <div className="pt-2 border-t border-gray-50 flex justify-end">
-                    <button disabled={savingResume} onClick={handleSaveResume} className="btn-primary">
-                      {savingResume ? "Saving…" : "Save Resume Profile"}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
+          <ResumeProfileSection
+            saved={savedResumeFull}
+            contact={contactFromUser(user, userMeta)}
+            onReadFile={readResumeFile}
+            onSave={saveResume}
+            onDownload={downloadResume}
+            notify={showToast}
+          />
         </ProfileCard>
       </motion.div>
 
@@ -1330,51 +899,6 @@ export default function Profile({ user, userMeta }) {
         </ProfileCard>
       </motion.div>
       <div id="link-recaptcha-container"></div>
-    </div>
-  );
-}
-
-// ─── Sub-Components ────────────────────────────────────────────────────────────
-function ResumeSection({ label, onAdd, addLabel, children }) {
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-3">
-        <p className="caps-label">{label}</p>
-        <button type="button" onClick={onAdd} className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800 transition-colors">
-          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          {addLabel}
-        </button>
-      </div>
-      <div className="space-y-4">{children}</div>
-    </div>
-  );
-}
-
-function ResumeCard({ children, onRemove }) {
-  return (
-    <div className="relative rounded-xl border border-gray-100 bg-gray-50/50 p-5">
-      <button
-        type="button"
-        onClick={onRemove}
-        className="absolute top-4 right-4 text-gray-300 hover:text-red-400 transition-colors"
-        aria-label="Remove"
-      >
-        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-        </svg>
-      </button>
-      {children}
-    </div>
-  );
-}
-
-function LabeledInput({ label, value, onChange, placeholder }) {
-  return (
-    <div>
-      <label className="caps-label block mb-2">{label}</label>
-      <input type="text" value={value} onChange={onChange} placeholder={placeholder} className="input-standard" />
     </div>
   );
 }
