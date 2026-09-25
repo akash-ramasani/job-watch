@@ -13,6 +13,7 @@ import { track } from "../lib/analytics.js";
 import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/resumeDownloads.js";
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
 import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
+import { titleCase } from "../lib/titleCase.js";
 
 
 const US_STATES = [
@@ -313,7 +314,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   const resumeContact = () => contactFromUser(user, userMeta);
   const resumeFileBase = () => {
     const fullName = trState.data?.resume?.header?.name || userMeta?.fullName || user?.displayName || "Resume";
-    return `${trState.job?.companyName || "Company"} - ${trState.job?.title || "Role"} - ${fullName} - Resume`;
+    return `${trState.job?.companyName || "Company"} - ${titleCase(trState.job?.title) || "Role"} - ${fullName} - Resume`;
   };
   const handleDownloadResume = (format) => {
     const resume = trState.data?.resume;
@@ -354,7 +355,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     });
 
     const company = clState.job?.companyName || "Company";
-    const role = clState.job?.title || "Role";
+    const role = titleCase(clState.job?.title) || "Role";
     const fullName = userMeta?.fullName || user?.displayName || "User";
     
     // Sanitize filename by removing invalid characters
@@ -492,7 +493,7 @@ export default function Jobs({ user, userMeta, preferences }) {
             </div>
 
             <h3 className="text-base font-semibold text-gray-900 group-hover:text-indigo-600 transition-colors truncate">
-              {job.title}
+              {titleCase(job.title)}
             </h3>
 
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 overflow-visible">
@@ -838,7 +839,7 @@ export default function Jobs({ user, userMeta, preferences }) {
                 <div>
                   <h3 className="text-sm font-bold text-gray-900">AI Cover Letter</h3>
                   <p className="text-[11px] font-semibold text-indigo-600 uppercase tracking-widest mt-0.5">
-                    {clState.job?.companyName} • {clState.job?.title}
+                    {clState.job?.companyName} • {titleCase(clState.job?.title)}
                   </p>
                 </div>
                 <button

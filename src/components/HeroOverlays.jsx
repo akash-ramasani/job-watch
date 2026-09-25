@@ -5,6 +5,7 @@ import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { ADMIN_UID } from "../App.jsx";
 import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
+import { titleCase } from "../lib/titleCase.js";
 
 /* ── Utility helpers ──────────────────────────────────────── */
 
@@ -225,7 +226,7 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
                 </p>
               </div>
               <p className="text-sm font-bold text-gray-900 line-clamp-1">
-                {tickerJob.title || "New role"}
+                {titleCase(tickerJob.title) || "New role"}
               </p>
               <p className="mt-0.5 text-xs text-gray-500 line-clamp-1">
                 {tickerJob.companyName || "Company"} ·{" "}
@@ -327,7 +328,7 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
-                          {j.title || "Role"}
+                          {titleCase(j.title) || "Role"}
                         </p>
                         <p className="text-[10px] text-gray-500 truncate">
                           {j.companyName} · {relativeTime(j.sourceUpdatedTs)}

@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { emphasisRuns } from "../../lib/resumeLatex.js";
 import DownloadMenu from "./DownloadMenu.jsx";
+import { titleCase } from "../../lib/titleCase.js";
 
 const strip = (u) => String(u || "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 const dates = (a, b) => [a, b].filter(Boolean).join(" – ");
@@ -192,7 +193,7 @@ export default function TailoredResumeModal({ state, contact, onClose, onRetry, 
             <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-gray-100">
               <div className="min-w-0">
                 <h3 className="text-base font-bold text-gray-900 truncate">Your resume for {job?.companyName}</h3>
-                <p className="text-xs text-gray-500 truncate">{job?.title}</p>
+                <p className="text-xs text-gray-500 truncate">{titleCase(job?.title)}</p>
               </div>
               <button type="button" onClick={onClose} className="p-1.5 -mr-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg" aria-label="Close">
                 <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
