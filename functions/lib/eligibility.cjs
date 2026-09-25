@@ -61,7 +61,6 @@ const PHRASES = {
     re(`\\bnot (?:be )?(?:eligible|considered) for (?:u\\.s\\. |us )?(?:employer |visa |immigration |employment |work )*sponsorship\\b`),
     re(`\\bwithout (?:the )?(?:need|requirement|requiring|needing)(?: for)?(?: of)? (?:current or future |now or in the future |any )?(?:employer |visa |immigration |company )?sponsorship\\b`),
     re(`\\b(?:visa |work )?sponsorship:?\\s*(?:no|none|not (?:available|provided|offered))\\b`),
-    re(`\\b(?:take over|transfer) (?:visa |h-?1b )?sponsorship\\b`),
     re(`\\brequir\\w*[^.;]{0,60}\\bsponsorship\\b[^.;]{0,60}\\b${NOT_CONSIDERED}`),
     // "Individuals with temporary visas including F-1 (OPT, CPT, STEM), H-1B, H-2, or TN … will not be considered."
     re(`\\b(?:temporary (?:work )?visas?|f-?1|h-?1b|tn visas?)\\b[^.;]{0,160}\\b${NOT_CONSIDERED}`),
@@ -71,14 +70,15 @@ const PHRASES = {
 // Softeners for every kind.
 const SOFT = /\b(preferred|a plus|is a plus|nice to have|desired|desirable|bonus|ideally|advantageous|not required|not a requirement|is not necessary|isn't required|no clearance|(?:does|do|will|would) not (?:require|need)|doesn't (?:require|need)|don't (?:require|need)|not needed)\b/i;
 // Hedged or partial statements.
-const HEDGES = /\b(may|might|could|possibly|(?:for|in|to) certain|certain (?:roles|positions|other|restricted|jobs)|some roles|some positions|positions with|roles with|remote roles|every role|every candidate|all roles|case[- ]by[- ]case|unless|usually|typically|uncleared|are welcome|is welcome)\b/i;
+const HEDGES = /\b(may|might|could|possibly|(?:for|in|to) certain|certain (?:roles|positions|other|restricted|jobs)|some roles|some positions|positions with|roles with|remote roles|every role|every candidate|all roles|case[- ]by[- ]case|unless|usually|typically|generally|uncleared|are welcome|is welcome)\b/i;
 const SOFT_BY_KIND = {
   citizen: /\bnot (?:be )?required to be (?:a )?(?:us|u\.s\.) citizen\b/i,
   clearance: /\b(ability to obtain|able to obtain|eligib\w* (?:to|for)|obtain and maintain|willing(?:ness)? to obtain|or have the ability|clearance required:?\s*none|public trust)\b/i,
   no_sponsorship: /\b(we (?:do|can|will|are able to) (?:offer|provide|sponsor|support)|(?<!no (?:visa |immigration )?)sponsorship (?:is )?(?:available|offered|provided)(?! for this)|visa sponsorship: ?yes|open to sponsor|will consider sponsor|sponsored programs?|sponsor(?:ed|s)? (?:events?|programs?|research|projects?|by)|corporate sponsor|executive sponsor)\b/i,
 };
 // A citizenship line that also accepts visa holders doesn't rule them out.
-const VISA_ALTERNATIVE = /\b(or|and)\b[^.;]{0,80}\b(visa|f-?1|opt|cpt|h-?1b|work authori[sz]ation|authorized to work|eligible to work|employment authori[sz]ation|valid work)\b/i;
+// Export-control rules that allow "or be eligible to obtain the required authorizations" (an export license) aren't a bar either.
+const VISA_ALTERNATIVE = /\b(or|and)\b[^.;]{0,80}\b(visa|f-?1|opt|cpt|h-?1b|work authori[sz]ation|authorized to work|eligible to work|employment authori[sz]ation|valid work)\b|\bor be eligible to obtain the required (?:export )?authori[sz]ations?\b|\bexport licen[sc]e\b/i;
 // Questions (from application forms pasted into descriptions) aren't statements.
 const QUESTION = /\?\s*$/;
 

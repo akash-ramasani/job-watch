@@ -9,9 +9,12 @@
 // re-runs the visa check, and reports what it would newly flag.
 //
 // Pass 1 (default): fetch and save results to --cache (no database writes).
-// Pass 2 (--write): write fullDescription + el from the cache.
+// Pass 2 (--from-cache [--show-added]): re-run the current visa check on the
+//   cached full text and on every other stored job; report what changes.
+// Pass 3 (--write): the same, and save fullDescription + el.
 //
-// Usage: node scripts/refetch-descriptions.mjs [--cache private/refetch-descriptions.json] [--write]
+// Usage: node scripts/refetch-descriptions.mjs [--cache private/refetch-descriptions.json] [--only-source workday]
+//                                              [--from-cache|--write] [--show-added]
 
 import fs from "node:fs";
 import path from "node:path";
@@ -36,17 +39,43 @@ const OLD_CUT = 4000;
 const db = admin.firestore();
 const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
 
-if (write) {
+if (write || process.argv.includes("--from-cache")) {
+  // Re-run the current visa check on the fetched full text and on every other
+  // stored job; report (and with --write, save) what changes.
   const cache = JSON.parse(fs.readFileSync(cachePath, "utf8"));
-  const bw = db.bulkWriter();
-  let n = 0;
-  for (const r of cache.results) {
-    if (!r.full || r.full.length <= OLD_CUT) continue;
-    bw.set(jobsCol.doc(r.id), { fullDescription: r.full, el: r.el }, { merge: true });
-    n++;
+  const fetched = new Map(cache.results.filter((r) => r.full && r.full.length > OLD_CUT).map((r) => [r.id, r.full]));
+  const snap = await jobsCol.select("title", "companyName", "fullDescription", "el").get();
+  // Use fetched text only when it continues the stored text: a posting edited
+  // or replaced since (or a lookup that hit another posting) keeps what we had.
+  const flat = (s) => String(s || "").replace(/\s+/g, " ").trim();
+  const full = new Map();
+  for (const d of snap.docs) {
+    const text = fetched.get(d.id);
+    if (!text) continue;
+    const old = flat(d.get("fullDescription"));
+    if (flat(text).slice(0, 1500) === old.slice(0, 1500) || flat(text).includes(old.slice(100, 700))) full.set(d.id, text);
   }
-  await bw.close();
-  console.log(`wrote ${n} full descriptions (${cache.results.filter((r) => r.newFlags?.length).length} newly flagged)`);
+  console.log(`${fetched.size} fetched · ${fetched.size - full.size} set aside (text no longer matches the stored posting)`);
+  const changes = [];
+  for (const d of snap.docs) {
+    const j = d.data();
+    const text = full.get(d.id) || j.fullDescription || "";
+    const { flags, evidence } = eligibilityOf(text);
+    const before = Array.isArray(j.el) ? j.el : [];
+    const same = flags.length === before.length && flags.every((f) => before.includes(f));
+    if (full.has(d.id) || !same) changes.push({ id: d.id, company: j.companyName, title: j.title, full: full.get(d.id), el: flags, added: flags.filter((f) => !before.includes(f)), removed: before.filter((f) => !flags.includes(f)), evidence });
+  }
+  const added = changes.filter((c) => c.added.length);
+  const removed = changes.filter((c) => c.removed.length);
+  console.log(`${full.size} longer descriptions · ${added.length} jobs gain a flag · ${removed.length} lose one`);
+  for (const c of removed) console.log(`  unflag ${c.removed.join(",")}: ${c.company} — ${c.title}`);
+  if (process.argv.includes("--show-added")) for (const c of added) for (const f of c.added) console.log(`  [${f}] ${c.company} :: ${String(c.evidence[f]).slice(0, 200)}`);
+  if (write) {
+    const bw = db.bulkWriter();
+    for (const c of changes) bw.set(jobsCol.doc(c.id), { ...(c.full ? { fullDescription: c.full } : {}), el: c.el }, { merge: true });
+    await bw.close();
+    console.log(`wrote ${changes.length} jobs`);
+  }
   process.exit(0);
 }
 
@@ -60,10 +89,12 @@ for (const u of users) {
 }
 
 const feeds = new Map((await db.collection("users").doc(ADMIN_UID).collection("feeds").get()).docs.map((d) => [d.id, { id: d.id, ...d.data() }]));
-const snap = await jobsCol.select("title", "fullDescription", "source", "externalId", "companyKey", "companyName", "el").get();
+const onlySource = arg("--only-source"); // re-fetch one source and replace its entries in the cache
+const snap = await jobsCol.select("title", "fullDescription", "source", "externalId", "companyKey", "companyName", "el", "jobUrl").get();
 const todo = snap.docs
   .map((d) => ({ id: d.id, ...d.data() }))
-  .filter((j) => (j.fullDescription || "").length === OLD_CUT && classifyTitle(j.title || "").some((f) => want.has(f)));
+  .filter((j) => (j.fullDescription || "").length === OLD_CUT && classifyTitle(j.title || "").some((f) => want.has(f)))
+  .filter((j) => !onlySource || j.source === onlySource);
 console.log(`${snap.size} jobs · ${todo.length} cut at ${OLD_CUT} with a targeted type · types: ${[...want].join(", ")}`);
 
 const results = [];
@@ -106,14 +137,15 @@ let done = 0;
 await Promise.all(perJob.map((j) => jobLimit(async () => {
   const feed = feeds.get(j.companyKey);
   if (!feed?.url || !j.externalId) return;
-  const full = await fetchJobDescription(j.source, j.externalId, feed.url, null);
+  const full = await fetchJobDescription(j.source, j.externalId, feed.url, null, j.jobUrl);
   if (full) record(j, full);
   if (++done % 250 === 0) console.log(`  per-job: ${done}/${perJob.length}`);
 })));
 
 const longer = results.filter((r) => r.full.length > OLD_CUT);
 const newly = results.filter((r) => r.newFlags.length);
-fs.writeFileSync(cachePath, JSON.stringify({ at: new Date().toISOString(), results }, null, 1));
+const kept = onlySource && fs.existsSync(cachePath) ? JSON.parse(fs.readFileSync(cachePath, "utf8")).results.filter((r) => r.source !== onlySource) : [];
+fs.writeFileSync(cachePath, JSON.stringify({ at: new Date().toISOString(), results: [...kept, ...results] }, null, 1));
 console.log(`fetched ${results.length}/${todo.length} · ${longer.length} longer than before · ${newly.length} newly flagged`);
 const kinds = {};
 for (const r of newly) for (const f of r.newFlags) kinds[f] = (kinds[f] || 0) + 1;

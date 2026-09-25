@@ -2689,7 +2689,7 @@ function stripHtml(html) {
  * Fetch a job description from the ATS-specific endpoint.
  * Returns plain text or null on failure.
  */
-async function fetchJobDescription(source, externalId, feedUrl, descriptionHint) {
+async function fetchJobDescription(source, externalId, feedUrl, descriptionHint, jobUrl = null) {
   try {
     // Ashby: description already captured from feed listing
     if (source === "ashbyhq" && descriptionHint) {
@@ -2760,10 +2760,26 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
     }
 
     if (source === "workday") {
-      // Only reached when the detail fetch failed during sync. Workday's search
-      // indexes req IDs, so look the posting up by ID and read its detail.
+      // Only reached when the detail fetch failed during sync.
       const parsed = parseWorkdayFeedUrl(feedUrl);
-      if (!parsed || !externalId) return null;
+      if (!parsed) return null;
+      // The job's own URL names the exact posting (/job/<location>/<title>_<req>).
+      const jobPath = (() => {
+        try {
+          const p = new URL(String(jobUrl || "")).pathname;
+          return p.includes("/job/") ? p.slice(p.indexOf("/job/")) : null;
+        } catch {
+          return null;
+        }
+      })();
+      if (jobPath) {
+        const d = await workdayFetchJson(`${parsed.apiBase}${jobPath}`);
+        const raw = d?.jobPostingInfo?.jobDescription || "";
+        return raw ? stripHtml(raw) : null;
+      }
+      // Otherwise search by req ID. Some sites list the location first, so a
+      // stored "ID" can be a place name, which would match another posting.
+      if (!externalId || !/\d/.test(String(externalId))) return null;
       const list = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
         method: "POST",
         body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset: 0, searchText: String(externalId) },
@@ -2982,7 +2998,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     try {
       let description = job.fullDescription;
       if (!description) {
-        description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null);
+        description = await fetchJobDescription(job.source, job.externalId, job.feedUrl, null, job.jobUrl);
         if (!description && job.jobUrl) {
           try {
             const jinaReq = await fetch(`https://r.jina.ai/${job.jobUrl}`);
@@ -3114,7 +3130,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
   if (existing && !existing.screened && existing.version === FIT_VERSION && existing.profileStamp === profileStamp) return existing;
 
   let description = job.fullDescription;
-  if (!description) description = await fetchJobDescription(job.source, job.externalId, "", null);
+  if (!description) description = await fetchJobDescription(job.source, job.externalId, "", null, job.jobUrl);
   if (!description || description.length < 50) return null;
   const fit = await assessJobFit({
     client: client || requireOpenAI(),

@@ -25,6 +25,10 @@ test("firm no-sponsorship statements are caught", () => {
     "You must currently possess valid and unrestricted U.S. work authorization to be considered for this role. Individuals with temporary visas including, but not limited to, F-1 (OPT, CPT, STEM), H-1B, H-2, or TN, or any candidate requiring sponsorship, now or in the future, will not be considered.",
     "Candidates requiring sponsorship now or in the future are not eligible for this position.",
     "Applicants on F-1 OPT or H-1B visas will not be considered for this role.",
+    "We are unable to sponsor or take over sponsorship of an employment visa for this role, at this time.",
+    "Penn State does not sponsor or take over sponsorship of a staff employment Visa.",
+    "For this opportunity, Truist will not sponsor an applicant for work visa status or employment authorization, nor will we offer any immigration-related support for this position.",
+    "Please note: This role is not eligible for Work Visa sponsorship, either currently or in the future.",
   ]) assert.deepEqual(flagsOf(s), ["no_sponsorship"], s);
 });
 
@@ -32,6 +36,8 @@ test("citizenship requirements are caught, including US-person rules", () => {
   for (const s of [
     "Citizenship: U.S. citizenship required",
     "MUST be a US Citizen",
+    "Must be a US citizen or national, US permanent resident (current Green Card holder), or lawfully admitted into the US as a refugee or granted asylum.",
+    "Position Restriction: This position is restricted to US citizens or lawful permanent residents",
     "Because this role supports our Public Sector customer base, all candidates must be a US citizen.",
     "U.S. citizenship is contractually required for this role.",
     "U.S Citizenship is required.",
@@ -84,6 +90,9 @@ test("legitimate jobs are never flagged", () => {
     // application-form questions
     "Will you now or in the future require sponsorship for employment visa status?",
     // visa holders welcome, or "not considered" about something else
+    "We sponsor and take over sponsorship of employment visas for this role.",
+    "To conform to US Government export regulations, applicant must be a (i) US citizen or national, (ii) US lawful, permanent resident (aka green card holder), (iii) Refugee under 8 U.S.C. § 1157, or (iv) Asylee under 8 U.S.C. § 1158, or be eligible to obtain the required authorizations from the U.S. Department of State.",
+    "Allstate generally does not sponsor individuals for employment-based visas for this position.",
     "Candidates on F-1 OPT, CPT or H-1B visas will be considered for this role.",
     "We welcome H-1B transfers; applicants requiring sponsorship will be considered.",
     "Applicants who do not meet the minimum qualifications will not be considered.",
