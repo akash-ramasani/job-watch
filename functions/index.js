@@ -2708,7 +2708,7 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
       const s = scores[j.id];
       const skippedByType = s && s.t !== undefined;
       if (s && s.k === key && (!skippedByType || s.t === tk)) continue; // current
-      if (s && s.k === ruleKey && s.t === tk && !s.p) continue; // final rule score (below the AI cutoff)
+      if (s && s.k === ruleKey && s.rt === tk && !s.p) continue; // final rule score (the AI isn't needed)
       // A full assessment that found a different field survives resume edits.
       // Type-filter skips are redone (free) whenever the resume or job types change.
       if (s && !skippedByType && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue;

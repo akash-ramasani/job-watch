@@ -10,9 +10,8 @@
  *
  * Aggregation doc:
  *   /users/{userId}/aggregations/myJobScores
- *   { scores: { [jobId]: { score, reason, k?, t?, m?, p? } }, count, updatedAt }
- *   t = job types the result was made for (type skips and rule scores),
- *   m = "r" for a rule score, p = 1 when that rule score still wants the AI.
+ *   { scores: { [jobId]: { score, reason, k?, t?, rt?, m?, p?, o? } }, count, updatedAt }
+ *   (see rollupFlags)
  *   k = "{fit version}:{profile stamp}" when the score came from jobFit, so the
  *   sync can tell which scores are stale with this one read.
  *
@@ -22,6 +21,23 @@
 const admin = require("firebase-admin");
 
 const MAX_SCORES_IN_AGG = 2000;
+
+/**
+ * Small markers on each rollup entry:
+ *   t  = job types a type-filter skip was made for (skipped as another type)
+ *   rt = job types a rule score was made for; m = "r" rule score; p = 1 still wants the AI
+ *   o  = 1 when the job isn't related to the user (skipped as another type, or
+ *        judged a different field by the AI or the rule score) — the Jobs page hides these
+ */
+function rollupFlags(fit) {
+  if (!fit) return {};
+  const rule = fit.method === "rule";
+  return {
+    ...(fit.screened ? { t: fit.targetsKey || "" } : {}),
+    ...(rule ? { m: "r", rt: fit.targetsKey || "", ...(fit.aiPending ? { p: 1 } : {}) } : {}),
+    ...(fit.screened || fit.roleFit === "different" ? { o: 1 } : {}),
+  };
+}
 
 /** Which scoring method + which version of the resume produced a score. */
 const freshnessKey = (version, profileStamp) => `${version}:${profileStamp ?? ""}`; // keep the aggregation doc well under 1 MiB
@@ -89,8 +105,7 @@ async function updateUserScoreRollup(userId, entries, dbInstance, { listedIds = 
         score: typeof score === "number" ? score : null,
         reason: reason || "",
         ...(fit?.version ? { k: freshnessKey(fit.version, fit.profileStamp) } : {}),
-        ...(fit?.screened || fit?.method === "rule" ? { t: fit.targetsKey || "" } : {}),
-        ...(fit?.method === "rule" ? { m: "r", ...(fit.aiPending ? { p: 1 } : {}) } : {}),
+        ...rollupFlags(fit),
       };
     }
     for (const id of Object.keys(scores)) if (!listedIds.has(id)) delete scores[id];
@@ -138,8 +153,7 @@ async function rebuildUserJobScores(userId, dbInstance) {
           score: typeof x.score === "number" ? x.score : null,
           reason: x.reason || "",
           ...(x.fit?.version ? { k: freshnessKey(x.fit.version, x.fit.profileStamp) } : {}),
-          ...(x.fit?.screened || x.fit?.method === "rule" ? { t: x.fit.targetsKey || "" } : {}),
-          ...(x.fit?.method === "rule" ? { m: "r", ...(x.fit.aiPending ? { p: 1 } : {}) } : {}),
+          ...rollupFlags(x.fit),
         };
         count++;
       }

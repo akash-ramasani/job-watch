@@ -92,3 +92,9 @@ test("audit fixes: engineer titles, design engineers, eng directors, business an
   assert.equal(shouldAssess("Finance & Business Management", DA, dense).assess, true);
   assert.equal(shouldAssess("Finance & Business Management", DA, MISSION).assess, false);
 });
+
+test("store security isn't a security-engineering job", () => {
+  assert.equal(shouldAssess("Target Security Specialist", SDE, MISSION).assess, false);
+  assert.equal(shouldAssess("Senior Security Engineer (Infrastructure)", SDE, MISSION).assess, true);
+  assert.equal(shouldAssess("Application Security, Senior Analyst", SDE, MISSION).assess, true);
+});

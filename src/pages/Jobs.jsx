@@ -12,6 +12,7 @@ import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import { track } from "../lib/analytics.js";
 import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/resumeDownloads.js";
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
+import { isRelatedJob, useJobTypes } from "../lib/jobRelevance.js";
 
 
 const US_STATES = [
@@ -86,8 +87,8 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [jobs, setJobs] = useState([]);
   const [myScores, setMyScores] = useState({}); // { [jobId]: { score, reason } }
   const [hasResume, setHasResume] = useState(null); // null = not known yet
-  // Jobs the scorer skipped as another job type (rollup entries with `t`).
-  const [showOtherTypes, setShowOtherTypes] = useState(false);
+  // Only jobs related to this user are listed (see lib/jobRelevance.js).
+  const jobTypes = useJobTypes(user?.uid);
   const [loading, setLoading] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState(() => searchParams.get("title") || "");
@@ -408,7 +409,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     // without a personal score render as "unscored" (which is correct for
     // any user who hasn't enabled AI / hasn't been backfilled).
     const merged = filtered
-      .filter((j) => showOtherTypes || myScores[j.id]?.t === undefined)
+      .filter((j) => isRelatedJob(j, myScores[j.id], jobTypes))
       .map((j) => {
         const s = myScores[j.id];
         if (!s) return j;
@@ -416,12 +417,13 @@ export default function Jobs({ user, userMeta, preferences }) {
       });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, showOtherTypes]);
-
-  const otherTypeCount = useMemo(() => jobs.filter((j) => myScores[j.id]?.t !== undefined).length, [jobs, myScores]);
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
-  const scoredShare = jobs.length ? jobs.filter((j) => myScores[j.id]).length / jobs.length : 1;
+  const relatedJobs = useMemo(() => jobs.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes)), [jobs, myScores, jobTypes]);
+  // Wait for the user's job types too, so unrelated jobs never flash in.
+  const listLoading = loading || jobTypes === null;
+  const scoredShare = relatedJobs.length ? relatedJobs.filter((j) => myScores[j.id]).length / relatedJobs.length : 1;
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "N/A";
@@ -767,7 +769,7 @@ export default function Jobs({ user, userMeta, preferences }) {
           <div>
             <h3 className="text-[10px] font-black uppercase tracking-widest text-gray-600">
               Matched Roles{" "}
-              {loading ? (
+              {listLoading ? (
                 ""
               ) : (
                 <span className="ml-1 text-gray-400">
@@ -775,33 +777,24 @@ export default function Jobs({ user, userMeta, preferences }) {
                 </span>
               )}
             </h3>
-            {!loading && otherTypeCount > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowOtherTypes((v) => !v)}
-                className="mt-1 text-[11px] font-medium text-gray-400 hover:text-indigo-600"
-              >
-                {showOtherTypes ? "Hide jobs outside your job types" : `${otherTypeCount} jobs outside your job types hidden · Show`}
-              </button>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Live Feed</span>
           </div>
         </div>
-        {!loading && aiOn && hasResume === false && (
+        {!listLoading && aiOn && hasResume === false && (
           <div className="px-6 py-3 border-b border-gray-100 bg-indigo-50/60 text-sm text-gray-700">
             Add your resume to see how well each job fits you.{" "}
             <Link to="/profile" className="font-semibold text-indigo-600 hover:text-indigo-700">Go to Profile</Link>
           </div>
         )}
-        {!loading && aiOn && hasResume && jobs.length > 0 && scoredShare < 0.5 && (
+        {!listLoading && aiOn && hasResume && jobs.length > 0 && scoredShare < 0.5 && (
           <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 text-sm text-gray-600">
             Scoring these jobs against your resume. Scores fill in over the next few hours.
           </div>
         )}
-        {loading ? (
+        {listLoading ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (
               <React.Fragment key={i}>{renderSkeleton()}</React.Fragment>

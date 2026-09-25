@@ -13,6 +13,7 @@
  */
 
 const admin = require("firebase-admin");
+const { classifyTitle } = require("./jobFamilies.cjs");
 
 const RECENT_JOBS_LIMIT = 500;
 
@@ -48,6 +49,7 @@ function projectJob(id, x) {
     sourceUpdatedTs: x.sourceUpdatedTs || null,
     firstSeenAt: x.firstSeenAt || null,
     fetchedAt: x.fetchedAt || null,
+    fam: classifyTitle(x.title), // job types, so the Jobs page can hide unrelated jobs before they're scored
   };
 }
 
@@ -73,6 +75,7 @@ function projectJobLean(id, x) {
     sourceUpdatedTs: x.sourceUpdatedTs || null,
     firstSeenAt: x.firstSeenAt || null,
     fetchedAt: x.fetchedAt || null,
+    fam: classifyTitle(x.title), // job types, so the Jobs page can hide unrelated jobs before they're scored
   };
 }
 

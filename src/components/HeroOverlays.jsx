@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { collection, query, orderBy, limit, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { ADMIN_UID } from "../App.jsx";
+import { isRelatedJob, useJobTypes } from "../lib/jobRelevance.js";
 
 /* ── Utility helpers ──────────────────────────────────────── */
 
@@ -83,30 +84,38 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
   const hour = now.getHours();
   const greeting = greetingFor(hour);
 
-  /* ── Live job feed (most recent 20) ─────────────────────── */
-  const [recentJobs, setRecentJobs] = useState([]);
-  const [flashKey, setFlashKey] = useState(0);
-  const firstSnapshotRef = useRef(true);
+  /* ── Live job feed (most recent 20 related to this user) ── */
+  // Reads the shared recentJobs list (one document, newest first) and keeps
+  // only jobs related to this user, like the Jobs page does.
+  const [allRecent, setAllRecent] = useState([]);
+  const [myScores, setMyScores] = useState({});
+  const jobTypes = useJobTypes(user?.uid);
 
   useEffect(() => {
-    const jobsCol = collection(db, "users", ADMIN_UID, "jobs");
-    const q = query(jobsCol, orderBy("sourceUpdatedTs", "desc"), limit(20));
     const unsub = onSnapshot(
-      q,
-      (snap) => {
-        const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        setRecentJobs(list);
-        // Pulse on new-job arrival (skip very first snapshot)
-        if (!firstSnapshotRef.current) {
-          const added = snap.docChanges().some((c) => c.type === "added");
-          if (added) setFlashKey((k) => k + 1);
-        }
-        firstSnapshotRef.current = false;
-      },
-      (err) => console.warn("HeroOverlays: jobs subscription failed", err),
+      doc(db, "users", ADMIN_UID, "aggregations", "recentJobs"),
+      (snap) => setAllRecent(Array.isArray(snap.data()?.jobs) ? snap.data().jobs : []),
+      (err) => console.warn("HeroOverlays: recent jobs subscription failed", err),
     );
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return onSnapshot(
+      doc(db, "users", user.uid, "aggregations", "myJobScores"),
+      (snap) => setMyScores(snap.data()?.scores || {}),
+      () => setMyScores({}),
+    );
+  }, [user?.uid]);
+
+  const recentJobs = useMemo(
+    () => (jobTypes === null ? [] : allRecent.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes)).slice(0, 20)),
+    [allRecent, myScores, jobTypes]
+  );
+
+  // Pulse when a new related job arrives: the newest job's id changes.
+  const flashKey = recentJobs[0]?.id || "none";
 
   /* ── Derived personal stats ─────────────────────────────── */
   const stats = useMemo(() => {

@@ -41,7 +41,7 @@ const FAMILIES = {
   },
   security: {
     label: "Security",
-    re: /\b(security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*)\b/i,
+    re: /\b(security (engineer\w*|analyst|architect\w*|researcher|operations|software|developer|consultant|manager|lead|specialist, (cloud|network|application|product))|(application|product|cloud|network|information|infrastructure|data) security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*)\b/i,
   },
   qa_test: {
     label: "QA & test automation",
@@ -105,7 +105,7 @@ const FAMILIES = {
   },
   trades_field: {
     label: "Trades, field & technician",
-    re: /\b(technician|tech [iv]+|mechanic|electrician|plumber|installer|driver|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot)\b/i,
+    re: /\b(technician|tech [iv]+|mechanic|electrician|plumber|installer|driver|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot|security (officer|guard)|loss prevention|asset protection|target security)\b/i,
   },
   retail_hospitality: {
     label: "Retail, food & hospitality",

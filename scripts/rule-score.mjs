@@ -6,7 +6,8 @@
 // current AI assessment, stores the rule result as the user's score
 // (jobScores + the Jobs page rollup). Jobs the rule score marks aiWorthy are
 // flagged aiPending, so the AI refines them when it runs. AI assessments are
-// never overwritten; type skips are left as they are.
+// never overwritten. Jobs of other types get a recorded skip (score 0) so the
+// Jobs page hides them.
 //
 // Usage: node scripts/rule-score.mjs [--user email] [--week 2026-09-21] [--write]
 //   --week limits it to jobs posted that week (Mon–Fri Pacific); default: all jobs.
@@ -17,7 +18,7 @@ import { weekWindow } from "./lib/week.mjs";
 
 const require = createRequire(new URL("../functions/package.json", import.meta.url));
 const admin = require("firebase-admin");
-const { FIT_VERSION, profileStampOf } = require("../functions/lib/jobFit.cjs");
+const { FIT_VERSION, profileStampOf, screenedFit } = require("../functions/lib/jobFit.cjs");
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("../functions/lib/ruleScore.cjs");
 const { familiesForProfile, shouldAssess, targetsKey } = require("../functions/lib/jobFamilies.cjs");
 const { writeUserScores } = require("../functions/lib/userJobScores.cjs");
@@ -50,13 +51,24 @@ for (let i = 0; i < scoreRefs.length; i += 300) (await db.getAll(...scoreRefs.sl
 
 const now = admin.firestore.Timestamp.now();
 const entries = [];
-const stats = { jobs: jobs.size, otherTypes: 0, hasAi: 0, noDescription: 0, scored: 0, aiPending: 0 };
+const stats = { jobs: jobs.size, otherTypes: 0, skipsRecorded: 0, hasAi: 0, noDescription: 0, scored: 0, aiPending: 0 };
 const bands = { "80+": 0, "60-79": 0, "40-59": 0, "15-39": 0, "<15": 0 };
 for (const d of jobs.docs) {
   const title = d.get("title") || "";
   const desc = d.get("fullDescription") || "";
-  if (!shouldAssess(title, targets, desc).assess) { stats.otherTypes++; continue; }
+  const gate = shouldAssess(title, targets, desc);
   const fit = existing.get(d.id)?.fit;
+  if (!gate.assess) {
+    stats.otherTypes++;
+    // Record the skip (score 0, "not one of your job types") unless it's already current,
+    // so the Jobs page can hide it without guessing from the title.
+    if (!(fit?.screened && fit.profileStamp === profileStamp && fit.targetsKey === tk)) {
+      const sf = { ...screenedFit(gate), profileStamp, targetsKey: tk, scoredAt: now };
+      entries.push({ jobId: d.id, score: 0, reason: sf.reason, fit: sf });
+      stats.skipsRecorded++;
+    }
+    continue;
+  }
   if (fit && fit.version === FIT_VERSION && !fit.screened && fit.profileStamp === profileStamp) { stats.hasAi++; continue; }
   if (desc.length < 200) { stats.noDescription++; continue; }
   const rule = ruleAssessJob({ profile, jobTitle: title, description: desc, targets, mine });
@@ -67,7 +79,7 @@ for (const d of jobs.docs) {
   entries.push({ jobId: d.id, score: rule.score, reason: rule.reason, fit: { ...rule, version: `rule-${RULE_VERSION}`, profileStamp, targetsKey: tk, scoredAt: now, ...(aiPending ? { aiPending: true } : {}) } });
 }
 
-console.log(`${stats.jobs} jobs · ${stats.otherTypes} other job types (left as is) · ${stats.hasAi} already have an AI score · ${stats.noDescription} without a description`);
+console.log(`${stats.jobs} jobs · ${stats.otherTypes} other job types (${stats.skipsRecorded} skips recorded) · ${stats.hasAi} already have an AI score · ${stats.noDescription} without a description`);
 console.log(`${stats.scored} ${write ? "rule-scored" : "would be rule-scored"}: ${JSON.stringify(bands)}`);
 console.log(`${stats.aiPending} (${Math.round((100 * stats.aiPending) / Math.max(1, stats.scored))}%) would go to the AI (rule.aiWorthy); the rest are final on the rule score`);
 if (write && entries.length) {
