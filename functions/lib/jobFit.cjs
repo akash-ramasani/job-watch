@@ -284,7 +284,7 @@ async function assessJobFit({ client, model, profileText, jobTitle, jobDescripti
  */
 function screenedFit({ families = [], why = "type" } = {}) {
   const { familyLabel } = require("./jobFamilies.cjs");
-  const reason = why === "type" && families.length
+  const reason = why === "eligibility" ? "Not eligible (visa, citizenship or clearance)" : why === "type" && families.length
     ? `Not one of your job types (${familyLabel(families[0])})`
     : "Doesn't look like your field";
   return {

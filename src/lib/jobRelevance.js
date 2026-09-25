@@ -15,6 +15,9 @@ import { isRelatedJob } from "./jobRelevanceCore.js";
 
 export { isRelatedJob };
 
+/** Does this user need visa sponsorship? (Profile form: requiresSponsorship.) */
+export const needsSponsorship = (userMeta) => /^y(es)?$/i.test(String(userMeta?.requiresSponsorship || "").trim());
+
 /** The user's job types: their own pick, else the ones read from their resume. null while loading or unknown. */
 export function useJobTypes(uid) {
   const [types, setTypes] = useState(null);

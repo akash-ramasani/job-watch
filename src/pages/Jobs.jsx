@@ -12,7 +12,7 @@ import { useDataCache } from "../contexts/DataCacheContext.jsx";
 import { track } from "../lib/analytics.js";
 import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/resumeDownloads.js";
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
-import { isRelatedJob, useJobTypes } from "../lib/jobRelevance.js";
+import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
 
 
 const US_STATES = [
@@ -89,6 +89,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   const [hasResume, setHasResume] = useState(null); // null = not known yet
   // Only jobs related to this user are listed (see lib/jobRelevance.js).
   const jobTypes = useJobTypes(user?.uid);
+  const relevance = useMemo(() => ({ needsSponsorship: needsSponsorship(userMeta) }), [userMeta]);
   const [loading, setLoading] = useState(true);
 
   const [titleSearch, setTitleSearch] = useState(() => searchParams.get("title") || "");
@@ -410,7 +411,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     // without a personal score render as "unscored" (which is correct for
     // any user who hasn't enabled AI / hasn't been backfilled).
     const merged = filtered
-      .filter((j) => isRelatedJob(j, myScores[j.id], jobTypes))
+      .filter((j) => isRelatedJob(j, myScores[j.id], jobTypes, relevance))
       .map((j) => {
         const s = myScores[j.id];
         if (!s) return j;
@@ -418,10 +419,10 @@ export default function Jobs({ user, userMeta, preferences }) {
       });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes]);
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
-  const relatedJobs = useMemo(() => jobs.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes)), [jobs, myScores, jobTypes]);
+  const relatedJobs = useMemo(() => jobs.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes, relevance)), [jobs, myScores, jobTypes, relevance]);
   // Wait for the user's job types too, so unrelated jobs never flash in.
   const listLoading = loading || jobTypes === null;
   const scoredShare = relatedJobs.length ? relatedJobs.filter((j) => myScores[j.id]).length / relatedJobs.length : 1;

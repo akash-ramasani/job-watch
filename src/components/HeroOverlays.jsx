@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { doc, onSnapshot } from "firebase/firestore";
 import { db } from "../firebase";
 import { ADMIN_UID } from "../App.jsx";
-import { isRelatedJob, useJobTypes } from "../lib/jobRelevance.js";
+import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
 
 /* ── Utility helpers ──────────────────────────────────────── */
 
@@ -110,8 +110,8 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
   }, [user?.uid]);
 
   const recentJobs = useMemo(
-    () => (jobTypes === null ? [] : allRecent.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes)).slice(0, 20)),
-    [allRecent, myScores, jobTypes]
+    () => (jobTypes === null ? [] : allRecent.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes, { needsSponsorship: needsSponsorship(userMeta) })).slice(0, 20)),
+    [allRecent, myScores, jobTypes, userMeta]
   );
 
   // Pulse when a new related job arrives: the newest job's id changes.

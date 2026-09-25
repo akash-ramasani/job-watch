@@ -72,6 +72,7 @@ const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
 const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenedFit, isSoftwareCandidate } = require("./lib/jobFit.cjs");
 const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./lib/jobFamilies.cjs");
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("./lib/ruleScore.cjs");
+const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligibility.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 
 
@@ -813,7 +814,9 @@ exports.rescoreJobs = onRequest(
     }
 
     let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
-    if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile), { tk: targetsKey(targets) })).slice(0, limit).map((j) => j.id);
+    const targetUser = (await db.collection("users").doc(targetUid).get()).data() || {};
+    const tkTarget = targetsKey(targets) + (needsSponsorship(targetUser) ? "|visa" : "");
+    if (!ids) ids = (await staleJobsFor(targetUid, profileStampOf(profile), { tk: tkTarget })).slice(0, limit).map((j) => j.id);
     const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
     const jobs = snaps.filter((s) => s.exists).map((s) => ({ jobDocId: s.id, ...s.data() }));
 
@@ -985,6 +988,8 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
+          // Visa / citizenship / clearance statements in the description (lib/eligibility.cjs).
+          if (job.fullDescription) job.el = eligibilityOf(job.fullDescription).flags;
           writtenJobs.push({ ...job, fetchedAt: now, expireAt });
 
           bw.set(
@@ -1121,6 +1126,7 @@ async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUnti
   const retainTs = admin.firestore.Timestamp.fromDate(retainUntil);
   const bw = db.bulkWriter();
   for (const job of missing) {
+    if (job.fullDescription) job.el = eligibilityOf(job.fullDescription).flags;
     const normal = addDaysTs(job.sourceUpdatedTs || now, TTL_DAYS);
     bw.set(col.doc(job.jobDocId), {
       ...job,
@@ -2418,9 +2424,16 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const isAdmin = userId === ADMIN_UID;
 
   // Permission gate — non-admin users must have aiAccess === true on their user doc.
+  let userData = {};
+  try {
+    userData = (await db.collection("users").doc(userId).get()).data() || {};
+  } catch (err) {
+    logger.warn(`scoreNewJobsForUser: could not read user doc for userId=${userId}: ${err?.message}`);
+  }
+  const needsVisa = needsSponsorship(userData);
   if (!isAdmin) {
     try {
-      const userDoc = await db.collection("users").doc(userId).get();
+      const userDoc = { exists: Object.keys(userData).length > 0, data: () => userData };
       if (!userDoc.exists || userDoc.data()?.aiAccess !== true) {
         logger.info(`scoreNewJobsForUser: aiAccess not granted for userId=${userId}, skipping`);
         return 0;
@@ -2461,7 +2474,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const candidateYears = candidateYearsOf(profile);
   const softwareCandidate = isSoftwareCandidate(profile);
   const targets = jobTypesFor(profile, prefs);
-  const tk = targetsKey(targets);
+  // Skips and rule scores depend on the job types and on whether the user needs
+  // visa sponsorship; changing either redoes them (free).
+  const tk = targetsKey(targets) + (needsVisa ? "|visa" : "");
   if (profileText.length < 80) {
     logger.info(`scoreNewJobsForUser: resume has no content for userId=${userId}, skipping`);
     return 0;
@@ -2482,7 +2497,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const scoreSnaps = await readAll(uniqueJobs.map((j) => userScoresCol.doc(j.jobDocId)));
 
   // Skip jobs already assessed with this method against this version of the profile.
-  const todo = [];
+  let todo = [];
   uniqueJobs.forEach((job, i) => {
     const jobData = jobSnaps[i].exists ? jobSnaps[i].data() : null;
     if (!jobData) return;
@@ -2493,7 +2508,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       if (fit.version === FIT_VERSION && (!fit.screened || fit.targetsKey === tk)) return;
       if (fit.version === RULE_FIT_VERSION && fit.targetsKey === tk && !fit.aiPending) return;
     }
-    todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null, existingFit: fit || null });
+    todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null, el: Array.isArray(jobData.el) ? jobData.el : null, existingFit: fit || null });
   });
   if (todo.length === 0) return 0;
   logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}`);
@@ -2510,6 +2525,24 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   // skipped ones is assessed anyway to measure what the filter misses.
   let toAssess = todo;
   const audits = new Set();
+  // Not eligible (needs sponsorship; the job requires US citizenship or a
+  // clearance, or won't sponsor): recorded and hidden, never scored.
+  const blockedFit = (job, why) => ({ ...screenedFit({ families: [], why: "eligibility" }), blocked: why, reason: why, capNote: why, profileStamp, targetsKey: tk, scoredAt });
+  const eligibilityBlock = (job, description) => {
+    if (!needsVisa) return null;
+    const flags = job.el || (description ? eligibilityOf(description).flags : []);
+    return blockedReason(flags, true);
+  };
+  if (needsVisa) {
+    todo = todo.filter((job) => {
+      const why = eligibilityBlock(job, job.fullDescription);
+      if (!why) return true;
+      const fit = blockedFit(job, why);
+      results.push({ jobId: job.jobDocId, score: 0, reason: why, fit });
+      return false;
+    });
+  }
+
   if (screen) {
     toAssess = [];
     for (const job of todo) {
@@ -2582,6 +2615,11 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       }
 
       if (!job.sig) job.sig = jobSignature({ ...job, fullDescription: description });
+      if (!job.fullDescription && needsVisa) {
+        // Description fetched just now: check eligibility before scoring.
+        const why = eligibilityBlock({ ...job, el: null }, description);
+        if (why) { results.push({ jobId: job.jobDocId, score: 0, reason: why, fit: blockedFit(job, why) }); return; }
+      }
       // Free first: the rule score. The AI only sees jobs that might be good
       // matches — unless this is a forced rescore or an audit sample.
       const rule = ruleAssessJob({ profile, jobTitle: job.title, description, targets, mine });
@@ -2760,7 +2798,8 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   if (!profileSnap.exists) return 0;
   const profile = profileSnap.data();
   const profileStamp = profileStampOf(profile);
-  const tk = targetsKey(jobTypesFor(profile, prefsSnap.data() || {}));
+  const userDoc = (await userRef.get()).data() || {};
+  const tk = targetsKey(jobTypesFor(profile, prefsSnap.data() || {})) + (needsSponsorship(userDoc) ? "|visa" : "");
   const clearKey = `${profileStamp}|${tk}`;
 
   const markerRef = userRef.collection("settings").doc("scoring");

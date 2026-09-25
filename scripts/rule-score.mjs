@@ -22,6 +22,7 @@ const { FIT_VERSION, profileStampOf, screenedFit } = require("../functions/lib/j
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("../functions/lib/ruleScore.cjs");
 const { familiesForProfile, shouldAssess, targetsKey } = require("../functions/lib/jobFamilies.cjs");
 const { writeUserScores } = require("../functions/lib/userJobScores.cjs");
+const { eligibilityOf, blockedReason, needsSponsorship } = require("../functions/lib/eligibility.cjs");
 
 const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
@@ -37,13 +38,14 @@ if (!profileSnap.exists) { console.error("This user has no resume yet."); proces
 const profile = profileSnap.data();
 const prefs = prefsSnap.data() || {};
 const targets = Array.isArray(prefs.jobTypes) && prefs.jobTypes.length ? prefs.jobTypes : familiesForProfile(profile);
-const tk = targetsKey(targets);
+const needsVisa = needsSponsorship((await db.doc(`users/${uid}`).get()).data() || {});
+const tk = targetsKey(targets) + (needsVisa ? "|visa" : ""); // same key as functions/index.js
 const profileStamp = profileStampOf(profile);
 const mine = profileSkills(profile);
 
 let q = db.collection("users").doc(ADMIN_UID).collection("jobs");
 if (arg("--week")) { const w = weekWindow(arg("--week")); q = q.where("sourceUpdatedTs", ">=", w.start).where("sourceUpdatedTs", "<", w.end); }
-const jobs = await q.select("title", "fullDescription").get();
+const jobs = await q.select("title", "fullDescription", "el").get();
 
 const scoreRefs = jobs.docs.map((d) => db.doc(`users/${uid}/jobScores/${d.id}`));
 const existing = new Map();
@@ -51,13 +53,23 @@ for (let i = 0; i < scoreRefs.length; i += 300) (await db.getAll(...scoreRefs.sl
 
 const now = admin.firestore.Timestamp.now();
 const entries = [];
-const stats = { jobs: jobs.size, otherTypes: 0, skipsRecorded: 0, hasAi: 0, noDescription: 0, scored: 0, aiPending: 0 };
+const stats = { jobs: jobs.size, blocked: 0, otherTypes: 0, skipsRecorded: 0, hasAi: 0, noDescription: 0, scored: 0, aiPending: 0 };
 const bands = { "80+": 0, "60-79": 0, "40-59": 0, "15-39": 0, "<15": 0 };
 for (const d of jobs.docs) {
   const title = d.get("title") || "";
   const desc = d.get("fullDescription") || "";
-  const gate = shouldAssess(title, targets, desc);
   const fit = existing.get(d.id)?.fit;
+  // Not eligible for someone who needs sponsorship: record it (hidden, never scored).
+  const why = needsVisa ? blockedReason(Array.isArray(d.get("el")) ? d.get("el") : eligibilityOf(desc).flags, true) : null;
+  if (why) {
+    stats.blocked++;
+    if (!(fit?.blocked === why && fit.profileStamp === profileStamp && fit.targetsKey === tk)) {
+      const bf = { ...screenedFit({ why: "eligibility" }), blocked: why, reason: why, capNote: why, profileStamp, targetsKey: tk, scoredAt: now };
+      entries.push({ jobId: d.id, score: 0, reason: why, fit: bf });
+    }
+    continue;
+  }
+  const gate = shouldAssess(title, targets, desc);
   if (!gate.assess) {
     stats.otherTypes++;
     // Record the skip (score 0, "not one of your job types") unless it's already current,
@@ -79,7 +91,7 @@ for (const d of jobs.docs) {
   entries.push({ jobId: d.id, score: rule.score, reason: rule.reason, fit: { ...rule, version: `rule-${RULE_VERSION}`, profileStamp, targetsKey: tk, scoredAt: now, ...(aiPending ? { aiPending: true } : {}) } });
 }
 
-console.log(`${stats.jobs} jobs · ${stats.otherTypes} other job types (${stats.skipsRecorded} skips recorded) · ${stats.hasAi} already have an AI score · ${stats.noDescription} without a description`);
+console.log(`${stats.jobs} jobs · ${stats.blocked} not eligible (visa/citizenship/clearance) · ${stats.otherTypes} other job types (${stats.skipsRecorded} skips recorded) · ${stats.hasAi} already have an AI score · ${stats.noDescription} without a description`);
 console.log(`${stats.scored} ${write ? "rule-scored" : "would be rule-scored"}: ${JSON.stringify(bands)}`);
 console.log(`${stats.aiPending} (${Math.round((100 * stats.aiPending) / Math.max(1, stats.scored))}%) would go to the AI (rule.aiWorthy); the rest are final on the rule score`);
 if (write && entries.length) {

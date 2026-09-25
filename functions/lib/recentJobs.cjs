@@ -50,6 +50,8 @@ function projectJob(id, x) {
     firstSeenAt: x.firstSeenAt || null,
     fetchedAt: x.fetchedAt || null,
     fam: classifyTitle(x.title), // job types, so the Jobs page can hide unrelated jobs before they're scored
+    // Visa / citizenship / clearance flags (lib/eligibility.cjs), only when present.
+    ...(Array.isArray(x.el) && x.el.length ? { el: x.el } : {}),
   };
 }
 
@@ -76,6 +78,8 @@ function projectJobLean(id, x) {
     firstSeenAt: x.firstSeenAt || null,
     fetchedAt: x.fetchedAt || null,
     fam: classifyTitle(x.title), // job types, so the Jobs page can hide unrelated jobs before they're scored
+    // Visa / citizenship / clearance flags (lib/eligibility.cjs), only when present.
+    ...(Array.isArray(x.el) && x.el.length ? { el: x.el } : {}),
   };
 }
 

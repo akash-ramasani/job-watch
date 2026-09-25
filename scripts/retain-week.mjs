@@ -23,6 +23,7 @@ const require = createRequire(new URL("../worker/package.json", import.meta.url)
 const { Timestamp } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 const { familiesForProfile, shouldAssess } = require("../functions/lib/jobFamilies.cjs");
+const { eligibilityOf, blockedReason, needsSponsorship } = require("../functions/lib/eligibility.cjs");
 
 const arg = (n) => { const i = process.argv.indexOf(n); return i === -1 ? null : process.argv[i + 1]; };
 const write = process.argv.includes("--write");
@@ -39,18 +40,21 @@ const [profileSnap, prefsSnap] = await Promise.all([
 const saved = prefsSnap.data()?.jobTypes;
 const targets = Array.isArray(saved) && saved.length ? saved : familiesForProfile(profileSnap.data() || {});
 if (!targets.length) { console.error("No job types for this user (no resume and no saved job types)."); process.exit(1); }
+const needsVisa = needsSponsorship((await f.doc(`users/${uid}`).get()).data() || {});
 
 const snap = await f.collection(`users/${ADMIN_UID}/jobs`)
   .where("sourceUpdatedTs", ">=", start).where("sourceUpdatedTs", "<", end)
-  .select("title", "companyName", "locationName", "jobUrl", "applyUrl", "sourceUpdatedTs", "expireAt", "fullDescription", "retainUntil").get();
+  .select("title", "companyName", "locationName", "jobUrl", "applyUrl", "sourceUpdatedTs", "expireAt", "fullDescription", "retainUntil", "el").get();
 
 const untilTs = Timestamp.fromDate(until);
-let matched = 0, extended = 0;
+let matched = 0, extended = 0, notEligible = 0;
 const rows = [];
 const bw = f.bulkWriter();
 for (const d of snap.docs) {
   const x = d.data();
   if (!shouldAssess(x.title, targets, x.fullDescription || "").assess) continue;
+  // Not eligible for someone who needs sponsorship: not kept, not listed.
+  if (needsVisa && blockedReason(Array.isArray(x.el) ? x.el : eligibilityOf(x.fullDescription || "").flags, true)) { notEligible++; continue; }
   matched++;
   rows.push({ id: d.id, ...x });
   if ((x.expireAt?.toMillis?.() || 0) >= until.getTime() && x.retainUntil) continue;
@@ -63,7 +67,7 @@ for (const d of snap.docs) {
 await bw.close();
 console.log(`week of ${week} (${start.toISOString()} → ${end.toISOString()}), keep until ${until.toISOString()}`);
 console.log(`targets: ${targets.join(", ")}`);
-console.log(`${snap.size} jobs posted that week · ${matched} match · ${extended} ${write ? "extended" : "would be extended"}`);
+console.log(`${snap.size} jobs posted that week · ${matched} match${needsVisa ? ` (${notEligible} more need citizenship/clearance or won't sponsor — left out)` : ""} · ${extended} ${write ? "extended" : "would be extended"}`);
 if (arg("--csv")) {
   // The user's own score where scoring has run (jobScores), else blank.
   const scores = new Map();
