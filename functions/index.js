@@ -933,7 +933,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         feedsProcessed += 1;
 
         const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
-        const isIdSource = source === "workday" || source === "oracle";
+        const isIdSource = source === "workday" || source === "oracle" || BOARD_SOURCES.has(source);
 
         // ID-tracked sources return only jobs whose IDs we have never seen for
         // this feed (already US-filtered and detail-enriched), so the recency
@@ -943,7 +943,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
           ? await fetchWorkdayNewJobs(idSourceArgs)
           : source === "oracle"
             ? await fetchOracleNewJobs(idSourceArgs)
-            : await fetchJobsFromFeed(url, source, recentCutoffMs);
+            : BOARD_SOURCES.has(source)
+              ? await fetchBoardNewJobs(source, idSourceArgs)
+              : await fetchJobsFromFeed(url, source, recentCutoffMs);
         jobsFetched += rawJobs.length;
 
         const normalized = rawJobs
@@ -1101,11 +1103,12 @@ async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUnti
   if (source.includes("greenhouse") && !url.includes("content=true")) url += url.includes("?") ? "&content=true" : "?content=true";
   const companyName = String(feed.companyName || feed.company || "Unknown");
   const maxAgeDays = Math.ceil((now.toMillis() - since.getTime()) / 86400000);
-  const harvest = { maxAgeDays, dryRun, wantRow: (row) => wantJob(row.raw?.title || row.raw?.Title || "", "") };
+  const harvest = { maxAgeDays, dryRun, wantRow: (row) => wantJob(row.raw?.title || row.raw?.Title || row.raw?.text || row.raw?.name || row.raw?.jobOpeningName || "", "") };
   const idArgs = { userId, feedId: feed.id, url, now, runBudget: { remaining: Infinity }, harvest };
   const raw = source === "workday" ? await fetchWorkdayNewJobs(idArgs)
     : source === "oracle" ? await fetchOracleNewJobs(idArgs)
-      : await fetchJobsFromFeed(url, source, since.getTime());
+      : BOARD_SOURCES.has(source) ? await fetchBoardNewJobs(source, idArgs)
+        : await fetchJobsFromFeed(url, source, since.getTime());
 
   const jobs = raw
     .map((j) => normalizeJobMinimal(j, { source, companyName, companyKey: feed.id, now, url }))
@@ -1766,6 +1769,380 @@ async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget, harvest
 
 /**
  * ----------------------------
+ * LEVER, WORKABLE, SMARTRECRUITERS, BAMBOOHR
+ * A feed stores the company's public careers page:
+ *   lever            https://jobs.lever.co/<company>          (EU: jobs.eu.lever.co)
+ *   workable         https://apply.workable.com/<account>
+ *   smartrecruiters  https://jobs.smartrecruiters.com/<CompanyId>
+ *   bamboohr         https://<company>.bamboohr.com/careers
+ * All four are ID-tracked (fetchNewJobsById above): Lever gives only a creation
+ * time and Workable only a day, so a "changed in the last 20 minutes" window
+ * would miss postings; remembering seen IDs catches each new one once.
+ * Lever and Workable lists include the full description (no extra requests);
+ * SmartRecruiters (US postings only) and BambooHR need one detail call per new posting.
+ * ----------------------------
+ */
+const BOARD_SOURCES = new Set(["lever", "workable", "smartrecruiters", "bamboohr"]);
+const BOARD_CONCURRENCY = 6;
+const SMARTRECRUITERS_PAGE_SIZE = 100;
+const boardLimiter = pLimit(BOARD_CONCURRENCY);
+
+/**
+ * Accepts the careers page in the shapes people copy (a job's own page, the
+ * API URL, or just the company's slug). Returns null when it isn't that board.
+ */
+function parseBoardFeedUrl(source, feedUrl) {
+  const raw = String(feedUrl || "").trim();
+  if (!raw) return null;
+  // A bare slug: "palantir", "design-pickle", "ServiceNow", "rfbinder".
+  const bare = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(raw) ? raw : null;
+  let host = "";
+  let parts = [];
+  if (!bare) {
+    let u;
+    try {
+      u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    } catch {
+      return null;
+    }
+    host = u.hostname.toLowerCase();
+    parts = u.pathname.split("/").filter(Boolean);
+  }
+
+  if (source === "lever") {
+    const eu = /(^|\.)eu\.lever\.co$/.test(host);
+    let slug = bare;
+    if (/^jobs\.(eu\.)?lever\.co$/.test(host)) slug = parts[0];
+    else if (/^api\.(eu\.)?lever\.co$/.test(host) && parts[0] === "v0" && parts[1] === "postings") slug = parts[2];
+    if (!slug) return null;
+    const api = `https://api.${eu ? "eu." : ""}lever.co/v0/postings/${slug}`;
+    return { slug, careerUrl: `https://jobs.${eu ? "eu." : ""}lever.co/${slug}`, listUrl: `${api}?mode=json`, api };
+  }
+
+  if (source === "workable") {
+    let slug = bare;
+    if (host === "apply.workable.com") {
+      if (parts[0] === "api") slug = parts[parts.indexOf("accounts") + 1] || null;
+      else if (parts[0] !== "j") slug = parts[0];
+    } else if (/^[a-z0-9-]+\.workable\.com$/.test(host) && !/^(www|apply|jobs)\./.test(host)) {
+      slug = host.split(".")[0];
+    }
+    if (!slug || parts[0] === "j") return null;
+    slug = slug.toLowerCase();
+    return {
+      slug,
+      careerUrl: `https://apply.workable.com/${slug}`,
+      listUrl: `https://apply.workable.com/api/v1/widget/accounts/${slug}?details=true`,
+    };
+  }
+
+  if (source === "smartrecruiters") {
+    let slug = bare;
+    if (/^(jobs|careers)\.smartrecruiters\.com$/.test(host)) slug = parts[0];
+    else if (host === "api.smartrecruiters.com" && parts[1] === "companies") slug = parts[2];
+    if (!slug) return null;
+    const api = `https://api.smartrecruiters.com/v1/companies/${slug}/postings`;
+    return { slug, careerUrl: `https://jobs.smartrecruiters.com/${slug}`, api };
+  }
+
+  if (source === "bamboohr") {
+    let slug = bare ? bare.toLowerCase() : null;
+    const m = host.match(/^([a-z0-9-]+)\.bamboohr\.com$/);
+    if (m && !["www", "api", "app"].includes(m[1])) slug = m[1];
+    if (!slug) return null;
+    const base = `https://${slug}.bamboohr.com/careers`;
+    return { slug, careerUrl: base, listUrl: `${base}/list`, base };
+  }
+  return null;
+}
+
+/** JSON GET with retries. A redirect means the board doesn't exist (BambooHR sends unknown companies to its home page). */
+async function boardFetchJson(url, maxRetries = 3) {
+  return boardLimiter(async () => {
+    let attempts = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const resp = await fetch(url, {
+        redirect: "manual",
+        headers: {
+          accept: "application/json",
+          "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      });
+      if (resp.status >= 300 && resp.status < 400) throw new Error(`HTTP 404 Not Found for ${url}. Body: redirected, no job board here`);
+      if (resp.ok) return await resp.json();
+      const retryable = resp.status === 429 || resp.status >= 500;
+      if (retryable && attempts < maxRetries) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, (resp.status === 429 ? 5000 : 1500) * attempts));
+        continue;
+      }
+      const text = await safeReadText(resp);
+      throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(text || "").slice(0, 200)}`);
+    }
+  });
+}
+
+const ageDaysFromMs = (ms, now) => (Number(ms) > 0 ? Math.max(0, Math.floor((now.toMillis() - Number(ms)) / 86400000)) : null);
+const isUSCountry = (c) => /^(us|usa|united states(?: of america)?)$/i.test(String(c || "").trim());
+
+/** Lever: the whole board in one request, descriptions included. */
+function leverRow(raw, now) {
+  const locs = [...(raw.categories?.allLocations || []), raw.categories?.location].filter(Boolean).join("; ");
+  return {
+    id: raw.id ? String(raw.id) : null,
+    ageDays: ageDaysFromMs(raw.createdAt, now),
+    looksUS: raw.country ? isUSCountry(raw.country) : workdayLocationLooksUS(locs),
+    raw,
+  };
+}
+
+/** Workable: the whole board in one request (?details=true adds descriptions). */
+function workableRow(raw, now) {
+  // `hidden` only hides the address on the posting page; the location still applies.
+  const locs = Array.isArray(raw.locations) ? raw.locations : [];
+  const us = locs.some((l) => l.countryCode === "US" || isUSCountry(l.country)) || isUSCountry(raw.country);
+  const anyCountry = locs.some((l) => l.countryCode || l.country) || raw.country;
+  return {
+    id: raw.shortcode ? String(raw.shortcode) : null,
+    ageDays: ageDaysFromIsoDate(raw.published_on || raw.created_at, now),
+    looksUS: us || !anyCountry,
+    raw,
+  };
+}
+
+/**
+ * Lever's description opens with the company blurb; the role, the requirement
+ * lists and the closing notes (often work authorization) come after. Stored
+ * descriptions are cut at 4,000 characters, so put the blurb last.
+ */
+function leverDescriptionHtml(p) {
+  if (!p) return "";
+  const lists = Array.isArray(p.lists) ? p.lists.map((l) => `<p>${l.text || ""}</p><ul>${l.content || ""}</ul>`) : [];
+  const parts = p.descriptionBody != null ? [p.descriptionBody, ...lists, p.additional, p.opening] : [p.description, ...lists, p.additional];
+  return parts.filter(Boolean).join("\n");
+}
+
+/** Fetch new postings from one of BOARD_SOURCES. Returns [{ id, list, detail, parsed }] for normalizeJobMinimal. */
+async function fetchBoardNewJobs(source, { userId, feedId, url, now, runBudget, harvest = null }) {
+  const maxAge = harvest ? harvest.maxAgeDays : ID_SOURCE_MAX_AGE_DAYS;
+  const parsed = parseBoardFeedUrl(source, url);
+  if (!parsed) throw new Error(`Not a ${source} careers page URL: ${url}`);
+
+  // Lever, Workable and BambooHR return the whole board at once.
+  const wholeBoard = (load) => async (offset) => {
+    if (offset > 0) return { rows: [], total: 0 };
+    const rows = await load();
+    return { rows, total: rows.length };
+  };
+  const recentEnough = (isoDay) => {
+    const age = ageDaysFromIsoDate(isoDay, now);
+    return age == null || age <= maxAge + 1;
+  };
+
+  const adapters = {
+    lever: {
+      fetchPage: wholeBoard(async () => {
+        const list = await boardFetchJson(parsed.listUrl);
+        return (Array.isArray(list) ? list : []).map((raw) => leverRow(raw, now));
+      }),
+      fetchDetail: async (row) => row.raw,
+      keep: () => true,
+    },
+    workable: {
+      fetchPage: wholeBoard(async () => {
+        const board = await boardFetchJson(parsed.listUrl);
+        return (Array.isArray(board?.jobs) ? board.jobs : []).map((raw) => workableRow(raw, now));
+      }),
+      fetchDetail: async (row) => row.raw,
+      keep: () => true,
+    },
+    smartrecruiters: {
+      // US postings only, newest first.
+      fetchPage: async (offset) => {
+        const page = await boardFetchJson(`${parsed.api}?country=us&limit=${SMARTRECRUITERS_PAGE_SIZE}&offset=${offset}`);
+        const rows = (Array.isArray(page?.content) ? page.content : []).map((raw) => ({
+          id: raw.id ? String(raw.id) : null,
+          ageDays: ageDaysFromIsoDate(raw.releasedDate, now),
+          looksUS: !raw.location?.country || isUSCountry(raw.location.country),
+          raw,
+        }));
+        return { rows, total: page?.totalFound };
+      },
+      fetchDetail: async (row) => boardFetchJson(`${parsed.api}/${encodeURIComponent(row.id)}`),
+      keep: (row, detail) => detail?.active !== false && recentEnough(detail?.releasedDate || row.raw.releasedDate),
+    },
+    bamboohr: {
+      // The list has no dates; the detail has datePosted and the country.
+      fetchPage: wholeBoard(async () => {
+        const list = await boardFetchJson(parsed.listUrl);
+        return (Array.isArray(list?.result) ? list.result : []).map((raw) => ({
+          id: raw.id != null ? String(raw.id) : null,
+          ageDays: null,
+          looksUS: raw.atsLocation?.country ? isUSCountry(raw.atsLocation.country) : true,
+          raw,
+        }));
+      }),
+      fetchDetail: async (row) => (await boardFetchJson(`${parsed.base}/${encodeURIComponent(row.id)}/detail`))?.result?.jobOpening || null,
+      keep: (row, detail) => {
+        const country = detail?.location?.addressCountry || detail?.atsLocation?.country || null;
+        if (country && !isUSCountry(country)) return false;
+        return recentEnough(detail?.datePosted);
+      },
+    },
+  };
+
+  const results = await fetchNewJobsById({
+    userId, feedId, now, runBudget, harvest,
+    source,
+    label: `${source} ${parsed.slug}`,
+    pageSize: source === "smartrecruiters" ? SMARTRECRUITERS_PAGE_SIZE : Number.MAX_SAFE_INTEGER,
+    ...adapters[source],
+  });
+  return results.map(({ row, detail }) => ({ id: row.id, list: row.raw, detail, parsed }));
+}
+
+/** Shape a BOARD_SOURCES posting like the other sources' jobs. */
+function normalizeBoardJob(source, rawJob, { companyName, companyKey, now }) {
+  const { id: externalId, list = {}, detail, parsed } = rawJob;
+  if (!externalId) return null;
+  const d = detail || {};
+  const meta = {};
+  let title = null;
+  let jobUrl = null;
+  let locParts = [];
+  let us = false;
+  let remote = false;
+  let workplaceType = null;
+  let sourceUpdatedTs = null;
+  let postedDay = null;
+  let html = "";
+
+  if (source === "lever") {
+    const c = list.categories || {};
+    title = list.text || null;
+    jobUrl = list.hostedUrl || `${parsed.careerUrl}/${externalId}`;
+    locParts = c.allLocations?.length ? c.allLocations : [c.location].filter(Boolean);
+    us = isUSCountry(list.country);
+    workplaceType = list.workplaceType && list.workplaceType !== "unspecified" ? list.workplaceType : null;
+    remote = workplaceType === "remote";
+    sourceUpdatedTs = Number(list.createdAt) > 0 ? admin.firestore.Timestamp.fromMillis(Number(list.createdAt)) : null;
+    if (c.team) meta["Team"] = c.team;
+    if (c.department) meta["Department"] = c.department;
+    if (c.commitment) meta["Commitment"] = c.commitment;
+    const pay = list.salaryRange;
+    if (pay?.min && pay?.max) meta["Salary"] = `${pay.currency || ""} ${pay.min}–${pay.max}${pay.interval ? ` ${pay.interval}` : ""}`.trim();
+    html = leverDescriptionHtml(list);
+  } else if (source === "workable") {
+    title = list.title || null;
+    jobUrl = list.url || list.shortlink || `${parsed.careerUrl}/j/${externalId}`;
+    const locs = Array.isArray(list.locations) && list.locations.length ? list.locations : [list];
+    locParts = locs.map((l) => [l.city, l.region || l.state, l.country].filter(Boolean).join(", ")).filter(Boolean);
+    us = locs.some((l) => l.countryCode === "US" || isUSCountry(l.country));
+    remote = Boolean(list.telecommuting);
+    workplaceType = remote ? "remote" : null;
+    postedDay = list.published_on || list.created_at || null;
+    if (list.employment_type) meta["Employment Type"] = list.employment_type;
+    if (list.department) meta["Department"] = list.department;
+    html = list.description || "";
+  } else if (source === "smartrecruiters") {
+    const loc = d.location || list.location || {};
+    title = d.name || list.name || null;
+    jobUrl = d.postingUrl || `${parsed.careerUrl}/${externalId}`;
+    locParts = [loc.fullLocation || [loc.city, loc.region, loc.country && loc.country.toUpperCase()].filter(Boolean).join(", ")].filter(Boolean);
+    us = isUSCountry(loc.country);
+    remote = Boolean(loc.remote);
+    workplaceType = loc.remote ? "remote" : loc.hybrid ? "hybrid" : null;
+    sourceUpdatedTs = toTimestampOrNull(d.releasedDate || list.releasedDate);
+    const t = d.typeOfEmployment || list.typeOfEmployment;
+    if (t?.label) meta["Employment Type"] = t.label;
+    const lvl = d.experienceLevel || list.experienceLevel;
+    if (lvl?.label && lvl.id !== "not_applicable") meta["Experience Level"] = lvl.label;
+    if ((d.function || list.function)?.label) meta["Function"] = (d.function || list.function).label;
+    if (d.refNumber || list.refNumber) meta["Req ID"] = d.refNumber || list.refNumber;
+    const s = d.jobAd?.sections || {};
+    html = [s.jobDescription, s.qualifications, s.additionalInformation, s.companyDescription]
+      .filter((x) => x?.text).map((x) => `<p>${x.title || ""}</p>${x.text}`).join("\n");
+  } else if (source === "bamboohr") {
+    const loc = d.location?.city || d.location?.state ? d.location : list.location || {};
+    const ats = d.atsLocation || list.atsLocation || {};
+    title = d.jobOpeningName || list.jobOpeningName || null;
+    jobUrl = d.jobOpeningShareUrl || `${parsed.careerUrl}/${externalId}`;
+    const country = d.location?.addressCountry || ats.country || null;
+    locParts = [[loc.city || ats.city, loc.state || ats.state || ats.province, country].filter(Boolean).join(", ")].filter(Boolean);
+    us = isUSCountry(country);
+    remote = Boolean(d.isRemote ?? list.isRemote) || String(d.locationType ?? list.locationType) === "1";
+    workplaceType = remote ? "remote" : String(d.locationType ?? list.locationType) === "2" ? "hybrid" : null;
+    postedDay = d.datePosted || null;
+    if (d.departmentLabel || list.departmentLabel) meta["Department"] = d.departmentLabel || list.departmentLabel;
+    if (d.employmentStatusLabel || list.employmentStatusLabel) meta["Employment Type"] = d.employmentStatusLabel || list.employmentStatusLabel;
+    if (d.compensation) meta["Compensation"] = String(d.compensation);
+    html = d.description || "";
+  }
+
+  // Day-precision dates: postings from today are stamped with the detection
+  // time so they sort with other sources' fresh jobs (as for Workday).
+  if (!sourceUpdatedTs && postedDay) {
+    const day = String(postedDay).slice(0, 10);
+    sourceUpdatedTs = ageDaysFromIsoDate(day, now) === 0 ? now : toTimestampOrNull(`${day}T00:00:00Z`);
+    meta["Posted"] = day;
+  }
+  sourceUpdatedTs = sourceUpdatedTs || now;
+
+  const locationName = locParts.join("; ") || (remote && us ? "Remote - United States" : null);
+  const locationTokens = extractLocationTokens(locationName);
+  // "Remote" or a bare city has no US token; the board's country says US.
+  if (us && !locationTokens.includes("United States")) locationTokens.push("United States");
+
+  return {
+    jobDocId: makeJobDocId({ source, companyKey, externalId }),
+    source,
+    companyKey,
+    companyName,
+    externalId,
+    title,
+    jobUrl,
+    locationName,
+    locationTokens,
+    stateCodes: extractStateCodes(locationTokens),
+    workplaceType,
+    isRemote: remote ? true : null,
+    sourceUpdatedTs,
+    sourceUpdatedIso: sourceUpdatedTs.toDate().toISOString(),
+    meta,
+    fullDescription: html ? stripHtml(html) : null,
+    mapLocation: normalizeToMapLocation(locParts[0] || locationName),
+  };
+}
+
+/** A board posting's description, for scoring when it wasn't captured at sync. */
+async function fetchBoardDescription(source, externalId, feedUrl) {
+  const parsed = parseBoardFeedUrl(source, feedUrl);
+  if (!parsed || !externalId) return null;
+  const id = encodeURIComponent(externalId);
+  if (source === "lever") {
+    const html = leverDescriptionHtml(await boardFetchJson(`${parsed.api}/${id}?mode=json`));
+    return html ? stripHtml(html) : null;
+  }
+  if (source === "workable") {
+    const j = await boardFetchJson(`https://apply.workable.com/api/v2/accounts/${parsed.slug}/jobs/${id}`);
+    const html = [j?.description, j?.requirements, j?.benefits].filter(Boolean).join("\n");
+    return html ? stripHtml(html) : null;
+  }
+  if (source === "smartrecruiters") {
+    const s = (await boardFetchJson(`${parsed.api}/${id}`))?.jobAd?.sections || {};
+    const html = [s.jobDescription, s.qualifications, s.additionalInformation].filter((x) => x?.text).map((x) => x.text).join("\n");
+    return html ? stripHtml(html) : null;
+  }
+  if (source === "bamboohr") {
+    const html = (await boardFetchJson(`${parsed.base}/${id}/detail`))?.result?.jobOpening?.description;
+    return html ? stripHtml(html) : null;
+  }
+  return null;
+}
+
+/**
+ * ----------------------------
  * NORMALIZATION (MINIMAL)
  * - NO contentHtml, NO isRemote, NO applyUrl
  * ----------------------------
@@ -1773,6 +2150,8 @@ async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget, harvest
 function normalizeJobMinimal(rawJob, ctx) {
   const { source, companyName, companyKey, now, url } = ctx;
   if (!rawJob || typeof rawJob !== "object") return null;
+
+  if (BOARD_SOURCES.has(source)) return normalizeBoardJob(source, rawJob, ctx);
 
   if (source === "oracle") {
     // rawJob comes from fetchOracleNewJobs: { id, list, detail, careerUrl }.
@@ -2390,6 +2769,8 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint)
       const raw = d?.jobPostingInfo?.jobDescription || "";
       return raw ? stripHtml(raw) : null;
     }
+
+    if (BOARD_SOURCES.has(source)) return await fetchBoardDescription(source, externalId, feedUrl);
 
     if (source === "oracle") {
       // Only reached when the detail fetch failed during sync.
@@ -4384,5 +4765,5 @@ exports.dailyAggregationReconciliation = onSchedule(
 // so Firebase's function discovery never sees it and nothing is deployed for it.
 Object.defineProperty(module.exports, "__internals", {
   enumerable: false,
-  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens },
+  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens, parseBoardFeedUrl, fetchBoardNewJobs, fetchJobDescription },
 });

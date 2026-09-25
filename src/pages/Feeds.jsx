@@ -13,6 +13,7 @@ import {
 } from "firebase/firestore";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
+import { BOARD_SOURCES, BOARD_RULES, parseBoardCareerUrl } from "../lib/jobBoards.js";
 import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
 
@@ -87,11 +88,22 @@ const URL_RULES = {
     isValid: (u) => parseOracleCareerUrl(u) !== null,
     normalize: (u) => parseOracleCareerUrl(u)?.careerUrl || u.trim(),
   },
+  ...Object.fromEntries(
+    BOARD_SOURCES.map((id) => [
+      id,
+      {
+        label: BOARD_RULES[id].label,
+        placeholder: BOARD_RULES[id].placeholder,
+        isValid: (u) => parseBoardCareerUrl(id, u) !== null,
+        normalize: (u) => parseBoardCareerUrl(id, u)?.careerUrl || u.trim(),
+      },
+    ])
+  ),
 };
 
 // Sources whose feed is keyed by a pasted career-site URL rather than a
 // company slug (their endpoints are derived from the URL on the backend).
-const URL_SOURCES = new Set(["workday", "oracle"]);
+const URL_SOURCES = new Set(["workday", "oracle", ...BOARD_SOURCES]);
 
 // Oracle Recruiting Cloud sites are https://<pod>.fa.<region>.oraclecloud.com/
 // hcmUI/CandidateExperience/<locale>/sites/<site>[/jobs|/job/<id>…]. Reduce to
@@ -117,6 +129,7 @@ function parseOracleCareerUrl(raw) {
 function parseCareerUrlFor(source, raw) {
   if (source === "workday") return parseWorkdayCareerUrl(raw);
   if (source === "oracle") return parseOracleCareerUrl(raw);
+  if (BOARD_SOURCES.includes(source)) return parseBoardCareerUrl(source, raw);
   return null;
 }
 
@@ -151,6 +164,7 @@ const JOB_SOURCES = [
   { id: "ashby", title: "AshbyHQ" },
   { id: "workday", title: "Workday" },
   { id: "oracle", title: "Oracle Cloud" },
+  ...BOARD_SOURCES.map((id) => ({ id, title: BOARD_RULES[id].title })),
 ];
 
 function companyToSlug(name) {
@@ -181,6 +195,10 @@ function detectSourceFromUrl(raw) {
   if (u.includes("/api/pcsx/search")) return "eightfold";
   if (u.includes(".myworkdayjobs.com/")) return "workday";
   if (u.includes(".oraclecloud.com/hcmui/candidateexperience")) return "oracle";
+  if (u.includes("lever.co/")) return "lever";
+  if (u.includes("workable.com")) return "workable";
+  if (u.includes("smartrecruiters.com/")) return "smartrecruiters";
+  if (u.includes(".bamboohr.com")) return "bamboohr";
   return "greenhouse";
 }
 
@@ -190,6 +208,7 @@ function prettySourceLabel(source) {
   if (source === "netflix") return "Netflix";
   if (source === "workday") return "Workday";
   if (source === "oracle") return "Oracle Cloud";
+  if (BOARD_RULES[source]) return BOARD_RULES[source].title;
   return "Greenhouse";
 }
 
@@ -214,7 +233,9 @@ function validateUrlForSource(source, rawUrl) {
               ? "Workday URL should look like: https://<company>.wd5.myworkdayjobs.com/<SiteName>"
               : source === "oracle"
                 ? "Oracle Cloud URL should look like: https://<pod>.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/<Site>"
-                : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
+                : BOARD_RULES[source]
+                  ? `${BOARD_RULES[source].title} URL should look like: ${BOARD_RULES[source].placeholder}`
+                  : "Greenhouse URL should look like: https://boards-api.greenhouse.io/v1/boards/<company>/jobs",
     };
   }
   return { ok: true, normalizedUrl: rules.normalize(cleanUrl) };
@@ -236,6 +257,11 @@ function getDomainFromFeed(feed) {
     if (feed.source === "workday" || url.includes(".myworkdayjobs.com/")) {
       const wd = parseWorkdayCareerUrl(url);
       if (wd) return `${wd.tenant}.com`;
+    }
+    // Lever / Workable / SmartRecruiters / BambooHR: the company's slug
+    if (BOARD_SOURCES.includes(feed.source)) {
+      const board = parseBoardCareerUrl(feed.source, url);
+      if (board) return `${board.slug.toLowerCase().replace(/[^a-z0-9-]/g, "")}.com`;
     }
     // Greenhouse
     if (url.includes("greenhouse.io")) {
@@ -333,6 +359,26 @@ export default function Feeds({ user }) {
     // Workday's and Oracle's endpoints send no CORS headers, so the browser
     // can't probe them. Validate the URL shape here; the first sync verifies it
     // for real and surfaces any problem in the feed's lastError.
+    const board = BOARD_SOURCES.includes(source) ? parseBoardCareerUrl(source, careerSiteUrl) : null;
+    if (board?.probe) {
+      // Lever, Workable and SmartRecruiters answer browser requests: count the live jobs.
+      setEndpointCheck({ status: "checking", jobCount: 0 });
+      const ctrl = new AbortController();
+      const timer = setTimeout(async () => {
+        try {
+          const resp = await fetch(board.probe.url, { signal: ctrl.signal });
+          const data = resp.ok ? await resp.json().catch(() => null) : null;
+          const jobCount = data ? board.probe.count(data) : 0;
+          setEndpointCheck(jobCount > 0 ? { status: "valid", jobCount } : { status: "invalid", jobCount: 0 });
+        } catch (err) {
+          if (err.name !== "AbortError") setEndpointCheck({ status: "invalid", jobCount: 0 });
+        }
+      }, 500);
+      return () => {
+        clearTimeout(timer);
+        ctrl.abort();
+      };
+    }
     if (URL_SOURCES.has(source)) {
       const parsed = parseCareerUrlFor(source, careerSiteUrl);
       setEndpointCheck(
@@ -525,7 +571,7 @@ export default function Feeds({ user }) {
     <div className="page-wrapper">
       <div className="page-header">
         <h1>Feed Management</h1>
-        <p>Connect Greenhouse, AshbyHQ, Workday and Oracle Cloud job boards, manage your sources, and trigger syncs.</p>
+        <p>Connect Greenhouse, AshbyHQ, Workday, Oracle Cloud, Lever, Workable, SmartRecruiters and BambooHR job boards, manage your sources, and trigger syncs.</p>
       </div>
 
       <div className="section-grid">
@@ -537,7 +583,10 @@ export default function Feeds({ user }) {
             Connect <span className="font-semibold">Greenhouse</span>,{" "}
             <span className="font-semibold">AshbyHQ</span>,{" "}
             <span className="font-semibold">Workday</span> (NVIDIA, Salesforce, Intel, etc.),{" "}
-            <span className="font-semibold">Oracle Cloud</span> (Oracle, JPMorgan Chase, Dell, etc.) and{" "}
+            <span className="font-semibold">Oracle Cloud</span> (Oracle, JPMorgan Chase, Dell, etc.),{" "}
+            <span className="font-semibold">Lever</span>, <span className="font-semibold">Workable</span>,{" "}
+            <span className="font-semibold">SmartRecruiters</span> (ServiceNow, Western Digital, etc.),{" "}
+            <span className="font-semibold">BambooHR</span> and{" "}
             <span className="font-semibold">Eightfold.ai</span> (Microsoft, etc.) job boards.
           </p>
 
@@ -572,7 +621,9 @@ export default function Feeds({ user }) {
                       ? "e.g. NVIDIA, Salesforce, Intel"
                       : source === "oracle"
                         ? "e.g. Oracle, JPMorgan Chase, Dell"
-                        : "e.g. otter, stradahq, thetradedesk"
+                        : BOARD_RULES[source]
+                          ? BOARD_RULES[source].example
+                          : "e.g. otter, stradahq, thetradedesk"
                   }
                 />
               </div>
@@ -597,7 +648,7 @@ export default function Feeds({ user }) {
                   <legend className="text-xs font-black uppercase tracking-widest text-gray-400">
                     Job Board
                   </legend>
-                  <div className="mt-3 space-y-6 sm:flex sm:items-center sm:space-y-0 sm:space-x-10">
+                  <div className="mt-3 space-y-6 sm:flex sm:flex-wrap sm:items-center sm:space-y-0 sm:gap-x-10 sm:gap-y-3">
                     {JOB_SOURCES.map((jobSource) => (
                       <div key={jobSource.id} className="flex items-center">
                         <input
@@ -626,7 +677,17 @@ export default function Feeds({ user }) {
                 >
                   {URL_SOURCES.has(source)
                     ? parseCareerUrlFor(source, careerSiteUrl)
-                      ? `${parseCareerUrlFor(source, careerSiteUrl).apiUrl} — verified on first sync`
+                      ? `${parseCareerUrlFor(source, careerSiteUrl).apiUrl}${
+                          !parseCareerUrlFor(source, careerSiteUrl).probe
+                            ? " — verified on first sync"
+                            : endpointCheck.status === "valid"
+                              ? ` — ${endpointCheck.jobCount}${endpointCheck.jobCount >= (parseCareerUrlFor(source, careerSiteUrl).probe.cap || Infinity) ? "+" : ""} ${parseCareerUrlFor(source, careerSiteUrl).probe.unit || "jobs"} live`
+                              : endpointCheck.status === "invalid"
+                                ? source === "smartrecruiters"
+                                  ? " — no US jobs for this company ID"
+                                  : " — no jobs on this board"
+                                : " — checking…"
+                        }`
                       : careerSiteUrl.trim()
                         ? `Not a ${prettySourceLabel(source)} career site URL — expected ${URL_RULES[source].placeholder}`
                         : `Paste the company's ${prettySourceLabel(source)} career page; the JSON endpoint is derived from it.`
