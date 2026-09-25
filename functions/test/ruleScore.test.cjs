@@ -91,3 +91,14 @@ test("thin evidence is pulled toward the middle; the title's head decides the ty
   const pm = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Product Manager, Developer Platform", description: jd(["Python", "AWS", "Kubernetes", "PostgreSQL"]) });
   assert.ok(pm.score <= 15, `product manager got ${pm.score}`);
 });
+
+test("which jobs still go to the AI", () => {
+  const own = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Software Engineer", description: jd(["Go", "Rust", "C++", "Python", "Kafka"]) });
+  assert.ok(own.score < 40 && own.aiWorthy, `own-type middling job: ${own.score}`); // own type, rule unsure
+  const other = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Account Executive", description: jd(["Salesforce", "Excel"]) });
+  assert.equal(other.aiWorthy, false);
+  const years = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Staff Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
+  assert.ok(years.score <= 35 && years.aiWorthy, "strong match held down by years");
+  const blank = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Software Engineer", description: "<p>Join our team!</p>" });
+  assert.equal(blank.aiWorthy, true);
+});

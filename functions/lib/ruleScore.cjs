@@ -23,7 +23,7 @@
 const { scoreAssessment, candidateYearsOf, isSoftwareCandidate, buildProfileText, contentWords } = require("./jobFit.cjs");
 const { classifyTitle, familiesForProfile, ownFamilyForProfile, ADJACENT } = require("./jobFamilies.cjs");
 
-const RULE_VERSION = 2; // bump when the rules change, so stored rule scores are redone
+const RULE_VERSION = 3; // bump when the rules change, so stored rule scores are redone
 
 // id: canonical skill; re: how it's written; group: siblings that earn partial credit.
 // Case-sensitive patterns are for words that are also ordinary English (Go, React, Swift, R).
@@ -225,6 +225,10 @@ const GROUP_OF = Object.fromEntries(SKILLS.map((s) => [s.id, s.group]));
 // in its targets (median AI score 0–15 for a software profile).
 const FAR = { software: ["solutions", "security", "data_analytics", "it_support"], ml_ai: ["solutions"], data_engineering: ["solutions"] };
 const FAR_CAP = 30;
+// Hybrid: which jobs still go to the AI (see aiWorthy).
+const AI_MIN = 40;
+const SAME_TYPE_AI_MIN = 20;
+const YEARS_CAPPED_COVERAGE = 50;
 const SHRINK_TO = 45;
 const SHRINK_WEIGHT = 4; // = two must-haves' worth of evidence
 const PLAIN_YES = 0.6;
@@ -300,11 +304,21 @@ function ruleAssessJob({ profile, jobTitle, description, targets = null, mine = 
   const shrunk = Math.round((fit.score * weight + SHRINK_TO * SHRINK_WEIGHT) / (weight + SHRINK_WEIGHT));
   if (shrunk < fit.score) fit = { ...fit, score: shrunk };
   if (tier === "far" && fit.score > FAR_CAP) fit = { ...fit, score: FAR_CAP, capNote: "Related role, not quite yours", reason: fit.reason.startsWith("Related role") ? fit.reason : `Related role, not quite yours · ${fit.reason.charAt(0).toLowerCase()}${fit.reason.slice(1)}` };
+  // Should the AI look at this job? Yes when the rule score says it might be
+  // good, and where the rule score is least reliable: jobs of the profile's own
+  // type with middling scores, strong matches held down by a years cap the AI
+  // may read differently, and descriptions with no recognizable skills.
+  // Measured: keeps 351/351 AI 80+ and 647/653 AI 60+ jobs; ~2/3 of matching jobs go on.
+  const yearsCapped = /^Asks for/.test(fit.capNote || "");
+  const aiWorthy = fit.score >= AI_MIN
+    || (tier === "same" && fit.score >= SAME_TYPE_AI_MIN)
+    || (yearsCapped && (fit.coverage ?? 0) >= YEARS_CAPPED_COVERAGE)
+    || parsed.requirements.length === 0;
   if (!fit.requirements.length) {
     // Nothing checkable found (short or non-technical description): neutral, not zero.
-    return { ...fit, method: "rule", ruleVersion: RULE_VERSION, score: Math.min(fit.score || 40, 40), coverage: null, reason: "Couldn't read requirements from the description" };
+    return { ...fit, method: "rule", ruleVersion: RULE_VERSION, tier, aiWorthy: true, score: Math.min(fit.score || 40, 40), coverage: null, reason: "Couldn't read requirements from the description" };
   }
-  return { ...fit, method: "rule", ruleVersion: RULE_VERSION };
+  return { ...fit, method: "rule", ruleVersion: RULE_VERSION, tier, aiWorthy };
 }
 
-module.exports = { RULE_VERSION, SKILLS, ruleAssessJob, parseRequirements, profileSkills, descriptionLines };
+module.exports = { RULE_VERSION, AI_MIN, SKILLS, ruleAssessJob, parseRequirements, profileSkills, descriptionLines };

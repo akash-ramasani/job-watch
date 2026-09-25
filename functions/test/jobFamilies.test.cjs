@@ -80,3 +80,15 @@ test("the web app's job-type list matches these types", () => {
   const backend = [...FAMILY_IDS, "engineering_general"].map((id) => [id, FAMILIES[id].label]);
   assert.deepEqual(web, backend);
 });
+
+test("audit fixes: engineer titles, design engineers, eng directors, business analytics, dense descriptions", () => {
+  for (const t of ["Technical Product Manager / Engineer", "Senior GRC Engineer", "Senior Design Engineer, Design Systems", "UX Design Engineer, Content Tooling", "Director of Engineering, Logistics"]) {
+    assert.equal(shouldAssess(t, SDE, MISSION).assess, true, t);
+  }
+  for (const t of ["Manager, Sales Strategy & Operations", "Associate Manager, Consumer Pricing & Affordability", "Revenue Operations Manager", "Business Operations Associate"]) {
+    assert.equal(shouldAssess(t, DA, MISSION).assess, true, t);
+  }
+  const dense = "SQL, Tableau, Power BI, Looker dashboards, Excel, statistics, A/B testing, KPIs and weekly reporting with Python and dbt. ".repeat(3);
+  assert.equal(shouldAssess("Finance & Business Management", DA, dense).assess, true);
+  assert.equal(shouldAssess("Finance & Business Management", DA, MISSION).assess, false);
+});

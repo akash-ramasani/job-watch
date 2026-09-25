@@ -97,10 +97,10 @@ const SCORING_CONCURRENCY = 4;
 // Share of jobs skipped by the job-type filter that get a full assessment
 // anyway, to measure what the filter misses (settings/scoring.audit*).
 const AUDIT_PERCENT = 3;
-// Hybrid scoring: every job gets the free rule score (ruleScore.cjs); only jobs
-// scoring at least this go on to the AI assessment. Measured on 800 held-out
-// AI-scored jobs: keeps 98% of AI 80+ and 97% of AI 60+ jobs.
-const HYBRID_AI_MIN = 40;
+// Hybrid scoring: every job gets the free rule score (ruleScore.cjs); the AI
+// assessment runs only where the rule score says it's worth it (rule.aiWorthy:
+// score ≥ 40, or the rule score is unsure). Measured on 1,535 AI-scored jobs:
+// keeps 351/351 AI 80+ and 647/653 AI 60+; about 2/3 of matching jobs go on.
 const RULE_FIT_VERSION = `rule-${RULE_VERSION}`;
 const SYNC_RUN_TTL_DAYS = 30; // syncRuns docs expire via the TTL policy on expireAt
 const SYNC_TIME_BUDGET_MS = 470 * 1000; // leave room for aggregation rebuilds after scoring
@@ -2187,8 +2187,22 @@ function locationTokenMatches(token) {
     if (NORM.abbr.has(abbr)) return true;
   }
 
+  // Free-form US and remote wording ("Remote - US", "U.S. (Remote)", "United
+  // States of America", "North America", "Remote"): these were dropped because
+  // only exact phrases matched. A named non-US place still wins for plain
+  // remote ("Remote - Canada"), but not over an explicit US ("US or Canada").
+  const text = raw.replace(/[-–—_]+/g, " ");
+  if (US_SIGNAL_RE.test(text)) return true;
+  if (ANYWHERE_RE.test(text) && !NON_US_LOCATION_RE.test(text) && !NON_US_REMOTE_RE.test(text)) return true;
+
   return false;
 }
+
+const US_SIGNAL_RE = /\b(united states|usa|u\.\s?s\.(\s?a\.)?|us|north america|nationwide)\b/i;
+const ANYWHERE_RE = /\b(remote|anywhere|worldwide|global|distributed|work from home|wfh|americas)\b/i;
+// More non-US places, only for remote-style locations ("Remote - Germany").
+// Not merged into NON_US_LOCATION_RE: some share names with US towns (Dublin, OH).
+const NON_US_REMOTE_RE = /\b(germany|deutschland|uk|u\.k\.|england|scotland|wales|britain|hong kong|(latin|south|central) america|london|berlin|munich|hamburg|paris|dublin|amsterdam|toronto|vancouver|montreal|ottawa|calgary|sydney|melbourne|tokyo|seoul|bangalore|bengaluru|hyderabad|pune|chennai|mumbai|delhi|gurgaon|gurugram|noida|tel aviv|warsaw|krakow|prague|lisbon|madrid|barcelona|zurich|stockholm|copenhagen|oslo|helsinki|brussels|vienna|budapest|bucharest|istanbul|dubai|abu dhabi|cairo|lagos|nairobi|s[aã]o paulo|buenos aires|bogot[aá]|mexico city|manila|jakarta|kuala lumpur|bangkok|taipei|shanghai|beijing|shenzhen|canadian|british|czechia)\b/i;
 
 /**
  * ----------------------------
@@ -2545,7 +2559,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       // Free first: the rule score. The AI only sees jobs that might be good
       // matches — unless this is a forced rescore or an audit sample.
       const rule = ruleAssessJob({ profile, jobTitle: job.title, description, targets, mine });
-      const wantsAi = force || audits.has(job.jobDocId) || rule.score >= HYBRID_AI_MIN;
+      const wantsAi = force || audits.has(job.jobDocId) || rule.aiWorthy;
       if (!wantsAi) { ruleOnly++; results.push(ruleResult(job, rule, false)); return; }
       if (outOfCredits) { results.push(ruleResult(job, rule, true)); return; }
 
@@ -2580,7 +2594,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     }
   })));
   if (outOfCredits) logger.error(`scoreNewJobsForUser: OpenAI account is out of credits; jobs above the rule cutoff keep their rule score for now (userId=${userId})`);
-  if (ruleOnly) logger.info(`hybrid userId=${userId}: ${ruleOnly} jobs scored by rules only (below ${HYBRID_AI_MIN})`);
+  if (ruleOnly) logger.info(`hybrid userId=${userId}: ${ruleOnly} jobs scored by rules only`);
 
   // Duplicates take their primary's assessment.
   const byJob = new Map(results.map((r) => [r.jobId, r]));
@@ -4295,9 +4309,9 @@ exports.dailyAggregationReconciliation = onSchedule(
   }
 );
 
-// Internal helpers for local scripts (scripts/harvest-week.mjs). Non-enumerable,
+// Internal helpers for local scripts (scripts/harvest-week.mjs, scripts/audit-filters.mjs). Non-enumerable,
 // so Firebase's function discovery never sees it and nothing is deployed for it.
 Object.defineProperty(module.exports, "__internals", {
   enumerable: false,
-  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID },
+  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens },
 });

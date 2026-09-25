@@ -17,7 +17,7 @@
 const FAMILIES = {
   software: {
     label: "Software engineering",
-    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware)\b/i,
+    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware|design engineer|ux engineer|ui engineer|design technologist|creative technologist|director of engineering|engineering director|head of engineering|vp,? (of )?engineering|chief technology officer)\b/i,
   },
   ml_ai: {
     label: "Machine learning & AI",
@@ -33,7 +33,7 @@ const FAMILIES = {
   },
   data_analytics: {
     label: "Data & business analytics",
-    re: /\b(analyst|analytics|analytic|business intelligence|bi|insights?|reporting|report developer|dashboard|tableau|power ?bi|looker|sql|metrics|measurement|data (specialist|associate|steward|governance|quality|visuali[sz]ation|coordinator|manager|lead|consultant)|business systems|business analysis|intelligence|analysis|data(?! center)|forecast\w*|kpi)\b/i,
+    re: /\b(analyst|analytics|analytic|business intelligence|bi|insights?|reporting|report developer|dashboard|tableau|power ?bi|looker|sql|metrics|measurement|data (specialist|associate|steward|governance|quality|visuali[sz]ation|coordinator|manager|lead|consultant)|business systems|business analysis|intelligence|analysis|data(?! center)|forecast\w*|kpi|strategy (and|&) operations|business operations|bizops|sales operations|revenue operations|revops|pricing|planning (and|&) (performance|analysis)|performance analytics)\b/i,
   },
   devops_cloud: {
     label: "DevOps, SRE & cloud",
@@ -131,6 +131,7 @@ const FAMILIES = {
 
 FAMILIES.engineering_general = { label: "Other engineering", re: /$^/ }; // assigned in classifyTitle, never by pattern
 const FAMILY_IDS = Object.keys(FAMILIES).filter((id) => id !== "engineering_general");
+const ENGINEERING = new Set(["software", "ml_ai", "data_engineering", "devops_cloud", "security", "qa_test", "solutions", "hardware_eng", "engineering_general", "it_support"]);
 
 /**
  * Every type a job title reads as. Empty = can't tell from the title.
@@ -145,8 +146,9 @@ function classifyTitle(title) {
   if (!t) return [];
   const found = FAMILY_IDS.filter((id) => FAMILIES[id].re.test(t));
   if (/\bIT\b/.test(t) && !found.includes("it_support")) found.push("it_support"); // "IT" only in capitals
-  // Any other "engineer" title: assessed for engineering profiles, skipped for the rest.
-  if (!found.length && /\bengineer(ing|s)?\b/i.test(t)) return ["engineering_general"];
+  // An "engineer" title always carries an engineering type, even beside
+  // another one ("Technical Product Manager / Engineer", "GRC Engineer").
+  if (/\bengineer(ing|s)?\b/i.test(t) && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
   return found;
 }
 
@@ -229,13 +231,17 @@ const VOCAB_FOR = {
   data: ["data_analytics", "data_science", "data_engineering"],
 };
 
-/** Does a description use the core vocabulary of any targeted type? null = no vocabulary applies. */
-function descriptionFits(description, targets) {
+/** Does a description use the core vocabulary of any targeted type (at least `min` distinct terms)? null = no vocabulary applies. */
+function descriptionFits(description, targets, min = 2) {
   const vocabs = Object.keys(VOCAB_FOR).filter((v) => VOCAB_FOR[v].some((f) => targets.includes(f)));
   if (!vocabs.length) return null;
   const text = String(description || "").replace(/<[^>]+>/g, " ");
-  return vocabs.some((v) => VOCAB_RE[v].filter((re) => re.test(text)).length >= 2);
+  return vocabs.some((v) => VOCAB_RE[v].filter((re) => re.test(text)).length >= min);
 }
+// A title of another type is still assessed when its description is dense
+// with the profile's own vocabulary (a "Finance & Business Management" role
+// that is really SQL/Tableau analytics).
+const STRONG_DESCRIPTION_TERMS = 8;
 
 /**
  * Should this user's AI assessment run on this job?
@@ -248,7 +254,11 @@ function shouldAssess(title, targets, description = "") {
   const families = classifyTitle(title);
   if (!targets || !targets.length) return { assess: true, families, why: "unknown" };
   if (String(title || "").trim().length < 3) return { assess: true, families, why: "unknown" }; // no real title
-  if (families.length) return { assess: families.some((f) => targets.includes(f)), families, why: "type" };
+  if (families.length) {
+    if (families.some((f) => targets.includes(f))) return { assess: true, families, why: "type" };
+    if (descriptionFits(description, targets, STRONG_DESCRIPTION_TERMS)) return { assess: true, families, why: "description" };
+    return { assess: false, families, why: "type" };
+  }
   if (!description || String(description).length < 200) return { assess: true, families, why: "unknown" };
   const fits = descriptionFits(description, targets);
   return { assess: fits !== false, families, why: fits === null ? "unknown" : "description" };
