@@ -400,14 +400,35 @@ export default function AdminUsers({ user }) {
   const [deletingInvite, setDeletingInvite] = useState(false);
   const { showToast } = useToast();
 
+  // Render from Firestore right away (users + invites in parallel, ~100 ms),
+  // then fill in sign-in details from Firebase Auth. That comes from a Cloud
+  // Function that is usually cold when this page opens (~5 s to start), so it
+  // no longer blocks the page.
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const getAdminUsersList = httpsCallable(functions, "getAdminUsersList");
-      const { data } = await getAdminUsersList();
-      if (data?.users) setUsersList(data.users);
-
-      const invitesSnap = await getDocs(collection(db, "invites"));
+      const [usersSnap, invitesSnap] = await Promise.all([
+        getDocs(collection(db, "users")),
+        getDocs(collection(db, "invites")),
+      ]);
+      const ms = (t) => (t?.toMillis ? t.toMillis() : null);
+      setUsersList(
+        usersSnap.docs
+          .map((d) => {
+            const x = d.data();
+            return {
+              id: d.id,
+              email: x.email || null,
+              fullName: x.fullName || [x.firstName, x.lastName].filter(Boolean).join(" ") || null,
+              aiAccess: x.aiAccess !== false,
+              accountStatus: x.accountStatus,
+              lastFetchAt: ms(x.lastFetchAt),
+              createdAt: ms(x.createdAt),
+              lastSignInTime: ms(x.activeSession?.registeredAt), // until Auth's value arrives
+            };
+          })
+          .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      );
       const invitesData = [];
       invitesSnap.forEach(d => invitesData.push({ id: d.id, ...d.data() }));
       setInvitesList(invitesData.sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0)));
@@ -417,6 +438,17 @@ export default function AdminUsers({ user }) {
     } finally {
       setLoading(false);
     }
+
+    // Sign-in email and last sign-in time from Firebase Auth, merged in when ready.
+    httpsCallable(functions, "getAdminUsersList")()
+      .then(({ data }) => {
+        const byId = new Map((data?.users || []).map((u) => [u.id, u]));
+        setUsersList((prev) => prev.map((u) => {
+          const a = byId.get(u.id);
+          return a ? { ...u, email: a.email || u.email, fullName: u.fullName || a.fullName, lastSignInTime: a.lastSignInTime || u.lastSignInTime } : u;
+        }));
+      })
+      .catch((err) => console.warn("Auth details unavailable:", err?.message));
   }, [showToast]);
 
   useEffect(() => {
