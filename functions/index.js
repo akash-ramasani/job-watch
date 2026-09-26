@@ -69,7 +69,7 @@ function requireOpenAI() {
 
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
 const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
-const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenedFit, isSoftwareCandidate } = require("./lib/jobFit.cjs");
+const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenedFit, isSoftwareCandidate, recentTitlesOf, PROMPT_VERSION } = require("./lib/jobFit.cjs");
 const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./lib/jobFamilies.cjs");
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("./lib/ruleScore.cjs");
 const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligibility.cjs");
@@ -848,7 +848,7 @@ exports.rescoreJobs = onRequest(
       if (Date.now() > deadlineMs) return { id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null, new: null, reason: "skipped (time)" };
       try {
         const fit = j.fullDescription
-          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), softwareCandidate: isSoftwareCandidate(profile), jobTitle: j.title, jobDescription: j.fullDescription })
+          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), softwareCandidate: isSoftwareCandidate(profile), candidateTitles: recentTitlesOf(profile), jobTitle: j.title, jobDescription: j.fullDescription })
           : null;
         return {
           id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null,
@@ -2875,6 +2875,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   const profileStamp = profileStampOf(profile);
   const candidateYears = candidateYearsOf(profile);
   const softwareCandidate = isSoftwareCandidate(profile);
+  const candidateTitles = recentTitlesOf(profile);
   const targets = jobTypesFor(profile, prefs);
   // Skips and rule scores depend on the job types and on whether the user needs
   // visa sponsorship; changing either redoes them (free).
@@ -2973,7 +2974,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     if (!sig) return null;
     const snap = await userScoresCol.where("fit.sig", "==", sig).where("fit.profileStamp", "==", profileStamp).limit(1).get();
     const prior = snap.empty ? null : snap.docs[0].data()?.fit;
-    return prior && !prior.screened && prior.version === FIT_VERSION ? prior : null;
+    return prior && !prior.screened && prior.version === FIT_VERSION && (prior.prompt || 1) === PROMPT_VERSION ? prior : null;
   };
   const auditMisses = [];
   const mine = profileSkills(profile);
@@ -3032,7 +3033,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       let fit = await priorFitFor(job.sig).catch(() => null); // scored before under another id
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
         try {
-          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, softwareCandidate, jobTitle: job.title, jobDescription: description });
+          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, softwareCandidate, candidateTitles, jobTitle: job.title, jobDescription: description });
           if (!fit) await new Promise((r) => setTimeout(r, 800));
         } catch (err) {
           if (isOutOfCredits(err)) { outOfCredits = true; break; }
@@ -3138,6 +3139,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
     profileText: buildProfileText(profile),
     candidateYears: candidateYearsOf(profile),
     softwareCandidate: isSoftwareCandidate(profile),
+    candidateTitles: recentTitlesOf(profile),
     jobTitle: job.title,
     jobDescription: description,
   });

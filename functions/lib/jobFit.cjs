@@ -228,6 +228,11 @@ function shortReq(s) {
   return `${cut.slice(0, cut.lastIndexOf(" ") > 20 ? cut.lastIndexOf(" ") : 37).replace(/[\s,;:/-]+$/, "")}…`;
 }
 
+// Bump when SYSTEM_PROMPT changes what an assessment means; stored fits carry
+// it as fit.prompt (missing = 1), and older ones aren't reused for duplicates.
+// 2: roleFit judged against the candidate's own recent titles (analysts too).
+const PROMPT_VERSION = 2;
+
 const SYSTEM_PROMPT = `You compare one job description with one candidate's profile. You are strict and literal.
 
 1. List the job's 6-12 most important requirements, in the job's own words, shortest form (e.g. "Kubernetes", "5+ years backend development", "Go or Java", "Security+ certification"). Mark each "must" (required / minimum qualifications) or "nice" (preferred / bonus).
@@ -239,11 +244,15 @@ const SYSTEM_PROMPT = `You compare one job description with one candidate's prof
    For "yes" and "partial", "e" MUST be a short exact quote copied from the PROFILE (5-15 words). Never quote the job description. If you can't quote the profile, answer "no".
    For a years requirement, compare with the candidate's total professional experience given at the top of the profile.
 3. minYears: the minimum years of professional experience the job requires, as a number (null if not stated).
-4. roleFit — the kind of WORK only, ignoring industry, domain, product area and platform:
-   "same" = the same function as the candidate's recent titles (any kind of software engineering counts as the same function for a software engineer, whatever the domain);
-   "adjacent" = related technical function (data engineering, DevOps/SRE, ML research, solutions architecture, QA automation for a software engineer);
-   "different" = another field (sales, marketing, recruiting, HR, finance, nursing, manufacturing/mechanical/electrical/materials engineering, product or program management for a software engineer).
-   roleNote: a few words when not "same", e.g. "Sales role, not engineering".
+4. roleFit — the kind of WORK only, compared with the CANDIDATE'S RECENT TITLES, ignoring industry, domain, product area and platform:
+   "same" = the same function as those titles, e.g.
+     for a software engineer: any kind of software engineering, whatever the domain;
+     for a business or data analyst: business analysis, data / BI / reporting analysis, analytics, and analyst or associate roles in strategy & operations, finance, product or marketing whose work is mainly data analysis, SQL, dashboards and requirements.
+   "adjacent" = a related function the candidate could credibly move into, e.g.
+     for a software engineer: data engineering, DevOps/SRE, ML, solutions architecture, QA automation;
+     for a business or data analyst: data science, analytics engineering, data engineering, product or program management, business operations, strategy & operations roles that are mostly planning rather than analysis.
+   "different" = another field, e.g. sales, account management, marketing execution, recruiting, HR, payroll or accounting, nursing, mechanical/electrical/manufacturing engineering; software engineering for an analyst; product or program management for a software engineer.
+   roleNote: a few words naming the job's field when not "same", e.g. "Sales role", "Payroll role", "Engineering role".
 
 Return ONLY JSON:
 {"roleFit":"same|adjacent|different","roleNote":"...","minYears":null,"requirements":[{"r":"...","n":"must|nice","c":"yes|partial|no","e":"exact quote from profile or empty"}]}`;
@@ -252,7 +261,8 @@ Return ONLY JSON:
  * Ask the model and score its answer.
  * @param {{ client, model, profileText, jobTitle, jobDescription, timeoutMs? }} args
  */
-async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, softwareCandidate = true, timeoutMs = 45000 }) {
+async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, softwareCandidate = true, candidateTitles = [], timeoutMs = 45000 }) {
+  const titles = (candidateTitles || []).filter(Boolean).slice(0, 3).join("; ");
   const completion = await client.chat.completions.create(
     {
       model,
@@ -261,7 +271,7 @@ async function assessJobFit({ client, model, profileText, jobTitle, jobDescripti
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `## PROFILE${candidateYears != null ? ` (total professional experience: about ${candidateYears} years)` : ""}\n${profileText}\n\n## JOB: ${jobTitle || ""}\n${String(jobDescription || "").slice(0, 6000)}` },
+        { role: "user", content: `${titles ? `## CANDIDATE'S RECENT TITLES: ${titles}\n\n` : ""}## PROFILE${candidateYears != null ? ` (total professional experience: about ${candidateYears} years)` : ""}\n${profileText}\n\n## JOB: ${jobTitle || ""}\n${String(jobDescription || "").slice(0, 6000)}` },
       ],
     },
     { timeout: timeoutMs }
@@ -274,7 +284,13 @@ async function assessJobFit({ client, model, profileText, jobTitle, jobDescripti
     return null;
   }
   if (!Array.isArray(raw?.requirements) || raw.requirements.length === 0) return null;
-  return scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate });
+  const fit = scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate });
+  return fit && { ...fit, prompt: PROMPT_VERSION };
+}
+
+/** The candidate's most recent job titles, newest first (the AI judges roleFit against them). */
+function recentTitlesOf(profile) {
+  return (profile?.roles || []).map((r) => String(r.title || "").trim()).filter(Boolean).slice(0, 3);
 }
 
 /**
@@ -305,6 +321,8 @@ function screenedFit({ families = [], why = "type" } = {}) {
 
 module.exports = {
   FIT_VERSION,
+  PROMPT_VERSION,
+  recentTitlesOf,
   assessJobFit,
   screenedFit,
   isSoftwareCandidate,
