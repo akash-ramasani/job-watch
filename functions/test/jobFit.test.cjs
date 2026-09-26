@@ -2,7 +2,7 @@
 // Run: npm test (in functions/)
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf, isSoftwareCandidate } = require("../lib/jobFit.cjs");
+const { scoreAssessment, evidenceSupported, contentWords, buildProfileText, reasonFor, candidateYearsOf, isSoftwareCandidate, isAnalystCandidate } = require("../lib/jobFit.cjs");
 
 const PROFILE = buildProfileText({
   summary: "Software engineer with 5+ years of experience **shipping production backend systems**.",
@@ -103,6 +103,20 @@ test("title rules follow the candidate, not a software-engineer default", () => 
   // Director titles are fine for someone with 8+ years.
   assert.equal(analyst("Director of Analytics", {}, 9).score, 100);
   assert.equal(analyst("Director of Analytics", {}, 4).score, 35);
+});
+
+test("data and analytics titles are at least related for an analyst", () => {
+  const all = [{ r: "SQL", n: "must", c: "yes", e: "Python, TypeScript, Java" }];
+  const forAnalyst = (jobTitle, analystCandidate = true) =>
+    scoreAssessment({ roleFit: "different", requirements: all }, PROFILE, { jobTitle, candidateYears: 5, softwareCandidate: false, analystCandidate }).roleFit;
+  for (const t of ["Data Scientist", "Senior Data Engineer", "Marketing Analytics Manager", "Business Intelligence Developer", "Data Analyst II", "Analytics Engineer"]) assert.equal(forAnalyst(t), "adjacent", t);
+  // Other kinds of analyst stay the model's call.
+  for (const t of ["Senior Financial Analyst", "Board Certified Behavior Analyst (BCBA)", "Senior GRC Analyst", "Senior Structural Analyst - Space"]) assert.equal(forAnalyst(t), "different", t);
+  // Only for an analyst candidate.
+  assert.equal(forAnalyst("Data Scientist", false), "different");
+  assert.equal(isAnalystCandidate(["Senior Business Analyst", "Business Analyst"], false), true);
+  assert.equal(isAnalystCandidate(["Senior Software Engineer"], true), false);
+  assert.equal(isAnalystCandidate(["Registered Nurse"], false), false);
 });
 
 test("software candidate is read from role titles", () => {

@@ -96,6 +96,16 @@ const ABOVE_TITLE_RE = /\b(principal|distinguished|fellow|director|vp|vice presi
 const SOFTWARE_TITLE_RE = /\b(software (engineer|developer|development engineer)|sde|swe|back-?end (engineer|developer)|full[- ]?stack|forward[- ]deployed|platform engineer|web developer|front-?end (engineer|developer)|mobile (engineer|developer)|ios (engineer|developer)|android (engineer|developer))\b/i;
 const ADJACENT_TITLE_RE = /\b(data engineer|devops|site reliability|sre|(ml|machine learning|ai) engineer|solutions? architect|cloud engineer|infrastructure engineer|security engineer|qa automation|test automation|sdet|data scientist|analytics engineer)\b/i;
 
+// A business / data analyst's history, and job titles that are at least a
+// related field for one (the model sometimes calls these "different").
+const ANALYST_ROLE_RE = /\b(?:business|data|bi|reporting|analytics|insights|product|operations|decision support) analyst\b|\banalytics\b|\bbusiness intelligence\b/i;
+const ANALYST_ADJACENT_TITLE_RE = /\b(?:data|business|bi|reporting|analytics|insights|product|marketing|decision support|operations) (?:analyst|analytics)\b|\bbusiness intelligence\b|\bdata scien(?:ce|tist)\b|\bdata engineer|\banalytics (?:engineer|consultant|manager|lead|advisor|specialist)\b|\bdecision scien(?:ce|tist)\b/i;
+
+/** Is the candidate a business or data analyst (and not a software engineer)? */
+function isAnalystCandidate(titles, softwareCandidate) {
+  return !softwareCandidate && ANALYST_ROLE_RE.test((titles || []).join(" | "));
+}
+
 /** Does the candidate's own history read as software engineering? */
 function isSoftwareCandidate(profile) {
   const titles = (profile?.roles || []).map((r) => r.title || "").join(" | ");
@@ -130,7 +140,7 @@ const SOFT_REQ_RE = /\b(ambiguit|exceptional|first[- ]principles|passion|curio|c
 const COVER_VALUE = { yes: 1, partial: 0.5, no: 0 };
 
 /** Pure: turn the model's raw answer into a checked, scored assessment. */
-function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = null, softwareCandidate = true } = {}) {
+function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = null, softwareCandidate = true, analystCandidate = false } = {}) {
   const profileWords = new Set(contentWords(profileText));
   const reqs = (Array.isArray(raw?.requirements) ? raw.requirements : [])
     .map((q) => ({
@@ -164,6 +174,9 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   if (softwareCandidate) {
     if (SOFTWARE_TITLE_RE.test(jobTitle)) roleFit = "same";
     else if (roleFit === "different" && ADJACENT_TITLE_RE.test(jobTitle)) roleFit = "adjacent";
+  } else if (analystCandidate && roleFit === "different" && ANALYST_ADJACENT_TITLE_RE.test(jobTitle)) {
+    // Data science / data engineering / analytics titles are at least related for an analyst.
+    roleFit = "adjacent";
   }
 
   // Level: decided here, not by the model — titles for the clear cases,
@@ -231,7 +244,8 @@ function shortReq(s) {
 // Bump when SYSTEM_PROMPT changes what an assessment means; stored fits carry
 // it as fit.prompt (missing = 1), and older ones aren't reused for duplicates.
 // 2: roleFit judged against the candidate's own recent titles (analysts too).
-const PROMPT_VERSION = 2;
+// 3: data science / engineering / analytics titles are never "different" for an analyst.
+const PROMPT_VERSION = 3;
 
 const SYSTEM_PROMPT = `You compare one job description with one candidate's profile. You are strict and literal.
 
@@ -284,7 +298,7 @@ async function assessJobFit({ client, model, profileText, jobTitle, jobDescripti
     return null;
   }
   if (!Array.isArray(raw?.requirements) || raw.requirements.length === 0) return null;
-  const fit = scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate });
+  const fit = scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate, analystCandidate: isAnalystCandidate(candidateTitles, softwareCandidate) });
   return fit && { ...fit, prompt: PROMPT_VERSION };
 }
 
@@ -323,6 +337,7 @@ module.exports = {
   FIT_VERSION,
   PROMPT_VERSION,
   recentTitlesOf,
+  isAnalystCandidate,
   assessJobFit,
   screenedFit,
   isSoftwareCandidate,

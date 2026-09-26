@@ -9,7 +9,9 @@
 // --redo re-runs AI assessments made with an older prompt (fit.prompt below
 // PROMPT_VERSION in functions/lib/jobFit.cjs) instead of pending ones.
 //
-// Usage: node scripts/ai-score-pending.mjs [--user email] [--redo] [--limit N] [--batch 150]
+// With --redo, --role-fit different and --title <regex> narrow it to those jobs.
+//
+// Usage: node scripts/ai-score-pending.mjs [--user email] [--redo [--role-fit X] [--title RE]] [--limit N] [--batch 150]
 
 import path from "node:path";
 import { readFile } from "node:fs/promises";
@@ -38,7 +40,18 @@ async function pendingIds() {
   const snap = redo
     ? await scoresCol.where("fit.version", "==", 2).select("fit").get()
     : await scoresCol.where("fit.aiPending", "==", true).select("fit.score").get();
-  return snap.docs.filter((d) => todo(d.get("fit"))).map((d) => ({ id: d.id, score: d.get("fit.score") ?? 0 })).sort((a, b) => b.score - a.score).map((r) => r.id);
+  let docs = snap.docs.filter((d) => todo(d.get("fit")));
+  if (redo && arg("--role-fit")) docs = docs.filter((d) => d.get("fit.roleFit") === arg("--role-fit"));
+  if (redo && arg("--title")) {
+    const re = new RegExp(arg("--title"), "i");
+    const jobsCol = firestore.collection("users").doc(ADMIN_UID).collection("jobs");
+    const titles = new Map();
+    for (let i = 0; i < docs.length; i += 300) {
+      for (const j of await firestore.getAll(...docs.slice(i, i + 300).map((d) => jobsCol.doc(d.id)), { fieldMask: ["title"] })) titles.set(j.id, j.get("title") || "");
+    }
+    docs = docs.filter((d) => re.test(titles.get(d.id) || ""));
+  }
+  return docs.map((d) => ({ id: d.id, score: d.get("fit.score") ?? 0 })).sort((a, b) => b.score - a.score).map((r) => r.id);
 }
 
 const env = await readFile(path.join(__dirname, "..", ".env"), "utf8");
