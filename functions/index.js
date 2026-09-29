@@ -58,6 +58,11 @@ const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 // Default OpenAI models used across features. Override via env if needed.
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini";
 const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "gpt-4o-mini";
+// The chat assistant: multi-step tool use and reading the user's tone need the stronger model.
+const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o";
+const ASSISTANT_HISTORY_TURNS = 30; // messages of conversation the model sees
+const ASSISTANT_MESSAGE_MAX_CHARS = 6000;
+const ASSISTANT_TOOL_RESULT_MAX_CHARS = 60000;
 
 function requireOpenAI() {
   const apiKey = OPENAI_API_KEY.value() || process.env.OPENAI_API_KEY;
@@ -74,6 +79,7 @@ const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("./lib/ruleScore.cjs");
 const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligibility.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
+const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
 
@@ -3297,7 +3303,7 @@ async function sendPushNotification(userId, summary, durationMs) {
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
 exports.askAssistant = onRequest(
-  { region: REGION, timeoutSeconds: 300, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 120, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     try {
       let decodedToken;
@@ -3307,170 +3313,84 @@ exports.askAssistant = onRequest(
         return res.status(err.statusCode || 401).json({ error: err.message });
       }
 
-      const { messages } = req.body;
+      const { messages } = req.body || {};
       const activeUserId = decodedToken.uid;
-
-      // Check if AI scoring is enabled
-      const settingsSnap = await db.collection("users").doc(activeUserId).collection("settings").doc("preferences").get();
-
-      if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
-        return res.status(403).json({ error: "AI features are disabled in your settings." });
-      }
 
       if (!Array.isArray(messages)) {
         return res.status(400).json({ error: "Messages array is required." });
       }
 
-      const tools = [
-        {
-          type: "function",
-          function: {
-            name: "list_feeds",
-            description: "List all active job feeds/companies for the user.",
-            parameters: {
-              type: "object",
-              properties: {},
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "get_recent_jobs",
-            description: "Fetch the most recent job listings across all sources.",
-            parameters: {
-              type: "object",
-              properties: {
-                limit: { type: "number", description: "Number of jobs to fetch (default: 10)" },
-              },
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "search_jobs",
-            description: "Search for jobs by title or company name in the recent results.",
-            parameters: {
-              type: "object",
-              properties: {
-                query: { type: "string", description: "Search query (title or company)" },
-                limit: { type: "number", description: "Number of results (default: 5)" },
-              },
-              required: ["query"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "get_sync_status",
-            description: "Check the status of the latest job sync runs.",
-            parameters: {
-              type: "object",
-              properties: {
-                limit: { type: "number", description: "Number of latest runs (default: 3)" },
-              },
-            },
-          },
-        },
-      ];
+      const ctx = createAssistantContext(db, activeUserId, { adminUid: ADMIN_UID });
 
-      const systemPrompt = `You are the JobWatch AI Assistant. You help users manage their job tracking, sync data, and analyze market trends.
-          You have access to the user's specific job listings, feeds, and sync history via tools.
-          Always be concise, professional, and helpful. 
-          IMPORTANT: All timestamps and dates in your responses must be in Pacific Time (PT). 
-          Current User ID: ${activeUserId}`;
+      const prefs = await ctx.prefs();
+      if (prefs?.aiScoringEnabled === false) {
+        return res.status(403).json({ error: "AI features are disabled in your settings." });
+      }
 
-      // Normalize incoming messages to OpenAI shape. Client historically sent
-      // { role, content: "text" } which is compatible with OpenAI as-is.
-      const currentMessages = [
-        { role: "system", content: systemPrompt },
-        ...messages.map((m) => ({
+      // The client sends the whole visible conversation. Keep the recent turns
+      // (the model needs them to resolve follow-ups like "in past 24 hrs?"),
+      // and keep each one a sane size.
+      const history = messages
+        .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+        .slice(-ASSISTANT_HISTORY_TURNS)
+        .map((m) => ({
           role: m.role,
-          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
-        })),
-      ];
+          content: (typeof m.content === "string" ? m.content : JSON.stringify(m.content)).slice(0, ASSISTANT_MESSAGE_MAX_CHARS),
+        }));
+      if (!history.length || history[history.length - 1].role !== "user") {
+        return res.status(400).json({ error: "The last message must be from the user." });
+      }
 
+      const systemPrompt = await buildSystemPrompt(ctx);
+      const currentMessages = [{ role: "system", content: systemPrompt }, ...history];
+      const tools = toolsForOpenAI();
       const client = requireOpenAI();
       let finalResponse = null;
+      const toolsUsed = [];
 
-      // Tool handling loop — cap iterations to guard against loops
+      // Tool loop: the model may search several times (e.g. narrow, then widen) before answering.
       for (let iter = 0; iter < 8; iter++) {
         const response = await client.chat.completions.create({
-          model: OPENAI_SMART_MODEL,
-          max_tokens: 4096,
+          model: OPENAI_CHAT_MODEL,
+          max_tokens: 2048,
+          temperature: 0.4,
           messages: currentMessages,
           tools,
+          tool_choice: iter === 7 ? "none" : "auto",
         });
 
         const choice = response.choices?.[0];
         const message = choice?.message;
-
         if (!message) {
           finalResponse = "";
           break;
         }
 
-        if (choice.finish_reason === "tool_calls" && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
-          currentMessages.push({
-            role: "assistant",
-            content: message.content || "",
-            tool_calls: message.tool_calls,
-          });
+        if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+          currentMessages.push({ role: "assistant", content: message.content || "", tool_calls: message.tool_calls });
 
-          for (const call of message.tool_calls) {
+          const results = await Promise.all(message.tool_calls.map(async (call) => {
             const toolName = call.function?.name;
             let args = {};
             try {
               args = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
-            } catch (e) {
+            } catch {
               args = {};
             }
-
+            const t0 = Date.now();
             let resultData;
             try {
-              switch (toolName) {
-                case "list_feeds": {
-                  const snap = await db.collection("users").doc(activeUserId).collection("feeds").where("archivedAt", "==", null).get();
-                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                  break;
-                }
-                case "get_recent_jobs": {
-                  const limit = args.limit || 10;
-                  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(limit).get();
-                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                  break;
-                }
-                case "search_jobs": {
-                  const query = String(args.query || "").toLowerCase();
-                  const limit = args.limit || 5;
-                  const snap = await db.collection("users").doc(ADMIN_UID).collection("jobs").orderBy("sourceUpdatedTs", "desc").limit(50).get();
-                  resultData = snap.docs
-                    .map(d => ({ id: d.id, ...d.data() }))
-                    .filter(j => (j.title && j.title.toLowerCase().includes(query)) || (j.companyName && j.companyName.toLowerCase().includes(query)))
-                    .slice(0, limit);
-                  break;
-                }
-                case "get_sync_status": {
-                  const limit = args.limit || 3;
-                  const snap = await db.collection("users").doc(activeUserId).collection("syncRuns").orderBy("startedAt", "desc").limit(limit).get();
-                  resultData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-                  break;
-                }
-                default:
-                  resultData = { error: "Unknown tool" };
-              }
+              resultData = await runTool(ctx, toolName, args);
             } catch (err) {
-              resultData = { error: err.message };
+              logger.warn(`askAssistant tool ${toolName} failed`, { uid: activeUserId, args, error: err.message });
+              resultData = { error: `The ${toolName} tool failed: ${err.message}` };
             }
-
-            currentMessages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify(resultData),
-            });
-          }
+            toolsUsed.push({ tool: toolName, args, ms: Date.now() - t0 });
+            let text = JSON.stringify(resultData);
+            if (text.length > ASSISTANT_TOOL_RESULT_MAX_CHARS) text = text.slice(0, ASSISTANT_TOOL_RESULT_MAX_CHARS) + "…(truncated)";
+            return { role: "tool", tool_call_id: call.id, content: text };
+          }));
+          currentMessages.push(...results);
           continue;
         }
 
@@ -3478,16 +3398,18 @@ exports.askAssistant = onRequest(
         break;
       }
 
+      logger.info("askAssistant answered", { uid: activeUserId, turns: history.length, tools: toolsUsed });
+
       return res.json({
         ok: true,
-        response: {
-          role: "assistant",
-          content: finalResponse,
-        },
+        response: { role: "assistant", content: finalResponse || "I couldn't put together an answer just now. Please try asking again." },
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("askAssistant failed:", e);
+      if (isOutOfCredits(e)) {
+        return res.status(503).json({ error: "The AI assistant is out of credits right now. Your jobs and scores still work; please try again later." });
+      }
       return res.status(500).json({ error: msg });
     }
   }

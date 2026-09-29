@@ -37,6 +37,34 @@
         }
       ],
       "density": "SPARSE_ALL"
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "stateCodes",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "sourceUpdatedTs",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isRemote",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sourceUpdatedTs",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [

@@ -342,7 +342,7 @@ export default function App() {
             <Footer />
             {preferences.aiScoringEnabled && userMeta?.aiAccess !== false && (
               <Suspense fallback={null}>
-                <ChatAssistant user={user} />
+                <ChatAssistant user={user} firstName={userMeta?.preferredName || userMeta?.firstName || ""} />
               </Suspense>
             )}
           </>

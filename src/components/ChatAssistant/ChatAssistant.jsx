@@ -4,43 +4,63 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { db, auth } from '../../firebase';
 import { getIdToken } from 'firebase/auth';
-import { collection, query, orderBy, limit, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { collection, query, orderBy, limit, addDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore';
 import { track } from '../../lib/analytics.js';
 
-export default function ChatAssistant({ user }) {
+const ASSISTANT_URL = 'https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant';
+const HISTORY_LOAD = 60;   // most recent saved messages shown when the chat opens
+const HISTORY_SEND = 30;   // recent messages the assistant sees for context
+
+const SUGGESTIONS = [
+  "What came in today that fits me?",
+  "Latest jobs in California in the past 24 hours",
+  "Remote roles posted this week",
+  "Which companies posted the most today?",
+];
+
+const greetingFor = (name) =>
+  `Hi${name ? ` ${name}` : ''}! I'm JobWatch AI. Ask me about new jobs by place, time or company, your best matches, or anything about your search.`;
+
+export default function ChatAssistant({ user, firstName = '' }) {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState([
-    { role: 'assistant', content: "Hi! I'm your JobWatch Assistant. How can I help you today?" }
-  ]);
+  const [messages, setMessages] = useState([{ role: 'assistant', content: greetingFor(firstName) }]);
   const [inputValue, setInputValue] = useState('');
   const [loading, setLoading] = useState(false);
+  const [hasHistory, setHasHistory] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Load history on mount
+  // Load the most recent saved turns (newest first, then put back in order).
   useEffect(() => {
     if (!user?.uid) return;
 
     async function loadHistory() {
-      const q = query(
-        collection(db, "users", user.uid, "chatHistory"),
-        orderBy("timestamp", "asc"),
-        limit(50)
-      );
-      
-      const snapshot = await getDocs(q);
-      const history = snapshot.docs.map(doc => ({
-        role: doc.data().role,
-        content: doc.data().content
-      }));
-
-      if (history.length > 0) {
-        setMessages(history);
+      try {
+        const q = query(
+          collection(db, "users", user.uid, "chatHistory"),
+          orderBy("timestamp", "desc"),
+          limit(HISTORY_LOAD)
+        );
+        const snapshot = await getDocs(q);
+        const history = snapshot.docs
+          .map(doc => ({ role: doc.data().role, content: doc.data().content }))
+          .filter(m => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .reverse();
+        if (history.length > 0) {
+          setMessages(history);
+          setHasHistory(true);
+        }
+      } catch (error) {
+        console.error("Error loading chat history:", error);
       }
     }
 
     loadHistory();
   }, [user?.uid]);
+
+  useEffect(() => {
+    if (!hasHistory) setMessages([{ role: 'assistant', content: greetingFor(firstName) }]);
+  }, [firstName, hasHistory]);
 
   const scrollToBottom = (behavior = "smooth") => {
     messagesEndRef.current?.scrollIntoView({ behavior });
@@ -72,15 +92,32 @@ export default function ChatAssistant({ user }) {
     }
   };
 
-  const handleSend = async (e) => {
-    if (e) e.preventDefault();
-    if (!inputValue.trim() || loading) return;
+  const startNewChat = async () => {
+    if (loading) return;
+    setMessages([{ role: 'assistant', content: greetingFor(firstName) }]);
+    setHasHistory(false);
+    track('assistant_chat_cleared');
+    if (!user?.uid) return;
+    try {
+      const snapshot = await getDocs(query(collection(db, "users", user.uid, "chatHistory"), limit(500)));
+      const batch = writeBatch(db);
+      snapshot.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    } catch (error) {
+      console.error("Error clearing chat history:", error);
+    }
+  };
 
-    const userContent = inputValue.trim();
+  const handleSend = async (e, presetText) => {
+    if (e) e.preventDefault();
+    const userContent = (presetText ?? inputValue).trim();
+    if (!userContent || loading) return;
+
     const userMessage = { role: 'user', content: userContent };
     const newMessages = [...messages, userMessage];
     
     setMessages(newMessages);
+    setHasHistory(true);
     setInputValue('');
     setLoading(true);
 
@@ -92,18 +129,19 @@ export default function ChatAssistant({ user }) {
 
     try {
       const idToken = await getIdToken(auth.currentUser);
-      const response = await fetch('https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/askAssistant', {
+      const response = await fetch(ASSISTANT_URL, {
         method: 'POST',
         headers: {
           "X-Session-Token": localStorage.getItem("jw_session_token") || "",
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${idToken}`,
         },
-        body: JSON.stringify({ messages: newMessages }),
+        // The greeting is local UI, not part of the conversation.
+        body: JSON.stringify({ messages: newMessages.filter(m => m.role === 'user' || m.role === 'assistant').slice(-HISTORY_SEND) }),
       });
 
-      const data = await response.json();
-      if (data.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok) {
         const assistantMsg = data.response;
         setMessages([...newMessages, assistantMsg]);
         // Save assistant response to Firestore
@@ -139,14 +177,30 @@ export default function ChatAssistant({ user }) {
                 <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
                 <span className="font-bold text-sm uppercase tracking-widest">JobWatch AI</span>
               </div>
-              <button 
-                onClick={() => setIsOpen(false)}
-                className="hover:bg-white/10 p-1 rounded-full transition-colors"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={startNewChat}
+                  disabled={loading}
+                  title="Start a new conversation"
+                  aria-label="Start a new conversation"
+                  className="hover:bg-white/10 p-1 rounded-full transition-colors disabled:opacity-50"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  aria-label="Close"
+                  className="hover:bg-white/10 p-1 rounded-full transition-colors"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
 
             {/* Messages */}
@@ -175,6 +229,7 @@ export default function ChatAssistant({ user }) {
                         td: ({node, ...props}) => <td className="px-2 py-1.5 border-t border-gray-50" {...props} />,
                         blockquote: ({node, ...props}) => <blockquote className="border-l-2 border-indigo-200 pl-3 italic text-gray-500 my-2" {...props} />,
                         strong: ({node, ...props}) => <strong className={msg.role === 'user' ? 'font-bold' : 'font-bold text-indigo-700'} {...props} />,
+                        a: ({node, ...props}) => <a className={msg.role === 'user' ? 'underline' : 'text-indigo-600 underline hover:text-indigo-800'} target="_blank" rel="noopener noreferrer" {...props} />,
                       }}
                     >
                       {msg.content}
@@ -182,6 +237,20 @@ export default function ChatAssistant({ user }) {
                   </div>
                 </div>
               ))}
+              {!loading && !hasHistory && messages.length === 1 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {SUGGESTIONS.map(text => (
+                    <button
+                      key={text}
+                      type="button"
+                      onClick={() => handleSend(null, text)}
+                      className="text-xs px-3 py-1.5 rounded-full bg-white border border-indigo-100 text-indigo-700 hover:bg-indigo-50 transition-colors text-left"
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
+              )}
               {loading && (
                 <div className="flex justify-start">
                   <div className="bg-white p-4 rounded-2xl rounded-tl-none border border-gray-100 flex gap-1 items-center shadow-sm">

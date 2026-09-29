@@ -51,3 +51,7 @@ worker/out/
 
 # Personal documents (resume source etc.) — never commit
 private/
+
+# Vercel CLI link
+.vercel
+.env*
