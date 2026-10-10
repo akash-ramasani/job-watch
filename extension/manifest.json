@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.3.0",
-  "description": "Automatically fill and submit job applications from JobWatch.",
+  "version": "1.4.0",
+  "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse and Lever. You review and submit.",
   "permissions": [
     "storage",
     "tabs",
@@ -67,6 +67,16 @@
       "all_frames": true,
       "js": [
         "content/greenhouse.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://jobs.lever.co/*/*/apply*",
+        "https://jobs.eu.lever.co/*/*/apply*"
+      ],
+      "js": [
+        "content/lever.js"
       ],
       "run_at": "document_idle"
     }

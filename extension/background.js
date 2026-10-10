@@ -284,13 +284,16 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete") return;
   const url = tab.url || "";
   // Match: https://jobs.ashbyhq.com/{org}/{uuid}/application[?...]
+  //        https://jobs.lever.co/{site}/{uuid}/apply  (Lever postings carry the same UUID as externalId)
   const uuidMatch = url.match(
     /jobs\.ashbyhq\.com\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i
+  ) || url.match(
+    /jobs\.(?:eu\.)?lever\.co\/[^/]+\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i
   );
   if (!uuidMatch) return;
 
   const externalId = uuidMatch[1];
-  console.log("[JobWatch] Ashby page detected — prefetching job:", externalId);
+  console.log("[JobWatch] application page detected — prefetching job:", externalId);
 
   (async () => {
     try {
@@ -359,7 +362,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const job = message.job;
         await chrome.storage.session.set({ pendingJob: job });
         let applyUrl = (job.absolute_url || "").replace(/\/$/, "");
-        if (!applyUrl.includes("/application")) applyUrl += "/application";
+        if (/jobs\.(eu\.)?lever\.co\//i.test(applyUrl)) { if (!/\/apply$/.test(applyUrl)) applyUrl += "/apply"; }
+        else if (/greenhouse\.io\//i.test(applyUrl)) { /* the posting page carries the form */ }
+        else if (!applyUrl.includes("/application")) applyUrl += "/application";
         console.log("[JobWatch] AUTO_APPLY → opening:", applyUrl, "| absolute_url was:", job.absolute_url);
         await chrome.tabs.create({ url: applyUrl });
         sendResponse({ ok: true });
@@ -537,6 +542,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ ok: false, error: err.message });
         }
         return;
+      }
+
+      // ── Lever: the computed application from the scraped form ────────────
+      if (message.type === "GET_LEVER_FILL_DATA") {
+        try {
+          const { idToken } = await getFreshToken();
+          const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
+          const job = pendingJob && jobMatchesExternalId(pendingJob, message.id) ? pendingJob : null;
+          const res = await fetch(`${FUNCTIONS_BASE}/prepareLeverApplication`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ data: {
+              site: message.site, id: message.id, eu: !!message.eu, domFields: message.domFields || [],
+              jobTitle: message.jobTitle || job?.title || "", companyName: message.companyName || job?.companyName || "", jobLocationName: message.locationName || job?.locationName || "",
+            } }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.error) throw new Error(json.error?.message || `prepareLeverApplication ${res.status}`);
+          sendResponse({ ok: true, data: json.result, pendingJob: job });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        return;
+      }
+
+      // ── Lever: run a lib/lever-dom.js helper in the page's MAIN world ─────
+      if (message.type === "EXEC_LEVER") {
+        const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/lever-dom.js"] })
+          .then(() => chrome.scripting.executeScript({
+            target, world: "MAIN",
+            func: (action, args) => window.__jwLever[action](...(args || [])),
+            args: [message.action, message.args || []],
+          }))
+          .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
+          .catch((err) => sendResponse({ ok: false, error: err.message }));
+        return true;
       }
 
       // ── Ashby: run a lib/ashby-dom.js helper in the page's MAIN world ─────

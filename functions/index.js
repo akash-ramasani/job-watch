@@ -81,6 +81,7 @@ const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligib
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 const ledger = require("./lib/apply/ledger.cjs");
 const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
+const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
@@ -821,6 +822,11 @@ exports.rescoreJobs = onRequest(
       });
     }
 
+    // Manual rescoring respects the global pause unless the caller overrides it.
+    if (body.ignorePause !== true && await aiScoringPaused()) {
+      return res.status(409).json({ error: "AI job scoring is paused (users/{admin}/settings/aiControl.pauseJobScoring). Run scripts/ai-scoring-pause.mjs off, or pass ignorePause: true." });
+    }
+
     let ids = Array.isArray(body.jobIds) ? body.jobIds.map(String).slice(0, 400) : null;
     const targetUser = (await db.collection("users").doc(targetUid).get()).data() || {};
     const tkTarget = targetsKey(targets) + (needsSponsorship(targetUser) ? "|visa" : "");
@@ -835,7 +841,7 @@ exports.rescoreJobs = onRequest(
       const before = await readScores();
       const scored = await scoreNewJobsForUser(targetUid, jobs.map((j) => ({
         jobDocId: j.jobDocId, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "",
-      })), { deadlineMs, force: true });
+      })), { deadlineMs, force: true, ignorePause: body.ignorePause === true });
       const after = await readScores();
       return res.json({
         ok: true, dryRun, userId: targetUid, requested: ids.length, scored,
@@ -1099,12 +1105,15 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 }
 
 /**
- * One-off catch-up for one feed (scripts/harvest-week.mjs): jobs posted in
- * [since, until) that `wantJob(title, description)` accepts and that aren't in
- * the database yet, written with an expiry no earlier than `retainUntil`.
+ * One-off catch-up for one feed (scripts/harvest-week.mjs, harvest-all-open.mjs):
+ * jobs posted in [since, until) that `wantJob(title, description)` accepts and
+ * that aren't in the database yet, written with an expiry no earlier than
+ * `retainUntil`. With `extendExisting`, matching jobs already stored get the
+ * same expiry too (never shortened). Returns counts plus `rows` (one per
+ * matching job, with `status` "missing" | "existing") for reports.
  * Not used by the scheduled sync; the normal 3-day TTL is untouched.
  */
-async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUntil, weekTag, dryRun = false }) {
+async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUntil, weekTag, dryRun = false, extendExisting = false }) {
   const now = admin.firestore.Timestamp.now();
   const source = String(feed.source || "").toLowerCase();
   let url = String(feed.url || "").trim();
@@ -1127,14 +1136,21 @@ async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUnti
       return t != null && t >= since.getTime() && t < until.getTime();
     })
     .filter((j) => wantJob(j.title, j.fullDescription || ""));
-  if (!jobs.length) return { fetched: raw.length, matched: 0, written: 0 };
+  if (!jobs.length) return { fetched: raw.length, matched: 0, written: 0, extended: 0, rows: [] };
 
   const col = db.collection("users").doc(userId).collection("jobs");
   const existing = [];
-  for (let i = 0; i < jobs.length; i += 300) existing.push(...(await db.getAll(...jobs.slice(i, i + 300).map((j) => col.doc(j.jobDocId)))));
-  const missing = jobs.filter((_, i) => !existing[i].exists);
-  if (dryRun) return { fetched: raw.length, matched: jobs.length, written: 0, missing: missing.length };
+  for (let i = 0; i < jobs.length; i += 300) existing.push(...(await db.getAll(...jobs.slice(i, i + 300).map((j) => col.doc(j.jobDocId)), { fieldMask: ["expireAt", "retainUntil"] })));
   const retainTs = admin.firestore.Timestamp.fromDate(retainUntil);
+  const missing = jobs.filter((_, i) => !existing[i].exists);
+  // Stored jobs whose expiry falls before retainUntil (only with extendExisting).
+  const toExtend = extendExisting ? jobs.filter((_, i) => existing[i].exists && (existing[i].get("expireAt")?.toMillis?.() || 0) < retainTs.toMillis()) : [];
+  const rows = jobs.map((j, i) => ({
+    id: j.jobDocId, title: j.title, companyName: j.companyName, locationName: j.locationName || "", jobUrl: j.jobUrl || "", applyUrl: j.applyUrl || "",
+    source: j.source, postedAt: j.sourceUpdatedTs?.toDate?.()?.toISOString?.() || "", description: j.fullDescription || "",
+    status: existing[i].exists ? "existing" : "missing",
+  }));
+  if (dryRun) return { fetched: raw.length, matched: jobs.length, written: 0, missing: missing.length, extended: toExtend.length, rows };
   const bw = db.bulkWriter();
   for (const job of missing) {
     if (job.fullDescription) job.el = eligibilityOf(job.fullDescription).flags;
@@ -1148,8 +1164,11 @@ async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUnti
       harvestedAt: now,
     }, { merge: true });
   }
+  for (const job of toExtend) {
+    bw.set(col.doc(job.jobDocId), { expireAt: retainTs, retainUntil: retainTs, retainedForWeek: weekTag }, { merge: true });
+  }
   await bw.close();
-  return { fetched: raw.length, matched: jobs.length, written: missing.length };
+  return { fetched: raw.length, matched: jobs.length, written: missing.length, extended: toExtend.length, rows };
 }
 
 /**
@@ -1262,6 +1281,28 @@ async function listAiEnabledUserIds() {
     if (d.data()?.aiAccess === true) uids.add(d.id);
   });
   return Array.from(uids);
+}
+
+/**
+ * Global pause for the automatic AI job assessment:
+ * users/{admin}/settings/aiControl { pauseJobScoring: true }.
+ * While set, the sync and the backlog still give new jobs the free rule score
+ * (flagged aiPending, so the AI picks them up once the pause is lifted) and
+ * never call OpenAI for them. Cover letters, tailored resumes, the assistant
+ * and auto-apply are not affected. Toggle with scripts/ai-scoring-pause.mjs.
+ * Cached for a minute per instance (the sync calls this several times a run).
+ */
+let _aiControl = { at: 0, paused: false };
+async function aiScoringPaused() {
+  if (Date.now() - _aiControl.at < 60_000) return _aiControl.paused;
+  try {
+    const snap = await db.collection("users").doc(ADMIN_UID).collection("settings").doc("aiControl").get();
+    _aiControl = { at: Date.now(), paused: snap.exists && snap.data()?.pauseJobScoring === true };
+  } catch (err) {
+    logger.warn(`aiScoringPaused: could not read aiControl, keeping last value: ${err?.message}`);
+    _aiControl.at = Date.now();
+  }
+  return _aiControl.paused;
 }
 
 /**
@@ -2829,9 +2870,11 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint,
  * Stops starting new jobs after `deadlineMs`; those stay unscored and are
  * picked up by rescoreBacklog on a later run. Returns the number scored.
  */
-async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null, listedIds = null, screen = true } = {}) {
+async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null, listedIds = null, screen = true, ignorePause = false } = {}) {
   if (!newJobs || newJobs.length === 0) return 0;
   const isAdmin = userId === ADMIN_UID;
+  // Global pause: rule scores only, nothing goes to OpenAI (see aiScoringPaused).
+  const aiPaused = !ignorePause && await aiScoringPaused();
 
   // Permission gate — non-admin users must have aiAccess === true on their user doc.
   let userData = {};
@@ -2922,9 +2965,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null, el: Array.isArray(jobData.el) ? jobData.el : null, existingFit: fit || null });
   });
   if (todo.length === 0) return 0;
-  logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}`);
+  logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}${aiPaused ? " (AI paused: rule scores only)" : ""}`);
 
-  const client = requireOpenAI();
+  const client = aiPaused ? null : requireOpenAI();
   const limiter = pLimit(SCORING_CONCURRENCY);
   const scoredAt = admin.firestore.Timestamp.now();
   const results = []; // { jobId, score, reason, fit }
@@ -3036,7 +3079,8 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       const rule = ruleAssessJob({ profile, jobTitle: job.title, description, targets, mine });
       const wantsAi = force || audits.has(job.jobDocId) || rule.aiWorthy;
       if (!wantsAi) { ruleOnly++; results.push(ruleResult(job, rule, false)); return; }
-      if (outOfCredits) { if (alreadyWaiting(job)) skippedForTime++; else results.push(ruleResult(job, rule, true)); return; }
+      // AI unavailable (paused, or out of credits): keep the rule score, flagged for the AI later.
+      if (outOfCredits || aiPaused) { if (alreadyWaiting(job)) skippedForTime++; else results.push(ruleResult(job, rule, true)); return; }
 
       let fit = await priorFitFor(job.sig).catch(() => null); // scored before under another id
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
@@ -3224,8 +3268,9 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   // Jobs that failed repeatedly for this resume (no readable description, etc.).
   const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
   const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
-  // After an out-of-credits error, don't retry AI-waiting jobs for an hour.
-  const aiDown = marker.aiOutOfCreditsAt?.toMillis?.() > Date.now() - 3600 * 1000;
+  // After an out-of-credits error, don't retry AI-waiting jobs for an hour;
+  // while the AI is paused they wait too (their rule score is already stored).
+  const aiDown = marker.aiOutOfCreditsAt?.toMillis?.() > Date.now() - 3600 * 1000 || await aiScoringPaused();
   const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk, skipAiPending: aiDown });
 
   if (stale.length === 0) {
@@ -4649,6 +4694,32 @@ exports.prepareAshbyApplication = onCall(
     });
     logger.info(`prepareAshbyApplication: uid=${uid} org=${org} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} schema=${out.schemaSource} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareAshbyApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
+    return { ...out, formKey };
+  }
+);
+
+// Compute a full Lever application for the browser extension. Lever's form is
+// server-rendered HTML with no public schema, so the content script sends the
+// scraped fields; the same engine answers them.
+exports.prepareLeverApplication = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const { site, id, domFields = [], jobTitle = "", companyName = "", jobLocationName = "", eu = false } = request.data || {};
+    if (!site || !id) throw new HttpsError("invalid-argument", "site and id are required.");
+    if (!Array.isArray(domFields) || !domFields.length) throw new HttpsError("invalid-argument", "domFields (the scraped form) are required.");
+    const formKey = ledger.formKeyOf("lever", site, id);
+    const dup = await ledger.alreadyApplied(db, uid, formKey);
+    if (dup.alreadyApplied) { logger.info(`prepareLeverApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
+    let openai = null;
+    try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareLeverApplication: no OpenAI client, free text will park:", e.message); }
+    const t0 = Date.now();
+    const out = await prepareLeverApplication(uid, String(site), String(id), { db, openai, model: OPENAI_FAST_MODEL }, {
+      domFields: domFields.slice(0, 120), jobTitle, companyName, jobLocationName, eu: eu === true,
+    });
+    logger.info(`prepareLeverApplication: uid=${uid} site=${site} fields=${out.total} filled=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
+    if (out.parked?.length) logger.info(`prepareLeverApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };
   }
 );

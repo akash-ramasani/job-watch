@@ -43,6 +43,8 @@ function formKeyFromUrl(url) {
   }
   m = u.match(/greenhouse\.io\/([^/?#]+)\/jobs\/(\d+)/i);
   if (m) return { source: "greenhouse", org: m[1], postingId: m[2], formKey: formKeyOf("greenhouse", m[1], m[2]) };
+  m = u.match(/jobs\.(?:eu\.)?lever\.co\/([^/?#]+)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (m) return { source: "lever", org: decodeURIComponent(m[1]), postingId: m[2].toLowerCase(), formKey: formKeyOf("lever", decodeURIComponent(m[1]), m[2].toLowerCase()) };
   return null;
 }
 

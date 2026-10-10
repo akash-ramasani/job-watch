@@ -211,6 +211,10 @@ function classify(label, kind = "") {
   // "Will you require/need sponsorship" -> requiresSponsorship. Deliberately does
   // NOT match "currently in a sponsored status" (a different, status question).
   if (/(require|need).{0,20}sponsor/.test(l) || /sponsorship.{0,20}(visa|now|future|employment)/.test(l) || has("will you", "sponsorship")) return "requiresSponsorship";
+  // Lever/legal phrasing: "require our company to file a petition or application
+  // for employment-based immigration status on your behalf" (it goes on to name
+  // F-1/H-1 as examples, which must not route it to the current-status key).
+  if (/(require|need).{0,80}(file a petition|petition or application|immigration (status|sponsorship|petition))/.test(l) || /(petition|application) for .{0,30}immigration/.test(l)) return "requiresSponsorship";
   // Specific current-visa-status questions cannot be answered from the generic
   // profile. Route to a status key that parks unless profile.visaStatus is set.
   // Word-bounded: "opt" as a substring misfires on "option", "cpt" on
