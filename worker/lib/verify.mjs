@@ -6,6 +6,8 @@
 // deterministic (not "ask the AI again 4x") because deterministic checks are
 // what actually prevent mistakes.
 
+import { fieldKind } from "./fieldkind.mjs";
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PLACEHOLDERS = new Set(["", "n/a", "na", "tbd", "todo", "xxx", "-", "none provided"]);
 
@@ -26,7 +28,9 @@ function passOptions(mapped, questions) {
     if (a.answers.length === 0) continue;
     const q = byLabel.get(a.label);
     const field = q?.fields?.[0];
-    const isSelect = q?.fields?.some((f) => (f.type || "").includes("select"));
+    // Greenhouse types contain "select"; Ashby's are "ValueSelect" /
+    // "MultiValueSelect" / "Boolean" (Yes/No values), so go by fieldKind.
+    const isSelect = q?.fields?.some((f) => ["select", "multiselect", "boolean"].includes(fieldKind(f)));
     if (!isSelect || !field) continue;
     const allowed = new Set((field.values || field.options || []).map((v) => String(v.value)));
     for (const ans of a.answers) {

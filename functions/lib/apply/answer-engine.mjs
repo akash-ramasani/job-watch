@@ -60,6 +60,18 @@ function regionVariants(value) {
 const stripHtml = (s) => (s || "").replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Does option text `ol` name the place `t`? Whole words only, so a state
+ *  abbreviation ("ca") never matches inside another city ("Chicago"). */
+function placeHit(ol, t) {
+  if (!ol || !t) return false;
+  if (ol === t) return true;
+  const re = new RegExp(`(^|[^a-z0-9])${escapeRe(t)}([^a-z0-9]|$)`);
+  if (re.test(ol)) return true;
+  // The option is a short name inside the applicant's longer term ("san
+  // francisco" inside "san francisco bay area").
+  return ol.length >= 4 && new RegExp(`(^|[^a-z0-9])${escapeRe(ol)}([^a-z0-9]|$)`).test(t);
+}
+
 /** Every way the applicant's location can be spelled, for matching city/office
  *  option lists ("San Francisco", "CA", "San Francisco Bay Area", ...). */
 function locationTerms(profile) {
@@ -69,6 +81,12 @@ function locationTerms(profile) {
      profile.metroArea, ...(profile.metroAreas || [])]
       .filter(Boolean).map(norm)
   )];
+}
+
+/** City and metro spellings only. A state matches too many offices ("CA" is
+ *  San Francisco, Los Angeles and San Diego), so it never counts as "near". */
+function cityTerms(profile) {
+  return [...new Set([profile.city, profile.metroArea, ...(profile.metroAreas || [])].filter(Boolean).map(norm))];
 }
 
 /** Try regexes in order; the first regex that matches EXACTLY ONE option wins.
@@ -118,12 +136,69 @@ function matchOption(field, desired, { synonyms = null } = {}) {
   return null;
 }
 
+/** "seven" / "7" / "7+" -> 7. Used by the experience gates. */
+const NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, twelve: 12, fifteen: 15 };
+function wordToNumber(s) {
+  const t = norm(s).replace(/\+$/, "");
+  if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+  return NUM_WORDS[t] ?? null;
+}
+/** Minimum years a question demands ("a minimum of 7 years", "more than three
+ *  years", "5+ years"), or null when it states none. */
+export function minYearsIn(label) {
+  const l = norm(label);
+  const m = l.match(/(?:minimum of|at least|more than|over|\bmin\.?)\s*(\d+(?:\.\d+)?|[a-z]+)\+?\s*(?:years?|yrs)/)
+    || l.match(/\b(\d+(?:\.\d+)?)\s*\+?\s*(?:or more\s*)?(?:years?|yrs)\b/);
+  return m ? wordToNumber(m[1]) : null;
+}
+
 /** Classify a custom question by its label so we can route it to the right
- *  profile field. Returns a key or null. Order matters (first match wins). */
-function classify(label) {
+ *  profile field. Returns a key or null. Order matters (first match wins).
+ *  `kind` (fieldkind.mjs) lets text-only exits skip real yes/no questions. */
+function classify(label, kind = "") {
   const l = norm(label);
   const has = (...words) => words.every((w) => l.includes(w));
   const any = (...words) => words.some((w) => l.includes(w));
+  const text = ["text", "longtext", "number", "date"].includes(kind);
+  const choice = ["boolean", "select", "multiselect"].includes(kind);
+
+  // ── Ashby corpus additions (2026-10-09) ────────────────────────────────────
+  // Follow-ups that only apply when an earlier answer was Other/Yes: a blank
+  // text box is the honest answer. Only text kinds take this exit, since a
+  // yes/no phrased "If not in the Bay Area, are you willing to relocate" is a
+  // real question.
+  if (text && /^if (you )?(selected|chose|answered|said|indicated|other\b|yes\b|no\b)/.test(l)) return "conditionalFollowup";
+  if (/referred you|referral.{0,30}\b(name|email)\b|someone at .{0,40}\brefer|refer(red|ral) .{0,30}(name|email) (here|below)/.test(l) && !any("how did you hear", "hear about")) return "referral";
+  if (/\bpassword\b/.test(l)) return "password";
+  if (text && (/\b(twitter|x \(formerly twitter\))\b/.test(l) || l === "x")) return "twitter";
+  if (text && /^(other|other links?|anything else\??)$/.test(l)) return "conditionalFollowup";
+  if (text && /^[a-z0-9 .'-]{2,24}\s+(profile\s+)?(url|link|handle|username)(\s*\(.*\))?$/.test(l) && !/linkedin|github|portfolio|website|scholar/.test(l)) return "socialProfile";
+  if (text && /exercise submission|take.?home|work samples?|video or voice recording/.test(l) && !/portfolio/.test(l)) return "workSample";
+  // "Where are you based?" as a text box: the applicant's own city and state.
+  if (text && /^(to help .{0,60}:\s*)?where are you (currently )?(based|located)\??$|^where do you (currently )?(live|reside)\??$/.test(l)) return "location";
+  if (text && /samples? of your code|code samples?/.test(l)) return "github";
+  if (text && /publications?|papers|research you are/.test(l)) return "publications";
+  if (text && /^(phone|mobile|cell|telephone)( number)?$|^(your )?phone number|^mobile number|^contact number/.test(l)) return "phone";
+  if (text && /^e-?mail( address)?$/.test(l)) return "email";
+  if (any("pronoun")) return "pronouns";
+  if (has("preferred", "first name")) return "preferredFirstName";
+  if (has("preferred", "last name")) return "preferredLastName";
+  if (/^(legal )?(first|given) name/.test(l)) return "legalFirstName";
+  if (/^(legal )?(last name|surname|family name)/.test(l)) return "legalLastName";
+  if (/^middle name/.test(l)) return "middleName";
+  if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b/.test(l)) return "currentTitle";
+  if (text && /universit|college|school.{0,25}attend|alma mater/.test(l) && !/degree|graduat|relocat/.test(l)) return "university";
+  if (/\b(us|u\.s\.|united states)\b.{0,15}(or equivalent )?time ?zone|time ?zone.{0,20}\b(us|u\.s\.)\b/.test(l)) return "usTimezone";
+  if (/(based|located|residing|reside|living|live) (in|within) the (us|u\.s\.?a?|united states)\b/.test(l) && !/authori|sponsor|work/.test(l)) return "inUS";
+  if (/notice period/.test(l)) return "noticePeriod";
+  if (/record(ing|ed)\b.{0,60}(consent|interview)|interview recording|notetak|ai note|transcri(be|bing|ption)/.test(l)) return "recordingConsent";
+  if (/\bon.?call\b/.test(l)) return "onCall";
+  if (/previously worked in a remote|remote or hybrid environment|worked remotely before/.test(l)) return "remoteExperience";
+  if (/have you heard of .{0,40} before/.test(l)) return "heardBefore";
+  if (/student or new grad|are you (currently )?a student\b|^are you a new grad/.test(l)) return "studentOrNewGrad";
+  if (/current job level|^what is your (current )?level\b|seniority level/.test(l)) return "jobLevel";
+  if (/^are you (familiar with|open to|comfortable).{0,40}\bai\b/.test(l)) return "openToAiTools";
+  if (/current location or preference|hiring in our hubs/.test(l)) return "citiesAvailable";
 
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
@@ -141,6 +216,10 @@ function classify(label) {
   if (/u\.?s\.? citizen\b|citizen or permanent resident|citizen or green card/.test(l)) return "usCitizen";
   if (any("export control") || has("u.s. person") || has("us person")) return "usPersonExportControl";
   if (any("employment agreement", "non-compete", "noncompete", "post-employment", "restrictive covenant")) return "employmentAgreements";
+  if (/country (are you|do you|you are|you're) (based|located|residing|reside|live|living)|country of employment|^select your country|country you (hold|have) citizenship|country of citizenship|citizenship in a second country|hold citizenship/.test(l)) {
+    if (/citizen/.test(l)) return /second country|otherwise,? select none/.test(l) ? "secondCitizenship" : "citizenshipCountry";
+    return "country";
+  }
   // "Previously applied" is NOT "previously worked" — it needs application
   // history, not employment history.
   if (/previously applied|applied (to|for) (a |an )?.{0,30}(position|role|job)|applied (here|before|with us)|ever interviewed|interviewed (at|with|here)/.test(l)) return "previouslyApplied";
@@ -148,8 +227,8 @@ function classify(label) {
   // Conflict-of-interest disclosures (family at the company/vendors, outside
   // business activities, government-official ties). Checked before
   // relatedToEmployee/currentCompany so compound COI questions land here.
-  if (/conflict of interest/.test(l) || /outside business activit/.test(l) || /government official/.test(l) || /worked for the (us|u\.s\.?) government/.test(l) || /government or military entity|state.?owned enterprise/.test(l) || (/famil(y|ial)/.test(l) && /(employee|vendor|supplier|partner)/.test(l))) return "conflictOfInterest";
-  if (/related to (a |an )?.*(employee|staff)/.test(l) || has("relative", "work here")) return "relatedToEmployee";
+  if (/conflict of interest/.test(l) || /outside (business|work|employment|advisory)/.test(l) || /government official/.test(l) || /business partner/.test(l) || /worked for the (us|u\.s\.?) government/.test(l) || /government or military entity|state.?owned enterprise/.test(l) || (/famil(y|ial)/.test(l) && /(employee|vendor|supplier|partner)/.test(l))) return "conflictOfInterest";
+  if (/related to (a |an )?.*(employee|staff)/.test(l) || has("relative", "work here") || /relatives?.{0,40}(work|employ)/.test(l) || /(spouse|significant other).{0,50}(employ|work)/.test(l)) return "relatedToEmployee";
   if (any("sms", "whatsapp", "text message") && any("contact", "consent", "opt")) return "smsConsent";
   // Deliberately narrow: "currently eligible to work in the country..." is a
   // work-auth question, not an address field.
@@ -161,8 +240,11 @@ function classify(label) {
   if (/provide .{0,30}references|professional references/.test(l)) return "referencesWilling";
   // Word-bounded: "current ... company" as substrings misfires on labels like
   // "current employees of a publicly-traded company" (Robinhood COI).
-  if (/\b(current|most recent|present)\s+(company|employer)\b/.test(l)) return "currentCompany";
+  if (/\b(current|most recent|present)\s+(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
   if (/security clearance/.test(l)) return "securityClearance";
+  if (choice && (/do you have (a )?(minimum|at least|more than|over)\b/.test(l) || /\b\d+\+? (or more )?(years?|yrs) (of )?.{0,40}experience/.test(l)
+    || /do you have (any |hands.?on |practical |professional |direct |prior |previous )*experience (with|in|using|building|deploying|working|of)/.test(l)
+    || /have you (worked|led|built|deployed|shipped|managed|contributed|run)\b/.test(l) || /^are you familiar with/.test(l))) return "experienceGate";
   if (/cities.{0,30}available to work|available to work.{0,25}cities/.test(l)) return "citiesAvailable";
   if (/preferred office( location)?/.test(l) || (l.includes("office location") && l.includes("prefer"))) return "preferredOffice";
   // Only bare "Location" labels — longer sentences mentioning location are
@@ -173,13 +255,18 @@ function classify(label) {
   if (/which programming language|preferred (programming )?language|language.{0,25}prefer/.test(l)) return "preferredLanguage";
   // Relocation questions before the address fields — "relocating to New York
   // City" must not be mistaken for a City address field.
-  if (/open to relocat|willing to relocate|relocating to/.test(l)) return "willingToRelocate";
+  if (/open to relocat|willing to relocate|relocating to|able to relocate|commuting distance|commutable/.test(l)) return "willingToRelocate";
+  if (/able to work from .{0,40}\b(hq|headquarters?|office)\b|work from our .{0,40}\b(hq|headquarters?)\b/.test(l)) return "willingToWorkHybrid";
+  // Fingerprint / background-check requirements: consent is the normal answer
+  // for an applicant with nothing to disclose (profile.backgroundCheckConsent
+  // overrides).
+  if (/background check|fingerprint/.test(l) && /consent|able to meet|willing|agree|authoriz/.test(l)) return "backgroundCheck";
   if (/select all locations|locations you would consider/.test(l)) return "citiesAvailable";
   if (/influence your decision to apply/.test(l)) return "surveyInfluence";
   // Address / location (guard against look-alikes: citizenship, employment
   // status, relocation, "state-owned").
   if (/\bcity\b/.test(l) && /\bstate\b/.test(l) && !l.includes("citizen")) return "cityState";
-  if (/\bcity\b/.test(l) && !l.includes("citizen") && !/relocat|office/.test(l)) return "city";
+  if (/\bcity\b/.test(l) && !l.includes("citizen") && !/relocat|office|\bhq\b|headquarter|days (per|a) week/.test(l)) return "city";
   if ((/\bstate\b|\bprovince\b/.test(l)) && !l.includes("united states") && !l.includes("status") && !/state.?owned/.test(l)) return "region";
   if (any("postal", "zip", "pincode", "pin code")) return "postalCode";
   // Word-bounded: "unit"/"apt" as substrings misfire on "opportunity"/"aptitude"
@@ -204,11 +291,67 @@ function classify(label) {
   if (any("salary", "compensation expectation", "expected pay", "desired salary")) return "salaryExpectation";
   if (any("notice period", "when can you start", "availability", "start date")) return "availability";
   if (has("willing", "relocate") || l.includes("relocation")) return "willingToRelocate";
-  if (any("hybrid", "in-office", "onsite", "on-site", "office hub") || /days.{0,20}(in|from|at).{0,25}office/.test(l) || /work from the office/.test(l) || /come into the .{0,30}office/.test(l) || /willing to work (from|in|at).{0,15}office/.test(l) || /work(ing)? in.?person/.test(l)) return "willingToWorkHybrid";
+  if (any("hybrid", "in-office", "onsite", "on-site", "office hub", "anchor day") || /days.{0,20}(in|from|at).{0,25}office/.test(l) || /commut(e|ing) to .{0,40}office/.test(l) || /office .{0,20}(three|four|five|3|4|5) (days|times)/.test(l) || /in.?office attendance/.test(l) || /work from the office/.test(l) || /come into the .{0,30}office/.test(l) || /willing to work (from|in|at).{0,15}office/.test(l) || /work(ing)? in.?person/.test(l)) return "willingToWorkHybrid";
   // Pure acknowledgements (privacy policy, truthfulness certification). Checked
   // LAST so any substantive question above wins over boilerplate phrasing.
   if (/\bi certify\b|\bi acknowledge\b|\bi have read\b|\bi consent\b|\bi agree\b|\bi understand\b|privacy (policy|notice|statement|acknowledg)|\backnowledge?ment\b|arbitration agreement/.test(l)) return "acknowledgement";
   return null;
+}
+
+/** Long-text questions whose honest answer is one short fact, not prose. */
+const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "availability", "noticePeriod", "heardAboutUs", "currentCompany", "conditionalFollowup", "referral", "workSample", "publications", "location", "cityState", "linkedin", "github", "portfolio", "university", "currentTitle"]);
+
+/** Does the resume text show the experience a gate asks about? Pulls the
+ *  technology/skill terms after "with/in/using" and checks each against the
+ *  resume. true when every term is present, false when none are, null when the
+ *  question names nothing checkable. */
+export function experienceEvidence(label, resumeText) {
+  const l = norm(label).replace(/\(.*?\)/g, " ");
+  const rt = norm(resumeText);
+  if (!rt) return null;
+  const m = l.match(/(?:experience|worked|working|familiar|proficien\w*|skilled|background)\s+(?:with|in|using|on|of)\s+([^?.!]+?)(?:\s+experience\b|$|[?.!])/);
+  if (!m) return null;
+  const STOP = new Set(["a", "an", "the", "and", "or", "of", "in", "at", "to", "for", "with", "using", "on", "your", "any", "building", "deploying", "working", "production", "professional", "setting", "environment", "software", "solutions", "customers", "experience", "years", "year", "not", "including", "internships", "tools", "such", "as", "etc", "e", "g", "i", "that", "this", "is", "are", "you", "have", "do", "does", "role", "roles", "company", "companies", "technology", "tech", "house", "team", "teams", "large", "scale", "models", "model", "applications", "application", "work", "new", "current", "past", "relevant", "minimum", "least", "full-time", "fulltime", "industry", "related", "directly", "hands-on", "hands", "practical", "prior", "previous", "paid", "including", "excluding", "outside", "academia", "internship", "internships", "developing", "designing", "writing", "managing", "leading", "sales", "closing", "delivering"]);
+  const terms = m[1].split(/[\s,\/&+]+/).map((w) => w.replace(/[^a-z0-9.#-]/g, "")).filter((w) => w.length > 1 && !STOP.has(w));
+  if (!terms.length) return null;
+  const present = terms.filter((t) => rt.includes(t));
+  if (present.length === terms.length) return true;
+  if (present.length === 0) return false;
+  // Mixed: count it as evidence only when the longer, specific terms are there.
+  const specific = terms.filter((t) => t.length >= 4);
+  return specific.length && specific.every((t) => rt.includes(t)) ? true : null;
+}
+
+/** "2 weeks" -> 2, "1 month" -> 4.3, "immediately" -> 0. */
+function weeksIn(s) {
+  const t = norm(s);
+  if (/immediate|asap|now|none/.test(t)) return 0;
+  const m = t.match(/(\d+(?:\.\d+)?)\s*(week|wk|month|day)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return /month/.test(m[2]) ? n * 4.33 : /day/.test(m[2]) ? n / 7 : n;
+}
+/** "1-2 weeks" -> [1,2], "3+ months" -> [13, Infinity], "1 month" -> [4,4.5]. */
+function weeksRange(label) {
+  const t = norm(label);
+  const unit = /month/.test(t) ? 4.33 : /day/.test(t) ? 1 / 7 : /week|wk/.test(t) ? 1 : null;
+  if (!unit) return /immediate|none|no notice/.test(t) ? [0, 0.5] : null;
+  let m;
+  if ((m = t.match(/(\d+)\s*[-–to]+\s*(\d+)/))) return [Number(m[1]) * unit - 0.01, Number(m[2]) * unit + 0.01];
+  if ((m = t.match(/(\d+)\s*\+|more than (\d+)|(\d+) or more/))) return [Number(m[1] || m[2] || m[3]) * unit - 0.01, Infinity];
+  if ((m = t.match(/less than (\d+)|under (\d+)/))) return [0, Number(m[1] || m[2]) * unit];
+  if ((m = t.match(/(\d+)/))) return [Number(m[1]) * unit - 0.6, Number(m[1]) * unit + 0.6];
+  return null;
+}
+
+/** ISO start date: profile.availableStartDate, else today plus the notice
+ *  period (default two weeks). */
+function startDateFor(profile, now = new Date()) {
+  const explicit = profile.availableStartDate && new Date(profile.availableStartDate);
+  if (explicit && !Number.isNaN(explicit.getTime())) return explicit.toISOString().slice(0, 10);
+  const weeks = weeksIn(profile.noticePeriod || profile.availability || "2 weeks");
+  const d = new Date(now.getTime() + Math.max(0, weeks == null ? 2 : weeks) * 7 * 86400000);
+  return d.toISOString().slice(0, 10);
 }
 
 /** Build the answer for a single Greenhouse question.
@@ -267,15 +410,21 @@ export function answerQuestion(q, profile, ai) {
   // ── Custom questions routed by label ───────────────────────────────────────
   // Vague labels ("CONFLICT OF INTEREST", "HISTORY WITH ANDURIL") carry the real
   // question in the description — classify falls back to it.
-  let key = classify(label);
+  let key = classify(label, kinds[0]);
   if (!key) {
     const desc = stripHtml(q.description || "");
-    if (desc) key = classify(desc);
+    if (desc) key = classify(desc, kinds[0]);
   }
   // A textarea/paragraph field must never get a yes/no or single-value profile
   // answer, even if its label contains a matching keyword (e.g. "office
-  // preferences or geographic flexibility"). Route it to free text instead.
-  if (kinds[0] === "longtext") key = null;
+  // preferences or geographic flexibility"). Route it to free text instead,
+  // except for the few questions whose honest answer is one short fact.
+  if (kinds[0] === "longtext" && !LONGTEXT_FACT_KEYS.has(key)) key = null;
+  // "Years of experience with Go, and describe the projects" wants prose, not
+  // a number: let the AI write it.
+  if (key === "yearsExperience" && !isSelect && /describe|briefly|tell us|explain|detail/.test(norm(label))) key = null;
+  // A date picker only ever means a start date here; anything else parks.
+  if (kinds[0] === "date" && key !== "availability") key = kinds[0] === "date" && /start|available|join/.test(norm(label)) ? "availability" : null;
 
   // High-stakes compliance & identity → PROFILE ONLY, never AI.
   const profileMap = {
@@ -311,7 +460,124 @@ export function answerQuestion(q, profile, ai) {
     willingToRelocate: profile.willingToRelocate,
     willingToWorkHybrid: profile.willingToWorkHybrid,
     salaryExpectation: profile.salaryExpectation || profile.desiredSalary || profile.salaryExpectations,
+    phone: profile.phone,
+    email: profile.email,
+    middleName: profile.middleName,
+    preferredFirstName: profile.preferredName || profile.firstName,
+    preferredLastName: profile.lastName,
+    currentTitle: profile.currentTitle,
+    university: profile.university,
+    citizenshipCountry: profile.citizenshipCountry,
+    twitter: profile.twitter || profile.x,
+    publications: profile.publications || profile.googleScholar,
   };
+
+  // ── Blank-on-purpose text boxes ────────────────────────────────────────────
+  // Follow-ups ("If you selected Other..."), referral names/emails, passwords,
+  // take-home links: nothing true can be typed from the profile. Optional ones
+  // are skipped; a required one parks for the person.
+  if (key === "socialProfile") {
+    const platform = norm(label).replace(/\s+(profile\s+)?(url|link|handle|username).*$/, "").replace(/[^a-z0-9]+/g, "");
+    const v = (profile.socialLinks || {})[platform] || profile[platform];
+    if (v) return out([{ name, value: String(v) }], SOURCE.PROFILE, 1);
+    return q.required ? unanswered(`no ${platform} link in the profile`) : out([], SOURCE.NONE, 0, `left blank: no ${platform} link on file`);
+  }
+  if (key === "conditionalFollowup" || key === "referral" || key === "password" || key === "workSample"
+    || (key === "publications" && !profileMap.publications) || (key === "twitter" && !profileMap.twitter)) {
+    const why = { conditionalFollowup: "follow-up to an answer we did not give", referral: "no referral to name", password: "no password to share", workSample: "needs a link only you can provide", publications: "no publications on file", twitter: "no Twitter/X link on file" }[key];
+    return q.required ? unanswered(why) : out([], SOURCE.NONE, 0, `left blank: ${why}`);
+  }
+  // Questions only the applicant can answer; a profile value unlocks them.
+  if (key === "heardBefore" || key === "remoteExperience") {
+    const v = key === "heardBefore" ? profile.heardOfCompanyBefore : profile.remoteExperience;
+    if (v == null) return q.required ? unanswered(`${key} needs your input (set profile.${key === "heardBefore" ? "heardOfCompanyBefore" : "remoteExperience"})`) : out([], SOURCE.NONE, 0, "optional, skipped");
+    const ans = typeof v === "boolean" ? (v ? "Yes" : "No") : String(v);
+    if (isSelect) { const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + escapeRe(norm(ans)))]); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.PROFILE, 1);
+  }
+  // Second citizenship: "None" unless the profile lists one.
+  if (key === "secondCitizenship") {
+    const want = profile.secondCitizenshipCountry;
+    if (isSelect) {
+      const m = want ? matchOption(primary, want, { synonyms: countryVariants(want) }) : (matchOption(primary, "None") || findOnly(primary, [/^none\b/, /not applicable|n\/a/]));
+      return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, want ? "" : "no second citizenship") : unanswered("no None option for second citizenship");
+    }
+    return out([{ name, value: want || "None" }], SOURCE.PROFILE, 1);
+  }
+  // "Based in the US" / "US time zone": from the profile country.
+  if (key === "usTimezone" || key === "inUS") {
+    const c = norm(profile.country || "united states");
+    const ans = countryVariants("united states").includes(c) ? "Yes" : "No";
+    if (isSelect) { const m = matchOption(primary, ans); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.PROFILE, 1);
+  }
+  // Experience gates: "Do you have a minimum of 7 years...", "Do you have
+  // experience with Kotlin?". Years come from the resume dates; a technology
+  // counts only if the resume text mentions it. Absent evidence PARKS rather
+  // than claiming (a No could be true but the resume may be incomplete).
+  if (key === "experienceGate") {
+    const years = Number(profile.yearsOfExperience);
+    const minY = minYearsIn(label);
+    let ans = null, note = "";
+    if (minY != null && Number.isFinite(years)) {
+      // "2 years of mobile engineering experience": the domain has to be on
+      // the resume too, else total years prove nothing about it.
+      const domain = experienceEvidence(label.replace(/.*?\b(?:years?|yrs)\b(?:\s+of)?/i, "experience in "), profile.resumeText || "");
+      if (domain === false) return unanswered("resume does not show that kind of experience; answer yourself");
+      ans = years >= minY ? "Yes" : "No"; note = `${years} years vs ${minY} required`;
+    } else if (minY == null) {
+      const hit = experienceEvidence(label, profile.resumeText || "");
+      if (hit === true) { ans = "Yes"; note = "resume mentions it"; }
+    }
+    if (!ans) return unanswered(minY != null ? "years of experience unknown (set profile.yearsOfExperience)" : "resume does not show this experience; answer yourself");
+    if (isSelect) { const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + norm(ans) + "\\b")]); return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.9, note) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.RESUME, 0.9, note);
+  }
+  // Student / new grad: No once the resume shows two or more years of work.
+  if (key === "studentOrNewGrad") {
+    const years = Number(profile.yearsOfExperience);
+    if (profile.studentOrNewGrad == null && !(Number.isFinite(years) && years >= 2)) return unanswered("student/new-grad status needs your input");
+    const ans = profile.studentOrNewGrad != null ? (norm(profile.studentOrNewGrad) === "yes" || profile.studentOrNewGrad === true ? "Yes" : "No") : "No";
+    if (isSelect) { const m = matchOption(primary, ans); return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.9) : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.RESUME, 0.9);
+  }
+  // Job level from the current title (then years as a fallback).
+  if (key === "jobLevel" && isSelect) {
+    const t = norm(profile.currentTitle || "");
+    const years = Number(profile.yearsOfExperience);
+    const mgr = /\b(manager|head of|director|lead)\b/.test(t);
+    const tier = /\bprincipal\b/.test(t) ? "principal" : /\bstaff\b/.test(t) ? "staff" : /\b(senior|sr\.?)\b/.test(t) ? "senior"
+      : /\b(intern|junior|jr\.?|associate|new grad)\b/.test(t) ? "entry"
+      : Number.isFinite(years) ? (years < 2 ? "entry" : years < 5 ? "mid" : years < 9 ? "senior" : "staff") : null;
+    if (!tier) return unanswered("job level needs profile.currentTitle or yearsOfExperience");
+    const role = mgr ? "manager" : "ic";
+    const m = findOnly(primary, [new RegExp(`\\b${tier}\\b.{0,20}\\b${role}\\b|\\b${role}\\b.{0,20}\\b${tier}\\b`), new RegExp(`\\b${tier}\\b`)]);
+    return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.85, `${tier} ${role} from title`) : unanswered("no job-level option matches the title");
+  }
+  // Notice period buckets ("1-2 weeks", "1 month", "3+ months").
+  if (key === "noticePeriod") {
+    const np = profile.noticePeriod || "2 weeks";
+    if (!isSelect) return out([{ name, value: np }], SOURCE.PROFILE, 1);
+    const weeks = weeksIn(np);
+    const opts = primary.values || primary.options || [];
+    const hit = weeks == null ? null : opts.find((o) => {
+      const r = weeksRange(o.label);
+      return r && weeks >= r[0] && weeks <= r[1];
+    });
+    const m = hit ? { value: hit.value } : matchOption(primary, np);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `${np}`) : unanswered("no notice-period bucket matches");
+  }
+  // Interview recording / on-call / AI tooling: low-stakes yeses, overridable
+  // from the profile (recordingConsent, onCallWilling, openToAiTools).
+  if (key === "recordingConsent" || key === "onCall" || key === "openToAiTools" || key === "backgroundCheck") {
+    const pv = { recordingConsent: profile.recordingConsent, onCall: profile.onCallWilling, openToAiTools: profile.openToAiTools, backgroundCheck: profile.backgroundCheckConsent }[key];
+    const ans = pv == null ? "Yes" : (norm(pv) === "no" || pv === false ? "No" : "Yes");
+    if (isSelect) {
+      const m = matchOption(primary, ans) || findOnly(primary, ans === "Yes" ? [/^yes\b/, /\bconsent\b(?!.{0,20}not)/, /^i (agree|consent)/] : [/^no\b/, /opt out/, /decline/]);
+      return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, key) : unanswered(`no "${ans}" option for ${key}`);
+    }
+    return out([{ name, value: ans }], SOURCE.RULE, 0.85, key);
+  }
 
   if (key === "workedHereBefore" || key === "relatedToEmployee") {
     // "No" for a new applicant with no relative at the company; a deterministic
@@ -321,7 +587,7 @@ export function answerQuestion(q, profile, ai) {
       // Exact "No" first; else the unambiguous "I have never worked at X"-style
       // option that boards use instead of a plain No.
       const m = matchOption(primary, "No")
-        || findOnly(primary, [/\bnever (worked|been employed)\b/, /\bhave not worked\b/, /\bnot worked (at|for)\b/, /^no[,.]? i/]);
+        || findOnly(primary, [/\bnever (worked|been employed)\b/, /\bhave not worked\b/, /\bnot worked (at|for)\b/, /^no[,.]? i/, /^no\b/, /no relationship|none of the above|^none\b/]);
       return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, why)
         : unanswered('select has no recognizable "No" option');
     }
@@ -347,7 +613,7 @@ export function answerQuestion(q, profile, ai) {
   if (key === "conflictOfInterest") {
     const ans = norm(profile.conflictOfInterest) === "yes" ? "Yes" : "No";
     if (isSelect) {
-      const m = matchOption(primary, ans);
+      const m = matchOption(primary, ans) || (ans === "No" ? findOnly(primary, [/^no\b/, /no relationship|none of the above|not applicable|^none\b/]) : null);
       return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, "no conflicts of interest on file")
         : unanswered(`no "${ans}" option`);
     }
@@ -428,18 +694,33 @@ export function answerQuestion(q, profile, ai) {
   // Years-of-experience buckets ("2–4", "5–7", "10+", "Less than 2 years"),
   // resolved from profile.yearsOfExperience.
   if (key === "yearsExperience") {
-    const n = Number(profile.yearsOfExperience);
+    const exclInterns = /intern|academi/.test(norm(label)) && Number.isFinite(Number(profile.yearsOfExperienceNoInterns));
+    const n = Number(exclInterns ? profile.yearsOfExperienceNoInterns : profile.yearsOfExperience);
     if (!Number.isFinite(n)) return unanswered("set profile.yearsOfExperience");
     if (isSelect) {
       const opts = primary.values || primary.options || [];
-      const hit = opts.find((o) => {
-        const t = norm(o.label);
+      const yesNo = opts.length <= 3 && opts.some((o) => /^yes\b/.test(norm(o.label))) && opts.some((o) => /^no\b/.test(norm(o.label)));
+      const minY = minYearsIn(label);
+      if (yesNo && minY != null) {
+        const ans = n >= minY ? "Yes" : "No";
+        const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + norm(ans) + "\\b")]);
+        return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.9, `${n} years vs ${minY} required`) : unanswered(`no "${ans}" option`);
+      }
+      const whole = Math.floor(n);
+      const bucket = (t) => {
         let m;
-        if ((m = t.match(/less than (\d+)|under (\d+)/))) return n < Number(m[1] || m[2]);
-        if ((m = t.match(/(\d+)\s*[–-]\s*(\d+)/))) return n >= Number(m[1]) && n <= Number(m[2]);
-        if ((m = t.match(/(\d+)\s*(?:\+|or more)/))) return n >= Number(m[1]);
-        return false;
-      });
+        if ((m = t.match(/less than (\d+)|under (\d+)/))) return [0, Number(m[1] || m[2]) - 1];
+        if ((m = t.match(/(\d+)\s*[–-]\s*(\d+)/))) return [Number(m[1]), Number(m[2])];
+        if ((m = t.match(/(\d+)\s*(?:\+|or more)/))) return [Number(m[1]), Infinity];
+        if ((m = t.match(/^(\d+)\s*(years?)?$/))) return [Number(m[1]), Number(m[1])];
+        return null;
+      };
+      let hit = opts.find((o) => { const r = bucket(norm(o.label)); return r && whole >= r[0] && whole <= r[1]; });
+      if (!hit) {
+        // Gaps between buckets: the bucket whose top edge is nearest below.
+        const below = opts.map((o) => ({ o, r: bucket(norm(o.label)) })).filter((x) => x.r && x.r[1] <= whole).sort((a, b) => b.r[1] - a.r[1]);
+        hit = below[0]?.o || null;
+      }
       return hit ? out([{ name, value: hit.value }], SOURCE.PROFILE, 1, `${n} years`) : unanswered("no bucket matches yearsOfExperience");
     }
     return out([{ name, value: String(n) }], SOURCE.PROFILE, 1);
@@ -459,7 +740,7 @@ export function answerQuestion(q, profile, ai) {
     if (status === "none") {
       if (isSelect) {
         const m = matchOption(primary, "No")
-          || findOnly(primary, [/n\/?a/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/]);
+          || findOnly(primary, [/^none\b/, /n\/?a/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/]);
         return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "no security clearance")
           : unanswered("no matching no-clearance option");
       }
@@ -487,12 +768,15 @@ export function answerQuestion(q, profile, ai) {
   // "In what cities are you available to work?" — every option that matches the
   // applicant's own location spellings. Truthful subset, never a guess.
   if (key === "citiesAvailable" && isSelect) {
-    const terms = locationTerms(profile);
     const opts = primary.values || primary.options || [];
-    const hits = opts.filter((v) => {
-      const ol = norm(v.label);
-      return terms.some((t) => ol === t || ol.includes(t) || t.includes(ol));
-    });
+    const hits = opts.filter((v) => cityTerms(profile).some((t) => placeHit(norm(v.label), t)));
+    if (!hits.length && norm(profile.willingToRelocate) === "yes") {
+      const jl = norm(profile.jobLocationName || "");
+      const jobHit = jl ? opts.find((v) => { const ol = norm(v.label); return ol && (jl.includes(ol) || ol.includes(jl.split(",")[0].trim())); }) : null;
+      const relo = opts.find((v) => /open to relo|willing to relocate|other/.test(norm(v.label)));
+      const pick = jobHit || relo;
+      if (pick) return out([{ name, value: pick.value }], SOURCE.RULE, 0.85, jobHit ? `job city ${pick.label}, willing to relocate` : "willing to relocate");
+    }
     if (!hits.length) return unanswered("no offered city matches the profile location");
     const many = kinds.includes("multiselect");
     const chosen = many ? hits : hits.slice(0, 1);
@@ -502,7 +786,7 @@ export function answerQuestion(q, profile, ai) {
   // "Preferred office location" — the single option in the applicant's own
   // city/state/metro. Ambiguity (two offices nearby) parks instead of guessing.
   if (key === "preferredOffice" && isSelect) {
-    const m = findOnly(primary, locationTerms(profile).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)));
+    const m = findOnly(primary, cityTerms(profile).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)));
     return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, `nearest office: ${m.label}`)
       : unanswered("no single office matches the profile location");
   }
@@ -556,7 +840,12 @@ export function answerQuestion(q, profile, ai) {
       // "Job Board" should hit "Other job board (e.g. Glassdoor, Indeed)" —
       // a contains-match, but only when it is unambiguous.
       if (!m && profile.heardAboutUs) m = findOnly(primary, [new RegExp(escapeRe(norm(profile.heardAboutUs)))]);
-      if (!m) m = matchOption(primary, "Other");
+      if (!m && profile.heardAboutUs) {
+        const hits = (primary.values || primary.options || []).filter((v) => norm(v.label).includes(norm(profile.heardAboutUs)));
+        const pick = hits.find((v) => /job (ad|post|board)/.test(norm(v.label))) || hits[0];
+        if (pick) m = { value: pick.value, label: pick.label };
+      }
+      if (!m) m = matchOption(primary, "Other") || findOnly(primary, [/^other\b/, /job board/]);
       return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, "how-you-heard best match") : unanswered("no matching option");
     }
     return out([{ name, value: profile.heardAboutUs || "Other" }], SOURCE.RULE, 0.85);
@@ -569,10 +858,27 @@ export function answerQuestion(q, profile, ai) {
     if (!desired) return unanswered("profile has no value for usPersonExportControl");
     let m = matchOption(primary, profile.usPersonExportControl);
     if (!m && desired === "no") m = findOnly(primary, [/none of the above/, /not a (us|u\.s\.?) person/]);
+    if (!m && desired === "yes") m = findOnly(primary, [/^i am an? (us|u\.s\.?) person/, /^(us|u\.s\.?) person\b/]);
     if (!m && desired === "yes" && profile.citizenshipStatus)
       m = findOnly(primary, [new RegExp(escapeRe(norm(profile.citizenshipStatus)))]);
     return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1)
       : unanswered("export-control options need profile.citizenshipStatus to pick a category");
+  }
+
+  if (key === "availability" && kinds[0] === "date") {
+    const d = startDateFor(profile);
+    return out([{ name, value: d }], SOURCE.PROFILE, 1, "start date");
+  }
+  if (key === "availability" && isSelect) {
+    const want = profile.availability || "Immediately";
+    const m = matchOption(primary, want)
+      || findOnly(primary, [/immediately.{0,40}full/, /^immediately|^asap|as soon as possible|right away/, /within.{0,10}(2|two) weeks/, /^(1|one)[- ]?(2|two) weeks/]);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`"${want}" is not an offered option`);
+  }
+  // Salary as a number box: digits from the profile or nothing.
+  if (key === "salaryExpectation" && kinds[0] === "number") {
+    const digits = String(profile.salaryExpectation || profile.desiredSalary || "").replace(/[^0-9]/g, "");
+    return digits ? out([{ name, value: digits }], SOURCE.PROFILE, 1) : unanswered("salary expectation as a number needs profile.salaryExpectation");
   }
 
   if (key && key in profileMap) {
@@ -592,8 +898,12 @@ export function answerQuestion(q, profile, ai) {
       // near..." is the truthful pick over "willing to relocate".
       const nearJob = (loc) => {
         const ll = norm(loc);
-        return !!ll && locationTerms(profile).some((t) => ll.includes(t) || t.includes(ll));
+        return !!ll && cityTerms(profile).some((t) => placeHit(ll, t));
       };
+      if (key === "willingToRelocate" && norm(desired) !== "yes" && /commut/.test(norm(label)) && nearJob(label)) {
+        const y = matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/, /already reside|currently (live|reside)|within commuting/]);
+        if (y) return out([{ name, value: y.value }], SOURCE.PROFILE, 1, "within commuting distance");
+      }
       if (!m && key === "willingToRelocate" && norm(desired) === "yes")
         m = (nearJob(label) || nearJob(profile.jobLocationName) ? findOnly(primary, [/already reside|currently (live|reside)/]) : null)
           || findOnly(primary, [/^i am willing to relocate/, /^yes\b/]);
@@ -602,10 +912,20 @@ export function answerQuestion(q, profile, ai) {
         // Not near this office but willing to relocate: the single option that
         // says so ("...not based in this location but willing to relocate").
         else if (norm(profile.willingToRelocate) === "yes")
-          m = findOnly(primary, [/\b(willing|able) to relocate\b/]);
+          m = findOnly(primary, [/\b(willing|able) to relocate\b|open to relo/]);
       }
       if (!m && (key === "workAuthorized" || key === "requiresSponsorship"))
         m = sponsorshipOption(primary, norm(profile.requiresSponsorship), norm(profile.workAuthorized), profile.visaStatus);
+      // EEO wording differs per board ("Man" / "Male", "Asian (Not Hispanic
+      // or Latino)"): a contains-match when unambiguous, else decline.
+      if (!m && /^eeo/.test(key)) {
+        m = findOnly(primary, [new RegExp("^" + escapeRe(norm(desired))), new RegExp(escapeRe(norm(desired).split(/[ ,(]/)[0]))])
+          || findOnly(primary, [/decline|prefer not|do not wish|don't wish|choose not/]);
+      }
+      if (!m && key === "pronouns") {
+        const lead = norm(desired).split(/[\/ ,]/)[0];
+        m = (lead && findOnly(primary, [new RegExp("^" + escapeRe(lead) + "\\b")])) || findOnly(primary, [/prefer not|decline|not to (say|disclose)/]);
+      }
       if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 1);
       // A single-option select is a mandatory acknowledgement regardless of key.
       const allOpts = primary.values || primary.options || [];

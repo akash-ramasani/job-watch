@@ -1,7 +1,10 @@
 
 // content/ashby.js — Injected into Ashby application pages.
-// Handles: text, email, tel, textarea, file, yesno, location, radio, checkbox
-// Features: AI field mapping · pre-submit validation · error-recovery loop · answer logging
+// Flow (2026-10-09): scan the form with lib/ashby-dom.js (stable Ashby class
+// names), ask the background for the computed application
+// (prepareAshbyApplication: answer engine + per-question AI + cover letter PDF),
+// fill by field path, rescan, and tell the person exactly what is left. The
+// older label-regex mapper below (legacyMain) runs only if that fails.
 
 (async function () {
 
@@ -245,7 +248,7 @@
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
       const descEl = entry.querySelector(".ashby-application-form-question-description, [class*='_description_']");
       const description = descEl ? descEl.textContent.trim() : "";
-      const required = !!(labelEl?.classList.contains("_required_101oc_92") || entry.querySelector("[required]"));
+      const required = !!(/(^|\s)_required_/.test(labelEl?.className || "") || entry.querySelector("[required]"));
 
       // ── Schema-first type detection ──
       const schema = schemaMap.get(id);
@@ -307,7 +310,7 @@
       if (!fs) continue;
       const labelEl = fs.querySelector("label.ashby-application-form-question-title");
       const label = labelEl ? labelEl.textContent.trim().replace(/\s*\*\s*$/, "") : "";
-      const required = !!(labelEl?.classList.contains("_required_101oc_92"));
+      const required = !!(/(^|\s)_required_/.test(labelEl?.className || ""));
 
       const schema = schemaMap.get(id);
 
@@ -1398,11 +1401,135 @@
     });
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // MAIN
-  // ─────────────────────────────────────────────────────────────────────────
+
+  // ─── Header / stable-class helpers ─────────────────────────────────────────
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function execAshby(action, ...args) {
+    const res = await sendMsg({ type: "EXEC_ASHBY", action, args });
+    return res?.result || { ok: false, error: "no result from main world" };
+  }
+  function pageIds() {
+    const m = location.href.match(/ashbyhq\.com\/([^/]+)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    return m ? { org: decodeURIComponent(m[1]), id: m[2] } : null;
+  }
+
+  // ─── Apply one computed fill through the MAIN world ────────────────────────
+  async function applyFill(f, pkg, domByPath) {
+    const dom = domByPath.get(f.path);
+    if (!dom) return { ok: false, error: "field not on page" };
+    switch (f.kind) {
+      case "file": {
+        const b64 = f.file === "cover" ? pkg.coverB64 : pkg.resumeB64;
+        const name = f.file === "cover" ? pkg.coverName : pkg.resumeName;
+        if (!b64) return { ok: false, error: f.file === "cover" ? "no cover letter bytes" : "no resume bytes" };
+        return execAshby("setFile", f.path, b64, name);
+      }
+      case "boolean":
+        if (dom.type === "radio") return execAshby("radio", f.path, f.value);
+        if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
+        return execAshby("yesNo", f.path, f.value);
+      case "select":
+        if (dom.type === "yesno") return execAshby("yesNo", f.path, f.value);
+        if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
+        return execAshby("radio", f.path, f.value);
+      case "multiselect":
+        if (dom.type === "radio") return execAshby("radio", f.path, f.values[0]);
+        return execAshby("checkboxes", f.path, f.values);
+      case "location":
+        return execAshby("location", f.path, f.value, f.match);
+      case "date":
+        if (dom.type !== "date") return execAshby("fillText", f.path, f.value);
+        return execAshby("date", f.path, f.value);
+      default:
+        if (dom.type === "yesno") return execAshby("yesNo", f.path, f.value);
+        if (dom.type === "radio") return execAshby("radio", f.path, f.value);
+        if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
+        return execAshby("fillText", f.path, String(f.value ?? ""));
+    }
+  }
+
+  // ─── New flow: computed application from prepareAshbyApplication ──────────
+  // Returns false when the package could not be fetched (caller falls back).
+  async function engineMain() {
+    const ids = pageIds();
+    if (!ids) return false;
+    showOverlay("⏳ JobWatch: Reading the form…");
+    const scanned = await execAshby("scan");
+    const domFields = Array.isArray(scanned) ? scanned : [];
+    if (!domFields.length) return false;
+    const domByPath = new Map(domFields.map((d) => [d.id, d]));
+
+    showOverlay("🤖 JobWatch: Computing your answers…");
+    const res = await sendMsg({ type: "GET_ASHBY_FILL_DATA", org: ids.org, id: ids.id, domFields: domFields.filter((d) => !d.survey) }).catch((e) => ({ ok: false, error: e.message }));
+    if (!res?.ok || !res.data) { console.warn("[JobWatch] computed application unavailable:", res?.error); return false; }
+    const pkg = res.data;
+    const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };
+    console.log(`[JobWatch] computed: ${pkg.answered}/${pkg.total} answered, ready=${pkg.ready}, schema=${pkg.schemaSource}, review=${pkg.review.length}`, pkg.review);
+
+    // Fill in page order; anything that fails is retried twice (slow widgets).
+    const order = new Map(domFields.map((d, i) => [d.id, i]));
+    let pending = [...pkg.fills].filter((f) => domByPath.has(f.path)).sort((a, b) => (order.get(a.path) ?? 0) - (order.get(b.path) ?? 0));
+    const skipped = pkg.fills.filter((f) => !domByPath.has(f.path)).map((f) => f.label);
+    if (skipped.length) console.log("[JobWatch] not on page (skipped):", skipped);
+    const answersLog = {};
+    const failures = [];
+    showOverlay(`✍️ JobWatch: Filling ${pending.length} fields…`);
+    for (let pass = 1; pass <= 3 && pending.length; pass++) {
+      if (pass > 1) await sleep(900);
+      const still = [];
+      for (const f of pending) {
+        try {
+          const r = await applyFill(f, pkg, domByPath);
+          if (r?.ok) {
+            answersLog[f.path] = { label: f.label, answer: f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r.picked || f.value)), type: f.kind, source: f.source };
+          } else {
+            still.push(f);
+            if (pass === 3) failures.push({ ...f, error: r?.error, seen: r?.seen });
+            console.warn(`[JobWatch] fill failed (pass ${pass}): ${f.label} — ${r?.error || "unknown"}`, r?.seen ? r.seen : "");
+          }
+        } catch (e) { still.push(f); if (pass === 3) failures.push({ ...f, error: e.message }); }
+        await sleep(80);
+      }
+      pending = still;
+    }
+
+    // What the person still has to do: required fields the engine parked, plus
+    // anything on the page that is still empty and required.
+    await sleep(400);
+    const after = await execAshby("scan");
+    const stillEmpty = (Array.isArray(after) ? after : []).filter((d) => d.required && !d.filled && !d.survey);
+    const manual = new Map();
+    for (const r of pkg.review) manual.set(r.label, r.note);
+    for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, failures.find((f) => f.path === d.id)?.error || "still empty");
+    console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
+    if (manual.size) {
+      const names = [...manual.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));
+      showOverlay(`⚠️ ${Object.keys(answersLog).length} filled. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""}`, "warning");
+      console.warn("[JobWatch] Needs you:", [...manual.entries()]);
+    } else {
+      showOverlay(`✅ ${Object.keys(answersLog).length} fields filled — review it, then click Submit yourself.`, "success");
+    }
+
+    // NEVER auto-submit. Watch for the person's own submission (30 min) so the
+    // job is logged as applied and the queue advances.
+    const watchStart = Date.now();
+    const watch = setInterval(async () => {
+      let done = false;
+      try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
+      if (done) {
+        clearInterval(watch);
+        chrome.runtime.sendMessage({ type: "APPLICATION_DONE", jobId: pendingJob?.id, jobTitle: pendingJob?.title, companyName: pendingJob?.companyName, status: "submitted", answersLog });
+        showOverlay("✅ Application submitted!", "success");
+        setTimeout(removeOverlay, 4000);
+      } else if (Date.now() - watchStart > 30 * 60 * 1000) {
+        clearInterval(watch);
+      }
+    }, 2000);
+    return true;
+  }
+
+  async function legacyMain(form) {
   try {
-    const form = await waitForForm();
 
     // Extract Ashby's schema from MAIN world FIRST — gives us authoritative field types
     const schemaMap = await extractAshbySchema();
@@ -1483,6 +1610,23 @@
       }
     }, 2000);
 
+  } catch (err) {
+    console.error("[JobWatch Extension]", err);
+    showOverlay(`❌ ${err.message}`, "error");
+    setTimeout(removeOverlay, 6000);
+  }
+
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN — computed application first, legacy mapper as the fallback
+  // ─────────────────────────────────────────────────────────────────────────
+  try {
+    const form = await waitForForm();
+    await sleep(600); // let the yes/no, autocomplete and date widgets mount
+    let done = false;
+    try { done = await engineMain(); } catch (e) { console.warn("[JobWatch] engine flow failed, using legacy fill:", e.message); }
+    if (!done) await legacyMain(form);
   } catch (err) {
     console.error("[JobWatch Extension]", err);
     showOverlay(`❌ ${err.message}`, "error");

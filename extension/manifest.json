@@ -1,11 +1,15 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Automatically fill and submit job applications from JobWatch.",
-
-  "permissions": ["storage", "tabs", "activeTab", "scripting", "identity"],
-
+  "permissions": [
+    "storage",
+    "tabs",
+    "activeTab",
+    "scripting",
+    "identity"
+  ],
   "host_permissions": [
     "*://*/*",
     "https://firestore.googleapis.com/*",
@@ -15,11 +19,9 @@
     "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/*",
     "https://*.chromiumapp.org/*"
   ],
-
   "background": {
     "service_worker": "background.js"
   },
-
   "content_scripts": [
     {
       "matches": [
@@ -28,7 +30,9 @@
         "http://localhost:*/*",
         "http://127.0.0.1:*/*"
       ],
-      "js": ["content/jobwatch-main.js"],
+      "js": [
+        "content/jobwatch-main.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -39,12 +43,18 @@
         "http://localhost:*/*",
         "http://127.0.0.1:*/*"
       ],
-      "js": ["content/jobwatch-bridge.js"],
+      "js": [
+        "content/jobwatch-bridge.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://jobs.ashbyhq.com/*/application*"],
-      "js": ["content/ashby.js"],
+      "matches": [
+        "https://jobs.ashbyhq.com/*/application*"
+      ],
+      "js": [
+        "content/ashby.js"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -55,11 +65,12 @@
         "https://boards.greenhouse.io/*/jobs/*"
       ],
       "all_frames": true,
-      "js": ["content/greenhouse.js"],
+      "js": [
+        "content/greenhouse.js"
+      ],
       "run_at": "document_idle"
     }
   ],
-
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "JobWatch Auto Apply",
@@ -69,7 +80,6 @@
       "128": "icons/icon128.png"
     }
   },
-
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

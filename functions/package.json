@@ -23,6 +23,7 @@
     "openai": "^6.49.0",
     "p-limit": "^4.0.0",
     "pdf-parse": "^1.1.4",
+    "pdfkit": "^0.15.2",
     "zipcodes": "^8.0.0"
   },
   "devDependencies": {

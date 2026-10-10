@@ -482,6 +482,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── Ashby: the computed application (answer engine + AI + cover PDF) ──
+      // Replaces GET_FILL_DATA for Ashby; that path stays as the fallback.
+      if (message.type === "GET_ASHBY_FILL_DATA") {
+        try {
+          const { idToken } = await getFreshToken();
+          const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
+          const job = pendingJob && jobMatchesExternalId(pendingJob, message.id) ? pendingJob : null;
+          const res = await fetch(`${FUNCTIONS_BASE}/prepareAshbyApplication`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ data: {
+              org: message.org, id: message.id, domFields: message.domFields || [],
+              jobTitle: job?.title || "", companyName: job?.companyName || "", jobLocationName: job?.locationName || "",
+            } }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.error) throw new Error(json.error?.message || `prepareAshbyApplication ${res.status}`);
+          sendResponse({ ok: true, data: json.result, pendingJob: job });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        return;
+      }
+
+      // ── Ashby: run a lib/ashby-dom.js helper in the page's MAIN world ─────
+      if (message.type === "EXEC_ASHBY") {
+        const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/ashby-dom.js"] })
+          .then(() => chrome.scripting.executeScript({
+            target, world: "MAIN",
+            func: (action, args) => window.__jwAshby[action](...(args || [])),
+            args: [message.action, message.args || []],
+          }))
+          .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
+          .catch((err) => sendResponse({ ok: false, error: err.message }));
+        return true;
+      }
+
       // ── Ashby: fetch the authoritative form schema via public GraphQL ────
       // The application page's __appData no longer embeds fieldEntries (form
       // audit 2026-08-26), so the schema must come from this endpoint.

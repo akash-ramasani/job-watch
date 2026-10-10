@@ -79,6 +79,7 @@ const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("./lib/ruleScore.cjs");
 const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligibility.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
+const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
@@ -4614,6 +4615,27 @@ exports.prepareGreenhouseApplication = onCall(
     if (!token || !id) throw new HttpsError("invalid-argument", "token and id are required.");
     const openai = requireOpenAI();
     return prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
+  }
+);
+
+// Compute a full Ashby application (answers + cover letter PDF + resume bytes)
+// for the browser extension to fill. Same engine as Greenhouse; the content
+// script sends the DOM-scraped fields as a fallback schema.
+exports.prepareAshbyApplication = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const { org, id, domFields = [], jobTitle = "", companyName = "", jobLocationName = "" } = request.data || {};
+    if (!org || !id) throw new HttpsError("invalid-argument", "org and id are required.");
+    let openai = null;
+    try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareAshbyApplication: no OpenAI client, free text will park:", e.message); }
+    const t0 = Date.now();
+    const out = await prepareAshbyApplication(uid, String(org), String(id), { db, openai, model: OPENAI_FAST_MODEL }, {
+      domFields: Array.isArray(domFields) ? domFields.slice(0, 80) : [], jobTitle, companyName, jobLocationName,
+    });
+    logger.info(`prepareAshbyApplication: uid=${uid} org=${org} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} schema=${out.schemaSource} ms=${Date.now() - t0}`);
+    return out;
   }
 );
 
