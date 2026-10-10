@@ -32,7 +32,7 @@ async function engine() {
   ]);
   _engine = {
     mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes,
-    sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT,
+    sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability,
   };
   return _engine;
 }
@@ -269,7 +269,7 @@ function fillsFrom(questions, mapped, fieldKind, { survey = false } = {}) {
 async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) {
   const { db, openai, model } = deps;
   const fetchFn = deps.fetch || DEFAULT_FETCH;
-  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT } = await engine();
+  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability } = await engine();
 
   // 1. Schema (public GraphQL), with the DOM scrape as a fallback.
   let job;
@@ -318,7 +318,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   const firstPass = mapForm(questions, profile, null);
   const needAi = firstPass.answers.map((a, i) => ({ a, q: questions[i] })).filter(({ a }) => a.answers.length === 0 && /free-text/i.test(a.note));
   const wantsCover = all.some((q) => /cover letter/i.test(q.label) && (q.ashbyType === "File" || q.ashbyType === "LongText"));
-  const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn };
+  const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn, readability };
   let coverText = "";
   if (wantsCover && openai) {
     try { coverText = await coverLetter(ctx, aiDeps); } catch (_) { coverText = ""; }

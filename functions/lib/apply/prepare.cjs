@@ -20,7 +20,7 @@ async function engine() {
     import("./verify.mjs"),
     import("./style.mjs"),
   ]);
-  _engine = { mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT };
+  _engine = { mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability };
   return _engine;
 }
 
@@ -28,7 +28,7 @@ async function engine() {
 async function prepareGreenhouseApplication(uid, token, id, deps) {
   const { db, openai, model } = deps;
   const fetchFn = deps.fetch || DEFAULT_FETCH;
-  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT } = await engine();
+  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability } = await engine();
 
   // 1. Form schema (public).
   const form = await fetchFn(`${GH_BASE}/${token}/jobs/${id}?questions=true`).then((r) => {
@@ -64,7 +64,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   const firstPass = mapForm(questions, profileForJob, null);
   const needAi = firstPass.answers.filter((a) => a.answers.length === 0 && /free-text/i.test(a.note));
   const qByLabel0 = new Map(questions.map((q) => [q.label || q.fields?.[0]?.name, q]));
-  const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn };
+  const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn, readability };
   const cache = new Map();
   const aiNotes = new Map();
   if (openai) {

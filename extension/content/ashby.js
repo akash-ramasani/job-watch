@@ -1499,13 +1499,15 @@
     if (skipped.length) console.log("[JobWatch] not on page (skipped):", skipped);
     const answersLog = {};
     const failures = [];
-    showOverlay(`✍️ JobWatch: Filling ${pending.length} fields…`);
+    showOverlay(`✍️ JobWatch: Filling ${pending.length} fields, top to bottom…`);
     for (let pass = 1; pass <= 3 && pending.length; pass++) {
       if (pass > 1) await sleep(900);
       const still = [];
       for (const f of pending) {
         try {
+          await execAshby("scrollTo", f.path).catch(() => {});
           const r = await applyFill(f, pkg, domByPath);
+          await sleep(260);
           if (r?.ok) {
             answersLog[f.path] = { label: f.label, answer: f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r.picked || f.value)), type: f.kind, source: f.source };
           } else {
@@ -1519,14 +1521,49 @@
       pending = still;
     }
 
-    // What the person still has to do: required fields the engine parked, plus
-    // anything on the page that is still empty and required.
-    await sleep(400);
-    const after = await execAshby("scan");
-    const stillEmpty = (Array.isArray(after) ? after : []).filter((d) => d.required && !d.filled && !d.survey);
+    // Verify four times, top to bottom: rescan, read the errors the board
+    // itself shows, fix what can be fixed, and only then report what is left.
+    const fillByPath = new Map(pkg.fills.map((f) => [f.path, f]));
+    let after = [];
+    let boardErrors = [];
+    for (let pass = 1; pass <= 4; pass++) {
+      await sleep(pass === 1 ? 500 : 900);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      await sleep(300);
+      after = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+      boardErrors = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+      const problems = after.filter((d) => !d.survey && ((d.required && !d.filled) || boardErrors.some((e) => e.path === d.id)));
+      console.log(`[JobWatch] verify pass ${pass}/4: ${problems.length} problem(s)`, problems.map((d) => d.label), boardErrors);
+      if (!problems.length) break;
+      showOverlay(`🔍 JobWatch: Checking the form, pass ${pass} of 4. Fixing ${problems.length} field${problems.length === 1 ? "" : "s"}…`);
+      for (const d of problems) {
+        const f = fillByPath.get(d.id);
+        if (!f) continue; // the engine parked it; it stays for the person
+        try {
+          await execAshby("scrollTo", d.id).catch(() => {});
+          const r = await applyFill(f, pkg, domByPath);
+          await sleep(300);
+          if (r?.ok) {
+            answersLog[f.path] = { label: f.label, answer: f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r.picked || f.value)), type: f.kind, source: f.source };
+            const i = failures.findIndex((x) => x.path === f.path);
+            if (i >= 0) failures.splice(i, 1);
+          } else if (!failures.some((x) => x.path === f.path)) {
+            failures.push({ ...f, error: r?.error, seen: r?.seen });
+          }
+        } catch (e) { if (!failures.some((x) => x.path === f.path)) failures.push({ ...f, error: e.message }); }
+      }
+    }
+    const stillEmpty = after.filter((d) => d.required && !d.filled && !d.survey);
     const manual = new Map(); // label -> { path, note }
     for (const r of pkg.review) manual.set(r.label, { path: r.path || "", note: r.note || "needs you" });
-    for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, { path: d.id, note: failures.find((f) => f.path === d.id)?.error || "still empty" });
+    for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, { path: d.id, note: failures.find((f) => f.path === d.id)?.error || "still empty after four checks" });
+    for (const e of boardErrors) {
+      if (!e.path) continue;
+      const d = after.find((x) => x.id === e.path);
+      const label = d?.label || e.label || e.path;
+      const prev = manual.get(label);
+      manual.set(label, { path: e.path, note: prev ? `${prev.note}. The form says: ${e.text}` : `The form says: ${e.text}` });
+    }
     const needsAttention = [...manual.entries()].map(([label, v]) => ({ label, path: v.path, note: v.note }));
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
     if (manual.size) {

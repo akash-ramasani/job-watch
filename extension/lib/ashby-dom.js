@@ -113,17 +113,56 @@
   }
 
   // ── Fillers ──────────────────────────────────────────────────────────────
+  /** Bring a field into the middle of the screen the way a person scrolls. */
+  async function scrollTo(path) {
+    const wrap = wrapperOf(path);
+    if (!wrap) return { ok: false, error: "field not found" };
+    wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+    await sleep(380);
+    return { ok: true };
+  }
+  /** Type like a person: one character at a time with a small pause, faster
+   *  for long paragraphs so a whole answer still lands in about a second and
+   *  a half. React sees every keystroke as an input event. */
+  async function typeInto(node, value) {
+    const text = String(value ?? "");
+    const perChar = Math.max(6, Math.min(35, Math.round(1400 / Math.max(1, text.length))));
+    setNativeValue(node, "");
+    let typed = "";
+    for (const ch of text) {
+      typed += ch;
+      setNativeValue(node, typed);
+      await sleep(perChar);
+    }
+  }
   async function fillText(path, value) {
     const node = controlOf(wrapperOf(path));
     if (!node) return { ok: false, error: "input not found" };
     for (let attempt = 1; attempt <= 3; attempt++) {
       node.focus();
-      setNativeValue(node, value);
-      node.dispatchEvent(new Event("blur", { bubbles: true }));
+      node.click();
       await sleep(120);
-      if (node.value === value) return { ok: true, attempt };
+      if (attempt === 1) await typeInto(node, value); else setNativeValue(node, value);
+      await sleep(150);
+      node.dispatchEvent(new Event("blur", { bubbles: true }));
+      await sleep(150);
+      if (node.value === String(value ?? "")) return { ok: true, attempt };
     }
     return { ok: false, error: "React reset the value", actual: node.value };
+  }
+  /** Focus then leave a field so the form shows its own validation message,
+   *  the way it would when a person tabs past it. Returns that message. */
+  async function validate(path) {
+    const wrap = wrapperOf(path);
+    const node = wrap && controlOf(wrap);
+    if (!node) return { ok: false, error: "field not found" };
+    node.focus();
+    await sleep(80);
+    node.dispatchEvent(new Event("blur", { bubbles: true }));
+    document.body.click();
+    await sleep(250);
+    const err = errors().find((e) => e.path === path);
+    return { ok: true, error: err ? err.text : "" };
   }
 
   async function setFile(path, b64, name) {
@@ -315,14 +354,24 @@
   }
 
   /** Visible validation messages after a submit attempt (best effort). */
+  /** What the board itself is complaining about, per field. Ashby renders
+   *  field errors inside the field wrapper (hashed _error_ classes, role=alert)
+   *  and marks inputs aria-invalid; form-level errors have no wrapper. */
   function errors() {
     const out = [];
-    for (const el of document.querySelectorAll("[role=alert], [aria-invalid=true], [class*='_error'], [class*='Error']")) {
+    const seen = new Set();
+    for (const el of document.querySelectorAll("[role=alert], [aria-invalid=true], [class*='_error'], [class*='Error'], [class*='-error'], .ashby-application-form-field-error")) {
       if (el.offsetParent === null) continue;
       const wrap = el.closest("[data-field-path]");
-      const text = (el.getAttribute("aria-invalid") === "true" ? "invalid" : el.textContent.replace(/\s+/g, " ").trim()).slice(0, 160);
-      if (!text) continue;
-      out.push({ path: wrap?.dataset.fieldPath || null, text });
+      const path = wrap?.dataset.fieldPath || null;
+      let text = el.getAttribute("aria-invalid") === "true" && !el.textContent.trim() ? "this field is not valid" : el.textContent.replace(/\s+/g, " ").trim();
+      if (!text || text.length > 200) continue;
+      // Skip the label itself when a wrapper carries an error class.
+      if (wrap && text === (wrap.querySelector("label")?.textContent || "").replace(/\s+/g, " ").trim()) continue;
+      const key = path + "|" + text;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ path, label: wrap ? (wrap.querySelector("label")?.textContent || "").replace(/\*|\s+/g, " ").trim() : "", text: text.slice(0, 160) });
     }
     return out;
   }
@@ -333,5 +382,5 @@
       || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']");
   }
 
-  window.__jwAshby = { scan, fillText, setFile, yesNo, radio, checkboxes, date, location, errors, submitted };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, errors, submitted };
 })();

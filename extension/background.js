@@ -652,6 +652,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, actual: node.value, error: "React reset value" };
         };
 
+        // Type a whole value like a person: one character at a time through
+        // React's value tracker, faster for long text so an answer lands in
+        // about a second and a half. Works for inputs and textareas found by
+        // data-field-path (Ashby) or by DOM id (Greenhouse).
+        const typeHuman = async (fieldId, val) => {
+          const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
+          let node = entry?.querySelector("input:not([type=file]):not([type=radio]):not([type=checkbox]), textarea");
+          if (!node) {
+            const byId = document.getElementById(fieldId);
+            if (byId && (byId.tagName === "INPUT" || byId.tagName === "TEXTAREA")) node = byId;
+          }
+          if (!node) return { ok: false, error: "input not found" };
+          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          const text = String(val ?? "");
+          const proto = node.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+          const set = (v) => {
+            const old = node.value;
+            if (setter) setter.call(node, v); else node.value = v;
+            if (node._valueTracker) node._valueTracker.setValue(old);
+            node.dispatchEvent(new Event("input", { bubbles: true }));
+          };
+          node.focus();
+          node.click();
+          await sleep(120);
+          set("");
+          const perChar = Math.max(6, Math.min(35, Math.round(1400 / Math.max(1, text.length))));
+          let typed = "";
+          for (const ch of text) { typed += ch; set(typed); await sleep(perChar); }
+          node.dispatchEvent(new Event("change", { bubbles: true }));
+          await sleep(120);
+          node.dispatchEvent(new Event("blur", { bubbles: true }));
+          await sleep(120);
+          return { ok: node.value === text, actual: node.value };
+        };
+
         const typeCharByChar = async (fieldId, val) => {
           const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
           const node = entry?.querySelector("input[role='combobox']") || entry?.querySelector("input");
@@ -996,6 +1032,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let argsToRun = [id, b64Data, fileName];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
+        if (action === "typeHuman") { funcToRun = typeHuman; argsToRun = [id, value]; }
         if (action === "clickYesNo") { funcToRun = setReactYesNo; argsToRun = [id, value]; }
         if (action === "clickRadio") { funcToRun = setReactRadio; argsToRun = [id, value]; }
         if (action === "ghSelectCombobox") { funcToRun = ghSelectCombobox; argsToRun = [id, value]; }

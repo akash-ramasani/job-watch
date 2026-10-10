@@ -245,7 +245,7 @@ test("anti-automation questions: human checks, type-this-word, arithmetic, AI-us
   assert.equal(answer(F("Are you a human?", "Boolean")), "Yes");
   assert.equal(answer(F("Are you a robot?", "Boolean")), "No");
   assert.equal(answer(F("Are you a human?", "ValueSelect", { options: ["I am a human", "I am a bot"] })), "I am a human");
-  assert.equal(answer(F("Please confirm you are a real person", "String")), "Yes, I am a person applying myself.");
+  assert.equal(answer(F("Please confirm you are a real person", "String")), "Yes. I am a person applying myself.");
   assert.equal(answer(F('Please type the word "banana" to confirm you read the job description', "String")), "banana");
   assert.equal(answer(F("To show you read this far, enter 'Blue Whale' here", "String")), "Blue Whale");
   assert.equal(answer(F("What is 7 plus 5?", "String")), "12");

@@ -919,7 +919,7 @@ export function answerQuestion(q, profile, ai) {
         : (findOnly(primary, [/\bhuman\b|real person|i am a person/]) || matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/]));
       return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, "human check") : unanswered("human-check options not recognized");
     }
-    return out([{ name, value: asksRobot ? "No, I am a person applying myself." : "Yes, I am a person applying myself." }], SOURCE.RULE, 0.9, "human check");
+    return out([{ name, value: asksRobot ? "No. I am a person applying myself." : "Yes. I am a person applying myself." }], SOURCE.RULE, 0.9, "human check");
   }
   if (key === "typeToken") {
     const m = String(label).match(/\b(?:type|enter|write|put|input)\b[^"'“‘]{0,40}["'“‘]([^"'”’]{1,40})["'”’]/i);

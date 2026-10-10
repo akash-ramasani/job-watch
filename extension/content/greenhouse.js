@@ -100,7 +100,11 @@
   // ── Fillers (route through MAIN world). Each returns the MAIN-world result
   // object ({ ok, error?, seen? }) so failures can be logged with details. ──
   async function fillText(el, value) {
-    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: el.id, value });
+    // Type like a person first; fall back to the direct setter if React
+    // dropped the typed value.
+    let r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "typeHuman", id: el.id, value });
+    if (r?.result?.ok) return r.result;
+    r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: el.id, value });
     return r?.result || { ok: false, error: "no result" };
   }
   async function fillCombobox(el, value) {
@@ -178,11 +182,24 @@
     if (!data.ready) warn("gate parked this job:", data.reasons);
     const answersLog = {};
 
-    // Attempt one fill; returns the MAIN-world result ({ ok, error?, seen? }).
-    async function fillOne(f) {
+    // Where a fill lands on the page, so the form is filled top to bottom.
+    function elementFor(f) {
       let el = findFieldByLabel(f.label);
       if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
       if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
+      return el;
+    }
+    const pageTop = (f) => { const el = elementFor(f); return el ? el.getBoundingClientRect().top + window.scrollY : Number.POSITIVE_INFINITY; };
+    async function bringIntoView(f) {
+      const el = elementFor(f);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      await sleep(380);
+    }
+
+    // Attempt one fill; returns the MAIN-world result ({ ok, error?, seen? }).
+    async function fillOne(f) {
+      const el = elementFor(f);
       // File and cover-text fills locate their targets in the MAIN world.
       if (!el && f.kind !== "file" && f.kind !== "cover-text") return { ok: false, error: "no field for label" };
       if (f.kind === "file") {
@@ -201,7 +218,9 @@
     // yet, slow option list, ...) is retried up to 2 more times.
     const MAX_PASSES = 3;
     let ok = 0;
-    let pending = data.fills;
+    const filledLabels = new Set();
+    // Top to bottom, no rush: the order a person would go in.
+    let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
     for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
       if (pass > 1) {
         log(`pass ${pass}: retrying ${pending.length} unfilled field(s)...`);
@@ -210,9 +229,12 @@
       const stillFailing = [];
       for (const f of pending) {
         try {
+          await bringIntoView(f);
           const res = await fillOne(f);
+          await sleep(260);
           if (res.ok) {
             ok++;
+            filledLabels.add(f.label);
             log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value);
             answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
           }
@@ -227,6 +249,36 @@
     }
 
     if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
+
+    // Verify four times, top to bottom: what is still empty and required, and
+    // what the board itself is complaining about. Fix what has a fill; the
+    // rest goes to the person with the board's own words.
+    const boardNotes = new Map(); // label -> error text
+    for (let pass = 1; pass <= 4; pass++) {
+      await sleep(pass === 1 ? 600 : 1000);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      await sleep(300);
+      const problems = ghProblems();
+      log(`verify pass ${pass}/4: ${problems.length} problem(s)`, problems);
+      if (!problems.length) break;
+      banner(`JobWatch is checking the form, pass ${pass} of 4. Fixing ${problems.length} field${problems.length === 1 ? "" : "s"}.`);
+      for (const p of problems) {
+        if (p.error) boardNotes.set(p.label, p.error);
+        const f = data.fills.find((x) => norm(x.label) === norm(p.label) || squash(x.label) === squash(p.label));
+        if (!f) continue;
+        try {
+          await bringIntoView(f);
+          const res = await fillOne(f);
+          await sleep(300);
+          if (res.ok) {
+            if (!filledLabels.has(f.label)) { ok++; filledLabels.add(f.label); }
+            answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
+            pending = pending.filter((x) => x !== f);
+            boardNotes.delete(p.label);
+          }
+        } catch (e) { warn("verify fix failed:", f.label, e.message); }
+      }
+    }
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
     banner(pending.length
       ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit. (Saved to your Applications page.)`
@@ -234,19 +286,59 @@
     // Record the attempt: every answer, everything left for the person
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [
-      ...pending.map((f) => ({ path: f.name || "", label: f.label, note: "could not be filled on the page" })),
+      ...pending.map((f) => ({ path: f.name || "", label: f.label, note: boardNotes.has(f.label) ? `could not be filled. The form says: ${boardNotes.get(f.label)}` : "could not be filled on the page" })),
       ...(Array.isArray(data.review) ? data.review.map((r) => ({ path: r.path || "", label: r.label || "", note: r.note || "needs you" })) : []),
+      ...[...boardNotes.entries()].filter(([label]) => !pending.some((f) => f.label === label) && !(data.review || []).some((r) => r.label === label)).map(([label, text]) => ({ path: "", label, note: `The form says: ${text}` })),
     ];
     ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.totalFields || data.fills.length + needsAttention.length, requiredTotal: data.requiredTotal || 0, flow: "engine", schemaSource: "greenhouse-api", reasons: data.reasons || [], jobTitle: data.jobTitle || "", companyName: data.companyName || "" })
       .then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
     watchForSubmit(answersLog);
   }
 
+  // Required fields that are still empty, plus every error message the board
+  // shows, each tied to its field label.
+  function ghProblems() {
+    const out = [];
+    const seen = new Set();
+    const labelText = (lab) => (lab?.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim();
+    const isEmpty = (el) => {
+      if (!el) return false;
+      if (el.type === "checkbox" || el.type === "radio") { const group = el.closest("fieldset, div"); return !group?.querySelector("input:checked"); }
+      if (el.type === "file") return !(el.files && el.files.length) && !el.closest("div")?.querySelector("[class*='file'] [class*='name'], .chosen, [data-testid*='file-name']");
+      if (isCombobox(el)) {
+        const box = el.closest("[class*='select'], [class*='control']")?.parentElement || el.parentElement;
+        const chosen = box?.querySelector("[class*='single-value'], [class*='singleValue'], [class*='multi-value'], [class*='multiValue']");
+        return !el.value && !chosen;
+      }
+      return !String(el.value || "").trim();
+    };
+    for (const lab of document.querySelectorAll("label")) {
+      const label = labelText(lab);
+      if (!label) continue;
+      const forId = lab.getAttribute("for");
+      const el = (forId && document.getElementById(forId)) || lab.closest("div")?.querySelector("input, textarea, select, [role=combobox]");
+      if (!el) continue;
+      const required = /\*/.test(lab.textContent || "") || el.required || el.getAttribute("aria-required") === "true";
+      const wrap = lab.closest("div.field, div[class*='field'], fieldset, div") || lab.parentElement;
+      const errEl = [...(wrap?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
+      const error = errEl ? errEl.textContent.replace(/\s+/g, " ").trim().slice(0, 160) : (el.getAttribute("aria-invalid") === "true" ? "this field is not valid" : "");
+      if ((required && isEmpty(el)) || error) {
+        if (seen.has(label)) continue;
+        seen.add(label);
+        out.push({ label, error, empty: isEmpty(el) });
+      }
+    }
+    return out;
+  }
+
+  let bannerEl = null;
   function banner(text) {
-    const d = document.createElement("div");
-    d.textContent = text;
-    d.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center";
-    document.body.appendChild(d);
+    if (!bannerEl) {
+      bannerEl = document.createElement("div");
+      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center";
+      document.body.appendChild(bannerEl);
+    }
+    bannerEl.textContent = text;
   }
 
   // Greenhouse renders the form async; wait for the first name field, then run.
