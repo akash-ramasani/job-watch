@@ -4,9 +4,11 @@
 // and returns fill instructions the content script can apply to the rendered
 // form (option LABELS for comboboxes so the script can pick them by text).
 
-const admin = require("firebase-admin");
+const { buildProfileForJob } = require("./ashby.cjs");
+const { aiContext, answerFreeText, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
 
 const GH_BASE = "https://boards-api.greenhouse.io/v1/boards";
+const DEFAULT_FETCH = (...a) => fetch(...a);
 
 /** Load the ESM engine modules once (Node 22 CJS -> ESM dynamic import). */
 let _engine;
@@ -18,60 +20,70 @@ async function engine() {
     import("./verify.mjs"),
     import("./style.mjs"),
   ]);
-  _engine = { mapForm: ae.mapForm, SOURCE: ae.SOURCE, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT };
+  _engine = { mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT };
   return _engine;
 }
 
-/** Main entry. deps = { db, openai, model }. Returns the fill package. */
+/** Main entry. deps = { db, openai, model, fetch? }. Returns the fill package. */
 async function prepareGreenhouseApplication(uid, token, id, deps) {
   const { db, openai, model } = deps;
-  const { mapForm, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT } = await engine();
+  const fetchFn = deps.fetch || DEFAULT_FETCH;
+  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT } = await engine();
 
   // 1. Form schema (public).
-  const form = await fetch(`${GH_BASE}/${token}/jobs/${id}?questions=true`).then((r) => {
+  const form = await fetchFn(`${GH_BASE}/${token}/jobs/${id}?questions=true`).then((r) => {
     if (!r.ok) throw new Error(`greenhouse form ${token}/${id} -> ${r.status}`);
     return r.json();
   });
   const questions = form.questions || [];
+  const job = { title: form.title || "", companyName: form.company_name || "", locationName: ((form.location && form.location.name) || "").trim(), descriptionHtml: form.content || "" };
 
-  // 2. Profile + resume.
+  // 2. Profile + resume, enriched for this job exactly like Ashby: years from
+  //    the resume dates, resume text for experience gates, the applicant's
+  //    local day for start dates, metro spellings, low-stakes defaults, and
+  //    whether they applied to this company before.
   const [userSnap, resumeSnap] = await Promise.all([
     db.collection("users").doc(uid).get(),
     db.collection("users").doc(uid).collection("resume").doc("profile").get(),
   ]);
   const profile = userSnap.exists ? userSnap.data() : {};
   const resume = resumeSnap.exists ? resumeSnap.data() : {};
-  // Sentinel so the resume field maps to "present"; the content script uploads
-  // the real bytes we return below. currentCompany comes from the resume's
-  // most recent role when the profile doesn't set it.
-  const profileForJob = {
-    ...profile,
-    resumePath: "RESUME",
-    currentCompany: profile.currentCompany || (resume.roles || [])[0]?.company || "",
-  };
+  let appliedBefore = null;
+  try {
+    if (job.companyName) {
+      const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(1).get();
+      appliedBefore = !apps.empty;
+    }
+  } catch (_) { /* unknown -> the question parks */ }
+  const profileForJob = buildProfileForJob(profile, resume, job, { appliedBefore });
 
-  // 3. AI free-text (two-pass so the engine stays sync).
-  const ctx = {
-    name: profile.fullName || `${profile.firstName || ""} ${profile.lastName || ""}`.trim(),
-    currentTitle: (resume.roles || [])[0]?.title || "",
-    skills: (resume.skills || []).slice(0, 20).join(", "),
-    summary: resume.summary || "",
-    jobTitle: form.title,
-    companyName: form.company_name || "",
-  };
+  // 3. AI free text (two-pass so the engine stays sync), one question per call,
+  //    four in flight. Optional boxes too: an empty "anything else" reads as
+  //    low effort. The reason an answer was withheld goes to the review list.
+  const ctx = aiContext(profileForJob, resume, job);
   const firstPass = mapForm(questions, profileForJob, null);
-  // AI-answer every unanswered free-text, optional ones included — an empty
-  // optional "why do you want to work here" box reads as low effort.
   const needAi = firstPass.answers.filter((a) => a.answers.length === 0 && /free-text/i.test(a.note));
+  const qByLabel0 = new Map(questions.map((q) => [q.label || q.fields?.[0]?.name, q]));
+  const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn };
   const cache = new Map();
-  for (const a of needAi) {
-    const ans = await answerFreeText(a.label, ctx, { openai, model, sanitizeText, STYLE_PROMPT });
-    if (ans) cache.set(a.label, ans);
+  const aiNotes = new Map();
+  if (openai) {
+    await pool(needAi, 4, async (a) => {
+      const q0 = qByLabel0.get(a.label) || {};
+      const long = (q0.fields || []).some((f) => f.type === "textarea");
+      try {
+        const r = await answerFreeText({ label: a.label, description: stripHtml(q0.description || ""), ashbyType: long ? "LongText" : "String" }, ctx, aiDeps);
+        if (r.answer) cache.set(a.label, r.answer); else aiNotes.set(a.label, r.reason || "AI declined");
+      } catch (e) { aiNotes.set(a.label, `AI call failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+  } else {
+    for (const a of needAi) aiNotes.set(a.label, "no AI available");
   }
 
   // 4. Map + verify.
   const mapped = mapForm(questions, profileForJob, { get: (l) => cache.get(l) });
   const verdict = verifyFourTimes(mapped, questions, profileForJob);
+  const review = mapped.review.map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: qByLabel0.get(r.label)?.fields?.[0]?.name || "" }));
 
   // 5. Build fill instructions. For selects, convert the option value -> label
   //    so the content script can pick it from the rendered listbox by text.
@@ -119,7 +131,8 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   fills.push(...complianceFills(form, profile));
 
   // 6. Cover letter (plain style) + resume bytes.
-  const coverText = await coverLetter(ctx, resume, form, { openai, model, sanitizeBlock, STYLE_PROMPT });
+  let coverText = "";
+  if (openai) { try { coverText = await coverLetter(ctx, aiDeps); } catch (_) { coverText = ""; } }
   // When the form has a cover-letter question with a paste-text variant, add a
   // fill so the content script pastes the generated letter ("enter manually").
   const clQ = questions.find((q) => (q.fields || []).some((f) => f.name === "cover_letter"));
@@ -127,39 +140,31 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     fills.push({ label: "Cover Letter", kind: "cover-text", value: coverText });
   }
   let resumeB64 = null;
-  if (resume.resumeUrl) {
+  const resumeUrl = profile.resumeUrl || resume.resumeUrl;
+  if (resumeUrl) {
     try {
-      const buf = Buffer.from(await (await fetch(resume.resumeUrl)).arrayBuffer());
+      const buf = Buffer.from(await (await fetchFn(resumeUrl)).arrayBuffer());
       resumeB64 = buf.toString("base64");
     } catch (_) { /* leave null; content script keeps the manual resume step */ }
   }
 
   return {
     jobTitle: form.title,
-    ready: verdict.ok,
+    companyName: job.companyName,
+    locationName: job.locationName,
+    ready: verdict.ok && review.length === 0,
     reasons: verdict.failures,
+    review,
     fills,
     resumeB64,
-    resumeName: resume.fileName || "resume.pdf",
+    resumeName: profile.resumeFileName || resume.fileName || "resume.pdf",
     coverText,
+    answered: mapped.answers.filter((a) => a.answers.length).length,
+    total: questions.length,
+    totalFields: questions.length,
+    requiredTotal: questions.filter((q) => q.required).length,
+    parked: review.map((r) => `${r.label.slice(0, 60)} -> ${r.note}`),
   };
-}
-
-async function answerFreeText(question, ctx, { openai, model, sanitizeText, STYLE_PROMPT }) {
-  const sys = `You are filling a job application as the candidate. ${STYLE_PROMPT} Answer in first person, two or three short sentences. If you cannot answer honestly from the given info, reply exactly NEEDS_REVIEW.`;
-  const user = `Candidate: ${ctx.name}. Role: ${ctx.currentTitle}. Skills: ${ctx.skills}. Job: ${ctx.jobTitle} at ${ctx.companyName}.\nQuestion: ${question}`;
-  const res = await openai.chat.completions.create({ model, temperature: 0.4, max_tokens: 160, messages: [{ role: "system", content: sys }, { role: "user", content: user }] });
-  const raw = res.choices?.[0]?.message?.content?.trim() || "";
-  if (!raw || /NEEDS_REVIEW/i.test(raw)) return null;
-  return sanitizeText(raw) || null;
-}
-
-async function coverLetter(ctx, resume, form, { openai, model, sanitizeBlock, STYLE_PROMPT }) {
-  const jd = (form.content || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 1200);
-  const sys = `You write a short plain cover letter as the candidate. ${STYLE_PROMPT} Three short paragraphs. Do not invent facts.`;
-  const user = `Candidate: ${ctx.name}, ${ctx.currentTitle}. Skills: ${ctx.skills}. Summary: ${ctx.summary}. Job: ${ctx.jobTitle} at ${ctx.companyName}. Job description: ${jd}`;
-  const res = await openai.chat.completions.create({ model, temperature: 0.6, max_tokens: 380, messages: [{ role: "system", content: sys }, { role: "user", content: user }] });
-  return sanitizeBlock(res.choices?.[0]?.message?.content?.trim() || "");
 }
 
 // ── Education section (Greenhouse serves the option lists per board) ────────

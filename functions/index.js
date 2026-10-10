@@ -4618,8 +4618,12 @@ exports.prepareGreenhouseApplication = onCall(
     const formKey = ledger.formKeyOf("greenhouse", token, id);
     const dup = await ledger.alreadyApplied(db, uid, formKey);
     if (dup.alreadyApplied) { logger.info(`prepareGreenhouseApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
-    const openai = requireOpenAI();
+    let openai = null;
+    try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareGreenhouseApplication: no OpenAI client, free text will park:", e.message); }
+    const t0 = Date.now();
     const out = await prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
+    logger.info(`prepareGreenhouseApplication: uid=${uid} token=${token} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
+    if (out.parked?.length) logger.info(`prepareGreenhouseApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };
   }
 );

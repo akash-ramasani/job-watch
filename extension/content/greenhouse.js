@@ -237,7 +237,7 @@
       ...pending.map((f) => ({ path: f.name || "", label: f.label, note: "could not be filled on the page" })),
       ...(Array.isArray(data.review) ? data.review.map((r) => ({ path: r.path || "", label: r.label || "", note: r.note || "needs you" })) : []),
     ];
-    ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.fills.length + needsAttention.length, requiredTotal: 0, flow: "engine", reasons: data.reasons || [] })
+    ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.totalFields || data.fills.length + needsAttention.length, requiredTotal: data.requiredTotal || 0, flow: "engine", schemaSource: "greenhouse-api", reasons: data.reasons || [], jobTitle: data.jobTitle || "", companyName: data.companyName || "" })
       .then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
     watchForSubmit(answersLog);
   }
