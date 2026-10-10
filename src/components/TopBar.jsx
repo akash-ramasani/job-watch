@@ -10,6 +10,7 @@ import {
   ArrowRightOnRectangleIcon,
   Bars3Icon,
   XMarkIcon,
+  ClipboardDocumentCheckIcon,
 } from "@heroicons/react/24/outline";
 import { useToast } from "./Toast/ToastProvider.jsx";
 import { ADMIN_UID } from "../App.jsx";
@@ -49,6 +50,7 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <NavButton active={location.pathname === "/jobs"} to="/jobs" icon={BriefcaseIcon}>Jobs</NavButton>
+              <NavButton active={location.pathname === "/applications"} to="/applications" icon={ClipboardDocumentCheckIcon}>Applications</NavButton>
               {user.uid === ADMIN_UID && (
                 <NavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon}>History</NavButton>
               )}
@@ -142,6 +144,7 @@ export default function TopBar({ user, userMeta, onLogout, extInstalled }) {
                 </>
               )}
               <MobileNavButton active={location.pathname === "/jobs"} to="/jobs" icon={BriefcaseIcon} onClick={() => setIsMenuOpen(false)}>Jobs</MobileNavButton>
+              <MobileNavButton active={location.pathname === "/applications"} to="/applications" icon={ClipboardDocumentCheckIcon} onClick={() => setIsMenuOpen(false)}>Applications</MobileNavButton>
               {user.uid === ADMIN_UID && (
                 <MobileNavButton active={location.pathname === "/history"} to="/history" icon={ClockIcon} onClick={() => setIsMenuOpen(false)}>History</MobileNavButton>
               )}

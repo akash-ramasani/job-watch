@@ -126,17 +126,57 @@
     return r?.result || { ok: false, error: "no result" };
   }
 
+  // ── Application ledger (users/{uid}/applications, one record per form) ────
+  function formKeyNow() {
+    const ids = jobIds();
+    return ids ? { formKey: `greenhouse|${ids.token.toLowerCase()}|${ids.id}`, source: "greenhouse", org: ids.token, postingId: ids.id, applyUrl: location.href.split("#")[0] } : null;
+  }
+  function pageJob() {
+    const title = (document.querySelector(".job__title h1, .app-title, h1")?.textContent || "").trim().slice(0, 200);
+    const company = (document.querySelector(".company-name, .job__company")?.textContent || "").replace(/^at\s+/i, "").trim().slice(0, 120);
+    return { jobTitle: title, companyName: company || (jobIds()?.token || "") };
+  }
+  async function ledger(event, extra = {}) {
+    const k = formKeyNow();
+    if (!k) return { ok: false, error: "no form key" };
+    const force = /jwforce/.test(location.hash);
+    const meta = event === "start" ? { ...pageJob(), force } : {};
+    try { return (await sendMsg({ type: "APPLICATION_EVENT", event, ...k, ...meta, ...extra })) || { ok: false }; } catch (e) { return { ok: false, error: e.message }; }
+  }
+  const fmtDay = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "an earlier date"; };
+
+  // Greenhouse shows a confirmation page (or empties the form) once the person
+  // submits. Poll for 30 minutes; never click Submit.
+  function watchForSubmit(answersLog) {
+    const t0 = Date.now();
+    const formPresent = () => !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name");
+    const watch = setInterval(() => {
+      const done = !formPresent() || /confirmation|thank/i.test(location.href) || /thank you for applying|application has been submitted|application submitted/i.test(document.body?.innerText?.slice(0, 4000) || "");
+      if (done) {
+        clearInterval(watch);
+        ledger("submitted", { answersLog }).then(() => banner("JobWatch: application recorded as submitted."));
+      } else if (Date.now() - t0 > 30 * 60 * 1000) clearInterval(watch);
+    }, 2000);
+  }
+
   // ── Main ──────────────────────────────────────────────────────────────────
   async function run() {
     const ids = jobIds();
     if (!ids) { warn("could not read token/id from URL"); return; }
     log("job", ids.token, ids.id, "— requesting computed application...");
 
+    // Every form visit is an attempt; a form already submitted is left alone.
+    const started = await ledger("start");
+    if (started?.duplicate) { banner(`JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
+    if (!started?.ok) warn("ledger(start) failed:", started?.error);
+
     const pkg = await sendMsg({ type: "GET_GH_FILL_DATA", token: ids.token, id: ids.id });
-    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); return; }
+    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
     const data = pkg.data;
+    if (data.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(data.submittedAt)}. Not filling it again.`); return; }
     log(`computed: ready=${data.ready}, ${data.fills.length} fields, resume=${data.resumeB64 ? "yes" : "no"}`);
     if (!data.ready) warn("gate parked this job:", data.reasons);
+    const answersLog = {};
 
     // Attempt one fill; returns the MAIN-world result ({ ok, error?, seen? }).
     async function fillOne(f) {
@@ -171,7 +211,11 @@
       for (const f of pending) {
         try {
           const res = await fillOne(f);
-          if (res.ok) { ok++; log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value); }
+          if (res.ok) {
+            ok++;
+            log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value);
+            answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
+          }
           else {
             stillFailing.push(f);
             warn(`fill failed (pass ${pass}):`, f.label, "—", res.error || "unknown", res.seen ? "| options seen: " + JSON.stringify(res.seen) : "");
@@ -185,8 +229,17 @@
     if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
     banner(pending.length
-      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit.`
+      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit. (Saved to your Applications page.)`
       : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then Submit.`);
+    // Record the attempt: every answer, everything left for the person
+    // (fields that would not fill, plus questions the engine parked).
+    const needsAttention = [
+      ...pending.map((f) => ({ path: f.name || "", label: f.label, note: "could not be filled on the page" })),
+      ...(Array.isArray(data.review) ? data.review.map((r) => ({ path: r.path || "", label: r.label || "", note: r.note || "needs you" })) : []),
+    ];
+    ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.fills.length + needsAttention.length, requiredTotal: 0, flow: "engine", reasons: data.reasons || [] })
+      .then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
+    watchForSubmit(answersLog);
   }
 
   function banner(text) {
@@ -204,6 +257,6 @@
     }
     // small settle for the rest of the comboboxes to mount
     await sleep(800);
-    run().catch((e) => warn("run failed:", e.message));
+    run().catch((e) => { warn("run failed:", e.message); ledger("error", { error: e.message }); });
   })();
 })();

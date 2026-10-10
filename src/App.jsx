@@ -23,6 +23,7 @@ const Jobs = lazy(() => import("./pages/Jobs.jsx"));
 const Feeds = lazy(() => import("./pages/Feeds.jsx"));
 const Profile = lazy(() => import("./pages/Profile.jsx"));
 const FetchHistory = lazy(() => import("./pages/FetchHistory.jsx"));
+const Applications = lazy(() => import("./pages/Applications.jsx"));
 const AdminUsers = lazy(() => import("./pages/AdminUsers.jsx"));
 const ExtensionAuth = lazy(() => import("./pages/ExtensionAuth.jsx"));
 const ChatAssistant = lazy(() => import("./components/ChatAssistant/ChatAssistant.jsx"));
@@ -283,6 +284,7 @@ export default function App() {
         />
         <Route path="/jobs" element={<Jobs user={user} userMeta={userMeta} preferences={preferences} />} />
         <Route path="/profile" element={<Profile user={user} userMeta={userMeta} />} />
+        <Route path="/applications" element={<Applications user={user} />} />
         <Route
           path="/history"
           element={user.uid === ADMIN_UID ? <FetchHistory user={user} /> : <Navigate to="/" replace />}

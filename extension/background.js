@@ -173,6 +173,39 @@ async function fsSet(path, data, idToken) {
 
 // ─── Cloud Function call ──────────────────────────────────────────────────────
 
+// Send one ledger event to recordApplication. Fills in job metadata from the
+// cached pendingJob when the content script did not have it.
+async function recordApplicationEvent(message, sender) {
+  const { idToken } = await getFreshToken();
+  const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
+  const job = pendingJob && (!message.postingId || jobMatchesExternalId(pendingJob, message.postingId)) ? pendingJob : null;
+  const event = message.event || (message.type === "APPLICATION_DONE" ? "submitted" : "start");
+  const payload = {
+    event,
+    formKey: message.formKey || "",
+    source: message.source || "",
+    org: message.org || "",
+    postingId: message.postingId || "",
+    applyUrl: message.applyUrl || sender?.tab?.url || "",
+    jobId: message.jobId || job?.id || "",
+    jobTitle: message.jobTitle || job?.title || "",
+    companyName: message.companyName || job?.companyName || "",
+    extensionVersion: chrome.runtime.getManifest().version,
+  };
+  for (const k of ["answersLog", "needsAttention", "filledCount", "totalFields", "requiredTotal", "flow", "schemaSource", "reasons", "error", "force"]) {
+    if (message[k] !== undefined) payload[k] = message[k];
+  }
+  const res = await fetch(`${FUNCTIONS_BASE}/recordApplication`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data: payload }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.error) throw new Error(json.error?.message || `recordApplication ${res.status}`);
+  if (event === "submitted") await chrome.storage.session.remove("pendingJob");
+  return json.result || {};
+}
+
 async function callMapFormFields(fields, jobTitle, companyName, jobLocationName, jobWorkplaceType, idToken, errorContext) {
   const res = await fetch(`${FUNCTIONS_BASE}/mapFormFields`, {
     method: "POST",
@@ -985,38 +1018,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
 
-      // ── 4. Ashby content script reports done ────────────────────────────
-      if (message.type === "APPLICATION_DONE") {
-        const { idToken, uid } = await getFreshToken();
-        const { jobId, jobTitle, companyName, status, answersLog } = message;
-
-        // Recover the cached job so we can record its URL. Without this load,
-        // `pendingJob` is undefined in this scope and reading .absolute_url
-        // throws a ReferenceError, aborting the whole handler.
-        const { pendingJob } = await new Promise((r) =>
-          chrome.storage.session.get("pendingJob", r)
-        );
-
-        // Log to applications sub-collection with full answer record
-        const docPath = `users/${uid}/applications/${jobId || Date.now()}`;
-        await fsSet(docPath, {
-          status: status || "submitted",
-          jobTitle: jobTitle || "",
-          companyName: companyName || "",
-          jobUrl: pendingJob?.absolute_url || pendingJob?.jobUrl || "",
-          appliedAt: new Date().toISOString(),
-          answersLog: answersLog || {},   // every question label + answer submitted
-          source: "ashby",
-        }, idToken);
-
-        // Mark the job document itself as auto-applied so it won't be queued again
-        if (jobId) {
-          await fsPatch(`users/${uid}/jobs/${jobId}`, { autoApplied: true, appliedAt: new Date().toISOString() }, idToken).catch(() => { });
+      // ── 4. Application ledger: every form, every attempt ─────────────────
+      // Content scripts report start / filled / submitted / error / dismiss.
+      // recordApplication keeps one document per form; a "start" on a form
+      // already submitted answers duplicate=true so the page is left alone.
+      if (message.type === "APPLICATION_EVENT" || message.type === "APPLICATION_DONE") {
+        try {
+          const r = await recordApplicationEvent(message, sender);
+          sendResponse({ ok: true, ...r });
+        } catch (err) {
+          console.warn("[JobWatch] recordApplication failed:", err.message);
+          sendResponse({ ok: false, error: err.message });
         }
-
-        await chrome.storage.session.remove("pendingJob");
-
-        sendResponse({ ok: true });
         return;
       }
 

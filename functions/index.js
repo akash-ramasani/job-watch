@@ -79,6 +79,7 @@ const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./
 const { ruleAssessJob, profileSkills, RULE_VERSION } = require("./lib/ruleScore.cjs");
 const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligibility.cjs");
 const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
+const ledger = require("./lib/apply/ledger.cjs");
 const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
@@ -4613,8 +4614,13 @@ exports.prepareGreenhouseApplication = onCall(
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
     const { token, id } = request.data || {};
     if (!token || !id) throw new HttpsError("invalid-argument", "token and id are required.");
+    // Never compute (or spend AI) for a form this person already submitted.
+    const formKey = ledger.formKeyOf("greenhouse", token, id);
+    const dup = await ledger.alreadyApplied(db, uid, formKey);
+    if (dup.alreadyApplied) { logger.info(`prepareGreenhouseApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
     const openai = requireOpenAI();
-    return prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
+    const out = await prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
+    return { ...out, formKey };
   }
 );
 
@@ -4628,6 +4634,9 @@ exports.prepareAshbyApplication = onCall(
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
     const { org, id, domFields = [], jobTitle = "", companyName = "", jobLocationName = "" } = request.data || {};
     if (!org || !id) throw new HttpsError("invalid-argument", "org and id are required.");
+    const formKey = ledger.formKeyOf("ashby", org, id);
+    const dup = await ledger.alreadyApplied(db, uid, formKey);
+    if (dup.alreadyApplied) { logger.info(`prepareAshbyApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
     let openai = null;
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareAshbyApplication: no OpenAI client, free text will park:", e.message); }
     const t0 = Date.now();
@@ -4636,9 +4645,37 @@ exports.prepareAshbyApplication = onCall(
     });
     logger.info(`prepareAshbyApplication: uid=${uid} org=${org} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} schema=${out.schemaSource} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareAshbyApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
-    return out;
+    return { ...out, formKey };
   }
 );
+
+// The application ledger: every form the extension touches is recorded, one
+// document per form (users/{uid}/applications/{formKey}), through events
+// start -> filled -> submitted (or error / dismiss). A "start" on a form that
+// was already submitted returns duplicate=true and writes nothing, which is
+// how the extension refuses to apply twice.
+exports.recordApplication = onCall({ region: REGION, maxInstances: 10 }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+  const d = request.data || {};
+  const event = String(d.event || "");
+  if (!["start", "filled", "submitted", "error", "dismiss"].includes(event)) throw new HttpsError("invalid-argument", "event must be start|filled|submitted|error|dismiss.");
+  let formKey = d.formKey ? String(d.formKey) : "";
+  let { source, org, postingId } = d;
+  if (!formKey) {
+    const k = ledger.formKeyFromUrl(d.applyUrl);
+    if (!k) throw new HttpsError("invalid-argument", "formKey or a recognizable applyUrl is required.");
+    ({ formKey, source, org, postingId } = k);
+  }
+  try {
+    const r = await ledger.recordEvent(db, uid, { ...d, event, formKey, source, org, postingId });
+    logger.info(`recordApplication: uid=${uid} ${event} ${formKey} -> ${r.status}${r.duplicate ? " (duplicate)" : ""} attempts=${r.attempts ?? ""}`);
+    return r;
+  } catch (e) {
+    logger.error("recordApplication failed", e);
+    throw new HttpsError("internal", e.message);
+  }
+});
 
 exports.getAdminUsersList = onCall({ region: REGION, maxInstances: 3, enforceAppCheck: false }, async (request) => {
   if (!request.auth || request.auth.uid !== "7Tojjo8l5PZIYctPmdwncf7PC133") {

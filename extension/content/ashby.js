@@ -1413,6 +1413,28 @@
     return m ? { org: decodeURIComponent(m[1]), id: m[2] } : null;
   }
 
+  // ─── Application ledger (users/{uid}/applications, one record per form) ───
+  function formKeyNow() {
+    const ids = pageIds();
+    return ids ? { formKey: `ashby|${ids.org.toLowerCase()}|${ids.id}`, source: "ashby", org: ids.org, postingId: ids.id, applyUrl: location.href.split("#")[0] } : null;
+  }
+  // The page's own title and org, for the same-role duplicate check when the
+  // job was not queued from JobWatch (the background prefers its cached job).
+  function pageJob() {
+    const title = (document.querySelector(".ashby-job-posting-heading, h1")?.textContent || "").trim().slice(0, 200);
+    const org = pageIds()?.org || "";
+    return { jobTitle: title, companyName: org ? org.replace(/[-_]+/g, " ") : "" };
+  }
+  async function ledger(event, extra = {}) {
+    const k = formKeyNow();
+    if (!k) return { ok: false, error: "no form key" };
+    const force = /jwforce/.test(location.hash);
+    const meta = event === "start" ? { ...pageJob(), force } : {};
+    try { return (await sendMsg({ type: "APPLICATION_EVENT", event, ...k, ...meta, ...extra })) || { ok: false }; } catch (e) { return { ok: false, error: e.message }; }
+  }
+  const fmtDay = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "an earlier date"; };
+  const jobMeta = (pendingJob) => ({ jobId: pendingJob?.id || "", jobTitle: pendingJob?.title || "", companyName: pendingJob?.companyName || "" });
+
   // ─── Apply one computed fill through the MAIN world ────────────────────────
   async function applyFill(f, pkg, domByPath) {
     const dom = domByPath.get(f.path);
@@ -1463,6 +1485,10 @@
     const res = await sendMsg({ type: "GET_ASHBY_FILL_DATA", org: ids.org, id: ids.id, domFields: domFields.filter((d) => !d.survey) }).catch((e) => ({ ok: false, error: e.message }));
     if (!res?.ok || !res.data) { console.warn("[JobWatch] computed application unavailable:", res?.error); return false; }
     const pkg = res.data;
+    if (pkg.alreadyApplied) {
+      showOverlay(`🛑 JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`, "warning");
+      return true;
+    }
     const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };
     console.log(`[JobWatch] computed: ${pkg.answered}/${pkg.total} answered, ready=${pkg.ready}, schema=${pkg.schemaSource}, review=${pkg.review.length}`, pkg.review);
 
@@ -1498,17 +1524,25 @@
     await sleep(400);
     const after = await execAshby("scan");
     const stillEmpty = (Array.isArray(after) ? after : []).filter((d) => d.required && !d.filled && !d.survey);
-    const manual = new Map();
-    for (const r of pkg.review) manual.set(r.label, r.note);
-    for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, failures.find((f) => f.path === d.id)?.error || "still empty");
+    const manual = new Map(); // label -> { path, note }
+    for (const r of pkg.review) manual.set(r.label, { path: r.path || "", note: r.note || "needs you" });
+    for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, { path: d.id, note: failures.find((f) => f.path === d.id)?.error || "still empty" });
+    const needsAttention = [...manual.entries()].map(([label, v]) => ({ label, path: v.path, note: v.note }));
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
     if (manual.size) {
       const names = [...manual.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));
-      showOverlay(`⚠️ ${Object.keys(answersLog).length} filled. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""}`, "warning");
-      console.warn("[JobWatch] Needs you:", [...manual.entries()]);
+      showOverlay(`⚠️ ${Object.keys(answersLog).length} filled. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""} (saved to your Applications page)`, "warning");
+      console.warn("[JobWatch] Needs you:", needsAttention);
     } else {
       showOverlay(`✅ ${Object.keys(answersLog).length} fields filled — review it, then click Submit yourself.`, "success");
     }
+    // Record the attempt: every answer, everything left for the person.
+    const mainFields = domFields.filter((d) => !d.survey);
+    ledger("filled", {
+      ...jobMeta(pendingJob), answersLog, needsAttention,
+      filledCount: Object.keys(answersLog).length, totalFields: mainFields.length, requiredTotal: mainFields.filter((d) => d.required).length,
+      flow: "engine", schemaSource: pkg.schemaSource || "", reasons: pkg.reasons || [],
+    }).then((r) => { if (!r?.ok) console.warn("[JobWatch] ledger(filled) failed:", r?.error); });
 
     // NEVER auto-submit. Watch for the person's own submission (30 min) so the
     // job is logged as applied and the queue advances.
@@ -1518,8 +1552,8 @@
       try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
       if (done) {
         clearInterval(watch);
-        chrome.runtime.sendMessage({ type: "APPLICATION_DONE", jobId: pendingJob?.id, jobTitle: pendingJob?.title, companyName: pendingJob?.companyName, status: "submitted", answersLog });
-        showOverlay("✅ Application submitted!", "success");
+        ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+        showOverlay("✅ Application submitted and recorded.", "success");
         setTimeout(removeOverlay, 4000);
       } else if (Date.now() - watchStart > 30 * 60 * 1000) {
         clearInterval(watch);
@@ -1576,18 +1610,37 @@
         });
         let msg = `⚠️ Complete manually: ${displayLabels.join(", ")}`;
         if (stillEmpty.length > 2) msg += `, +${stillEmpty.length - 2} more`;
-        showOverlay(msg, "warning");
+        showOverlay(msg + " (saved to your Applications page)", "warning");
         console.warn("[JobWatch] Still missing:", stillEmpty);
+        ledger("filled", {
+          ...jobMeta(pendingJob), answersLog,
+          needsAttention: stillEmpty.map((f) => ({ path: f.id || "", label: f.label || "", note: "still empty after the legacy fill" })),
+          filledCount: Object.keys(answersLog).length, totalFields: fields.length, requiredTotal: fields.filter((f) => f.required).length, flow: "legacy",
+        });
+        watchForSubmit(pendingJob, answersLog);
         return;
       }
     }
 
     // ── NEVER auto-submit: you review the form and click Submit yourself. ──
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
+    ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: [], filledCount: Object.keys(answersLog).length, totalFields: fields.length, requiredTotal: fields.filter((f) => f.required).length, flow: "legacy" });
     showOverlay("✅ Form filled — review it, then click Submit yourself.", "success");
 
-    // Watch for YOUR manual submission (up to 30 min) so the job is still
-    // logged as applied and the queue can advance.
+    watchForSubmit(pendingJob, answersLog);
+
+  } catch (err) {
+    console.error("[JobWatch Extension]", err);
+    showOverlay(`❌ ${err.message}`, "error");
+    ledger("error", { error: err.message });
+    setTimeout(removeOverlay, 6000);
+  }
+
+  }
+
+  // Watch for the person's own submission (30 min) so the ledger closes the
+  // record and the queue advances. Never clicks Submit.
+  function watchForSubmit(pendingJob, answersLog) {
     const watchStart = Date.now();
     const watch = setInterval(() => {
       const isSuccess = !document.querySelector(".ashby-application-form-container") ||
@@ -1595,27 +1648,13 @@
         !!document.querySelector(".ashby-application-success, [class*='successContainer']");
       if (isSuccess) {
         clearInterval(watch);
-        chrome.runtime.sendMessage({
-          type: "APPLICATION_DONE",
-          jobId: pendingJob?.id,
-          jobTitle: pendingJob?.title,
-          companyName: pendingJob?.companyName,
-          status: "submitted",
-          answersLog,  // ← full record of every question + answer
-        });
-        showOverlay("✅ Application submitted!", "success");
+        ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+        showOverlay("✅ Application submitted and recorded.", "success");
         setTimeout(removeOverlay, 4000);
       } else if (Date.now() - watchStart > 30 * 60 * 1000) {
         clearInterval(watch);
       }
     }, 2000);
-
-  } catch (err) {
-    console.error("[JobWatch Extension]", err);
-    showOverlay(`❌ ${err.message}`, "error");
-    setTimeout(removeOverlay, 6000);
-  }
-
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1624,12 +1663,21 @@
   try {
     const form = await waitForForm();
     await sleep(600); // let the yes/no, autocomplete and date widgets mount
+    // Every form visit is an attempt in the ledger; a form already submitted
+    // is never filled again.
+    const started = await ledger("start");
+    if (started?.duplicate) {
+      showOverlay(`🛑 JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`, "warning");
+      return;
+    }
+    if (!started?.ok) console.warn("[JobWatch] ledger(start) failed:", started?.error);
     let done = false;
     try { done = await engineMain(); } catch (e) { console.warn("[JobWatch] engine flow failed, using legacy fill:", e.message); }
     if (!done) await legacyMain(form);
   } catch (err) {
     console.error("[JobWatch Extension]", err);
     showOverlay(`❌ ${err.message}`, "error");
+    ledger("error", { error: err.message });
     setTimeout(removeOverlay, 6000);
   }
 
