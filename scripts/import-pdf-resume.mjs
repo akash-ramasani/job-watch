@@ -14,8 +14,11 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { db, bucket, ADMIN_UID } from "../worker/lib/firestore.mjs";
 
-const require = createRequire(new URL("../functions/package.json", import.meta.url));
-const pdfParse = require("pdf-parse");
+// pdf-parse lives in functions/; FieldValue and getAuth must come from the SAME
+// firebase-admin copy worker/lib/firestore.mjs initialized (worker/), or
+// Firestore rejects the sentinel values.
+const pdfParse = createRequire(new URL("../functions/package.json", import.meta.url))("pdf-parse");
+const require = createRequire(new URL("../worker/package.json", import.meta.url));
 const { FieldValue } = require("firebase-admin/firestore");
 const { getAuth } = require("firebase-admin/auth");
 
