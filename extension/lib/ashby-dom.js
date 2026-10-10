@@ -12,7 +12,7 @@
 //   radio    fieldset.ashby-application-form-input-radio-group  label[for] per option
 //   checkbox fieldset.ashby-application-form-input-checkbox-group input[type=checkbox] + label[for]
 //   location input[role=combobox].ashby-application-form-input-autocomplete -> [role=listbox] [role=option]
-//   date     .react-datepicker-wrapper input.ashby-application-form-input-date (typed MM/dd/yyyy sticks)
+//   date     .react-datepicker-wrapper input.ashby-application-form-input-date (calendar click via .ashby-application-form-input-date-popup-title + button[data-direction], typed MM/dd/yyyy fallback)
 //   file     input[type=file] (visually hidden) inside .ashby-application-form-input-file
 
 (function () {
@@ -204,22 +204,66 @@
     return { ok: picked.length > 0, picked, seen: picked.length ? undefined : [...all].map((c) => labelFor(c, wrap)) };
   }
 
+  /** Pick a date on Ashby's react-datepicker. Clicking through the calendar
+   *  is the path a person takes, so it is tried first; typing MM/dd/yyyy is
+   *  the fallback. `iso` is yyyy-mm-dd. */
   async function date(path, iso) {
     const wrap = wrapperOf(path);
     const node = wrap && (wrap.querySelector(".ashby-application-form-input-date, .react-datepicker-wrapper input") || controlOf(wrap));
     if (!node) return { ok: false, error: "date input not found" };
-    const [y, m, d] = String(iso).split("-");
-    const text = m && d && y ? `${m}/${d}/${y}` : String(iso);
+    const [y, m, d] = String(iso).split("-").map(Number);
+    if (!y || !m || !d) return { ok: false, error: "bad iso date " + iso };
+    const pad = (n) => String(n).padStart(2, "0");
+    const text = `${pad(m)}/${pad(d)}/${y}`;
+    const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const holds = () => {
+      const v = node.value.trim();
+      return v.includes(String(y)) && (v.includes(pad(d)) || new RegExp("\\b" + d + "\\b").test(v));
+    };
+
+    // 1. Calendar: open, move to the month, click the day.
+    node.focus();
+    node.click();
+    await sleep(250);
+    let pop = document.querySelector(".react-datepicker");
+    if (!pop) { node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); await sleep(250); pop = document.querySelector(".react-datepicker"); }
+    if (pop) {
+      for (let i = 0; i < 36; i++) {
+        // Ashby's header: <h4 class="ashby-application-form-input-date-popup-title">October 2026</h4>
+        // with data-direction buttons; the month grid also carries aria-label "month  2026-10".
+        const grid = (pop.querySelector(".react-datepicker__month")?.getAttribute("aria-label") || "").match(/(\d{4})-(\d{2})/);
+        const header = (pop.querySelector(".ashby-application-form-input-date-popup-title, .react-datepicker__current-month")?.textContent || "").trim().toLowerCase();
+        const mi = grid ? Number(grid[2]) - 1 : MONTHS.findIndex((mm) => header.startsWith(mm));
+        const yy = grid ? Number(grid[1]) : Number((header.match(/\d{4}/) || [])[0]);
+        if (mi < 0 || !yy) break;
+        const diff = (y - yy) * 12 + (m - 1 - mi);
+        if (diff === 0) break;
+        const btn = pop.querySelector(diff > 0 ? 'button[data-direction="next"], .react-datepicker__navigation--next' : 'button[data-direction="previous"], .react-datepicker__navigation--previous');
+        if (!btn) break;
+        btn.click();
+        await sleep(120);
+      }
+      const day = [...pop.querySelectorAll(`.react-datepicker__day--0${pad(d)}`)]
+        .find((el) => !el.classList.contains("react-datepicker__day--outside-month") && el.getAttribute("aria-disabled") !== "true" && !el.classList.contains("react-datepicker__day--disabled"));
+      if (day) {
+        day.click();
+        await sleep(250);
+        if (holds()) { document.body.click(); await sleep(100); return { ok: true, actual: node.value, how: "calendar" }; }
+      }
+    }
+
+    // 2. Type it.
     node.focus();
     node.click();
     await sleep(150);
     setNativeValue(node, text);
+    await sleep(150);
     node.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
     await sleep(150);
     node.dispatchEvent(new Event("blur", { bubbles: true }));
     document.body.click();
     await sleep(200);
-    return { ok: node.value.trim() !== "", actual: node.value };
+    return { ok: holds(), actual: node.value, how: "typed" };
   }
 
   async function location(path, city, match) {

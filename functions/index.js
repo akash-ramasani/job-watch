@@ -4635,6 +4635,7 @@ exports.prepareAshbyApplication = onCall(
       domFields: Array.isArray(domFields) ? domFields.slice(0, 80) : [], jobTitle, companyName, jobLocationName,
     });
     logger.info(`prepareAshbyApplication: uid=${uid} org=${org} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} schema=${out.schemaSource} ms=${Date.now() - t0}`);
+    if (out.parked?.length) logger.info(`prepareAshbyApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return out;
   }
 );
