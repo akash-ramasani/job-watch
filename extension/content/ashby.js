@@ -1436,6 +1436,10 @@
   const jobMeta = (pendingJob) => ({ jobId: pendingJob?.id || "", jobTitle: pendingJob?.title || "", companyName: pendingJob?.companyName || "" });
 
   // ─── Apply one computed fill through the MAIN world ────────────────────────
+  // The moving outline (content/highlight.js) around the question being filled.
+  const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
+  const blockOf = (path) => document.querySelector(`[data-field-path="${CSS.escape(path)}"]`);
+
   async function applyFill(f, pkg, domByPath) {
     const dom = domByPath.get(f.path);
     if (!dom) return { ok: false, error: "field not on page" };
@@ -1505,9 +1509,11 @@
       const still = [];
       for (const f of pending) {
         try {
+          hl.focus(blockOf(f.path), `Filling: ${f.label || f.path}`);
           await execAshby("scrollTo", f.path).catch(() => {});
           const r = await applyFill(f, pkg, domByPath);
           await sleep(260);
+          hl.mark(!!r?.ok);
           if (r?.ok) {
             answersLog[f.path] = { label: f.label, answer: f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r.picked || f.value)), type: f.kind, source: f.source };
           } else {
@@ -1520,6 +1526,7 @@
       }
       pending = still;
     }
+    hl.hide();
 
     // Verify four times, top to bottom: rescan, read the errors the board
     // itself shows, fix what can be fixed, and only then report what is left.
@@ -1540,9 +1547,11 @@
         const f = fillByPath.get(d.id);
         if (!f) continue; // the engine parked it; it stays for the person
         try {
+          hl.focus(blockOf(d.id), `Fixing: ${f.label || d.label || d.id}`);
           await execAshby("scrollTo", d.id).catch(() => {});
           const r = await applyFill(f, pkg, domByPath);
           await sleep(300);
+          hl.mark(!!r?.ok);
           if (r?.ok) {
             answersLog[f.path] = { label: f.label, answer: f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r.picked || f.value)), type: f.kind, source: f.source };
             const i = failures.findIndex((x) => x.path === f.path);
@@ -1552,7 +1561,9 @@
           }
         } catch (e) { if (!failures.some((x) => x.path === f.path)) failures.push({ ...f, error: e.message }); }
       }
+      hl.hide();
     }
+    hl.hide();
     const stillEmpty = after.filter((d) => d.required && !d.filled && !d.survey);
     const manual = new Map(); // label -> { path, note }
     for (const r of pkg.review) manual.set(r.label, { path: r.path || "", note: r.note || "needs you" });

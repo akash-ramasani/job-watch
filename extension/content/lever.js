@@ -77,6 +77,15 @@
   }
   const answerOf = (f, r, pkg) => f.kind === "file" ? pkg.resumeName : (f.values ? f.values.join("; ") : (r?.picked || f.value));
 
+  // The moving outline (content/highlight.js) around the question being filled.
+  const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
+  function blockOf(name) {
+    const sel = `#application-form [name="${CSS.escape(name)}"]`;
+    const el = document.querySelector(`${sel}:not([type=hidden])`) || document.querySelector(sel);
+    if (!el) return null;
+    return el.closest(".application-question") || el.closest("li, .application-field")?.parentElement || el.parentElement;
+  }
+
   // ── Main ──────────────────────────────────────────────────────────────────
   async function run() {
     const ids = pageIds();
@@ -115,9 +124,11 @@
       const still = [];
       for (const f of pending) {
         try {
+          hl.focus(blockOf(f.path), `Filling: ${f.label || f.path}`);
           await lever("scrollTo", f.path).catch(() => {});
           const r = await applyFill(f, pkg, domByPath);
           await sleep(260);
+          hl.mark(!!r?.ok);
           if (r?.ok) {
             answersLog[f.path] = { label: f.label, answer: String(answerOf(f, r, pkg) ?? ""), type: f.kind, source: f.source || "" };
           } else {
@@ -130,6 +141,7 @@
       }
       pending = still;
     }
+    hl.hide();
 
     // Verify four times, top to bottom: rescan, read what the board itself
     // says is wrong, fix what has a fill, and only then report what is left.
@@ -151,9 +163,11 @@
         const f = fillByPath.get(d.id);
         if (!f) continue; // the engine parked it; it stays for the person
         try {
+          hl.focus(blockOf(d.id), `Fixing: ${f.label || d.label || d.id}`);
           await lever("scrollTo", d.id).catch(() => {});
           const r = await applyFill(f, pkg, domByPath);
           await sleep(300);
+          hl.mark(!!r?.ok);
           if (r?.ok) {
             answersLog[f.path] = { label: f.label, answer: String(answerOf(f, r, pkg) ?? ""), type: f.kind, source: f.source || "" };
             const i = failures.findIndex((x) => x.path === f.path);
@@ -163,7 +177,9 @@
           }
         } catch (e) { if (!failures.some((x) => x.path === f.path)) failures.push({ ...f, error: e.message }); }
       }
+      hl.hide();
     }
+    hl.hide();
 
     const stillEmpty = after.filter((d) => d.required && !d.filled);
     const manual = new Map(); // label -> { path, note }

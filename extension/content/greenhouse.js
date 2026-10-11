@@ -190,6 +190,23 @@
       return el;
     }
     const pageTop = (f) => { const el = elementFor(f); return el ? el.getBoundingClientRect().top + window.scrollY : Number.POSITIVE_INFINITY; };
+    // The moving outline (content/highlight.js) around the whole question:
+    // the smallest block that holds both the control and its label.
+    const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
+    function blockFor(f) {
+      let el = elementFor(f);
+      if (!el && f.kind === "file") el = document.querySelector("input[type=file]");
+      if (!el && f.kind === "cover-text") el = document.querySelector("#cover_letter_text, textarea[id*='cover']");
+      if (!el) return null;
+      let block = el.closest("div.field, div[class*='field'], fieldset") || el.parentElement || el;
+      const lab = el.id ? document.querySelector(`label[for="${CSS.escape(el.id)}"]`) : null;
+      if (lab && !block.contains(lab)) {
+        let n = el.parentElement;
+        while (n && n.tagName !== "FORM" && n !== document.body && !n.contains(lab)) n = n.parentElement;
+        if (n && n.tagName !== "FORM" && n !== document.body) block = n;
+      }
+      return block;
+    }
     async function bringIntoView(f) {
       const el = elementFor(f);
       if (!el) return;
@@ -229,9 +246,11 @@
       const stillFailing = [];
       for (const f of pending) {
         try {
+          hl.focus(blockFor(f), `Filling: ${f.label}`);
           await bringIntoView(f);
           const res = await fillOne(f);
           await sleep(260);
+          hl.mark(!!res.ok);
           if (res.ok) {
             ok++;
             filledLabels.add(f.label);
@@ -247,6 +266,7 @@
       }
       pending = stillFailing;
     }
+    hl.hide();
 
     if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
 
@@ -267,9 +287,11 @@
         const f = data.fills.find((x) => norm(x.label) === norm(p.label) || squash(x.label) === squash(p.label));
         if (!f) continue;
         try {
+          hl.focus(blockFor(f), `Fixing: ${f.label}`);
           await bringIntoView(f);
           const res = await fillOne(f);
           await sleep(300);
+          hl.mark(!!res.ok);
           if (res.ok) {
             if (!filledLabels.has(f.label)) { ok++; filledLabels.add(f.label); }
             answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
@@ -278,7 +300,9 @@
           }
         } catch (e) { warn("verify fix failed:", f.label, e.message); }
       }
+      hl.hide();
     }
+    hl.hide();
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
     banner(pending.length
       ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit. (Saved to your Applications page.)`
