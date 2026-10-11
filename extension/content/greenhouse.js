@@ -115,10 +115,32 @@
     const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCheck", id: el.id });
     return r?.result || { ok: false, error: "no result" };
   }
-  async function uploadFile(el, b64, name) {
-    // el may be null: the resume widget has no <label>, so the MAIN-world side
-    // locates the file input itself when the id is empty.
-    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setFile", id: el?.id || "", b64Data: b64, fileName: name });
+  // Which upload slot a file fill belongs to. Greenhouse drops a file input
+  // once a file is attached, so the slot must be named explicitly: a resume
+  // must never fall through to the cover letter's input on a retry.
+  const fileSlot = (f) => (/cover/i.test(f.label || "") || /cover/i.test(f.name || "") ? "cover" : "resume");
+  /** The file input for a slot, by Greenhouse's ids first, then by the section it sits in. */
+  function findFileInput(slot) {
+    const byId = document.getElementById(slot === "cover" ? "cover_letter" : "resume");
+    if (byId && byId.type === "file") return byId;
+    for (const i of document.querySelectorAll("input[type=file]")) {
+      const attrs = `${i.id} ${i.name} ${i.getAttribute("aria-label") || ""}`;
+      let sec = "";
+      for (let p = i.parentElement, k = 0; p && k < 6 && p.tagName !== "FORM"; p = p.parentElement, k++) {
+        const t = (p.textContent || "").replace(/\s+/g, " ");
+        if (/resume|\bcv\b|cover/i.test(t)) { sec = t; break; }
+      }
+      const cover = /cover/i.test(attrs) || (/cover/i.test(sec) && !/resume|\bcv\b/i.test(sec));
+      const resume = /resume|\bcv\b/i.test(attrs) || (/resume|\bcv\b/i.test(sec) && !/cover/i.test(sec));
+      if (slot === "cover" ? cover : resume) return i;
+    }
+    return null;
+  }
+  async function uploadFile(el, b64, name, slot) {
+    // el may be null: the resume widget has no <label>. The MAIN-world side
+    // then finds the input for `slot` itself, and reports "already attached"
+    // when the slot shows a file name instead of an input.
+    const r = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setFile", id: el?.id || "", b64Data: b64, fileName: name, which: slot });
     return r?.result || { ok: false, error: "no result" };
   }
   async function fillLocation(el, city, match) {
@@ -184,6 +206,7 @@
 
     // Where a fill lands on the page, so the form is filled top to bottom.
     function elementFor(f) {
+      if (f.kind === "file") return findFileInput(fileSlot(f));
       let el = findFieldByLabel(f.label);
       if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
       if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
@@ -195,7 +218,11 @@
     const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
     function blockFor(f) {
       let el = elementFor(f);
-      if (!el && f.kind === "file") el = document.querySelector("input[type=file]");
+      if (!el && f.kind === "file") {
+        // Attached already: the input is gone, frame the upload group instead.
+        const re = fileSlot(f) === "cover" ? /cover/i : /resume|\bcv\b/i;
+        el = [...document.querySelectorAll(".file-upload, [class*='file-upload']")].find((g) => re.test(g.textContent || "")) || null;
+      }
       if (!el && f.kind === "cover-text") el = document.querySelector("#cover_letter_text, textarea[id*='cover']");
       if (!el) return null;
       let block = el.closest("div.field, div[class*='field'], fieldset") || el.parentElement || el;
@@ -220,7 +247,9 @@
       // File and cover-text fills locate their targets in the MAIN world.
       if (!el && f.kind !== "file" && f.kind !== "cover-text") return { ok: false, error: "no field for label" };
       if (f.kind === "file") {
-        return data.resumeB64 ? uploadFile(el, data.resumeB64, data.resumeName) : { ok: false, error: "no resume bytes" };
+        const slot = fileSlot(f);
+        if (slot !== "resume") return { ok: false, error: `no file for the ${slot} slot` }; // the cover letter goes in as text
+        return data.resumeB64 ? uploadFile(el, data.resumeB64, data.resumeName, slot) : { ok: false, error: "no resume bytes" };
       }
       if (f.kind === "cover-text") return pasteCoverLetter(f.value);
       if (f.kind === "location") return fillLocation(el, f.value, f.match);

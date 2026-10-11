@@ -643,7 +643,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // ── 3. Execute script in MAIN world (bypasses CSP) ─────────────────
       if (message.type === "EXEC_MAIN_WORLD") {
-        const { action, id, value, b64Data, fileName, match } = message;
+        const { action, id, value, b64Data, fileName, match, which } = message;
 
         const setReactValue = async (fieldId, val) => {
           const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
@@ -760,7 +760,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: true, typed: typeStr };
         };
 
-        const setReactFile = async (fieldId, b64, name) => {
+        // `which` is "resume" or "cover": the upload a file input must belong to.
+        // Greenhouse removes a file input once a file is attached, so a lookup
+        // that falls back to "whatever file input is left" would put the resume
+        // into the cover letter slot on a retry. Every input is classified by
+        // its own section (nearest ancestor that names Resume/CV or Cover
+        // Letter) and only a matching one is used.
+        const setReactFile = async (fieldId, b64, name, which) => {
+          const want = which === "cover" ? "cover" : "resume";
+          const isCover = (s) => /cover/i.test(s);
+          const isResume = (s) => /resume|\bcv\b|curriculum/i.test(s);
+          const sectionOf = (input) => {
+            let p = input.parentElement;
+            for (let k = 0; k < 6 && p && p.tagName !== "FORM" && p !== document.body; k++, p = p.parentElement) {
+              const t = (p.textContent || "").replace(/\s+/g, " ");
+              if (isResume(t) || isCover(t)) return t;
+            }
+            return "";
+          };
+          const kindOf = (input) => {
+            const attrs = `${input.id} ${input.name} ${input.getAttribute("aria-label") || ""} ${input.getAttribute("data-qa") || ""}`;
+            if (isCover(attrs)) return "cover";
+            if (isResume(attrs)) return "resume";
+            const sec = sectionOf(input);
+            const cov = isCover(sec), res = isResume(sec);
+            if (cov && !res) return "cover";
+            if (res && !cov) return "resume";
+            return "";
+          };
+
           const entry = document.querySelector(`[data-field-path="${CSS.escape(fieldId)}"]`);
           let node = entry ? entry.querySelector("input[type=file]") : null;
 
@@ -769,23 +797,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const byId = document.getElementById(fieldId);
             if (byId) node = byId.matches("input[type=file]") ? byId : byId.querySelector("input[type=file]");
           }
-          // Last resort on Greenhouse: the resume widget has no <label>, so
-          // find its file input directly — by attributes, then by nearby text.
+          // The resume widget has no <label>: find the file input that belongs
+          // to the wanted section. Never settle for an input of the other kind.
           if (!node) {
             const inputs = [...document.querySelectorAll("input[type=file]")];
-            node = inputs.find(i => /resume|\bcv\b/i.test(`${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("data-qa") || ""}`))
-              || inputs.find(i => {
-                let p = i.parentElement;
-                for (let k = 0; k < 4 && p; k++, p = p.parentElement) {
-                  const t = p.textContent || "";
-                  if (t.length < 300 && /resume|\bcv\b/i.test(t)) return true;
-                }
-                return false;
-              })
-              || (inputs.length === 1 ? inputs[0] : null);
+            node = inputs.find((i) => kindOf(i) === want) || null;
+            if (!node) {
+              // Already attached? The section then shows the file name instead of an input.
+              const group = [...document.querySelectorAll(".file-upload, [class*='file-upload'], [class*='attach']")]
+                .find((g) => (want === "cover" ? isCover(g.textContent || "") : isResume(g.textContent || "")) && !g.querySelector("input[type=file]"));
+              const shown = group?.querySelector("[class*='filename'], [class*='file-name'], [class*='fileName']")?.textContent?.trim()
+                || ((group?.textContent || "").match(/\S+\.(pdf|docx?|txt|rtf)\b/i) || [])[0];
+              if (shown) return { ok: true, already: true, actual: shown };
+              return { ok: false, error: `${want} file input not found` };
+            }
+          } else if (!entry && kindOf(node) && kindOf(node) !== want) {
+            return { ok: false, error: `file input #${node.id || "?"} belongs to the ${kindOf(node)} section, not ${want}` };
           }
-
-          if (!node) return { ok: false, error: "file input not found" };
 
           const ext = (name || "resume.pdf").split(".").pop().toLowerCase();
           const mime = ext === "pdf" ? "application/pdf"
@@ -1071,7 +1099,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
 
         let funcToRun = setReactFile;
-        let argsToRun = [id, b64Data, fileName];
+        let argsToRun = [id, b64Data, fileName, which];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
         if (action === "typeCharByChar") { funcToRun = typeCharByChar; argsToRun = [id, value]; }
         if (action === "typeHuman") { funcToRun = typeHuman; argsToRun = [id, value]; }
