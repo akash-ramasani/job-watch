@@ -26,7 +26,7 @@ async function engine() {
     import("./verify.mjs"),
     import("./style.mjs"),
   ]);
-  _engine = { mapForm: ae.mapForm, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability };
+  _engine = { mapForm: ae.mapForm, aiTrapIn: ae.aiTrapIn, BARE_LINKS: ae.BARE_LINKS, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability };
   return _engine;
 }
 
@@ -66,7 +66,7 @@ function firstOf(obj, keys) {
 async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
   const { db, openai, model } = deps;
   const fetchFn = deps.fetch || DEFAULT_FETCH;
-  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability } = await engine();
+  const { mapForm, aiTrapIn, BARE_LINKS, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability } = await engine();
   const domFields = (opts.domFields || []).filter((f) => f && f.id);
   if (!domFields.length) throw new Error("no form fields were scraped from the page");
 
@@ -115,7 +115,8 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     } else if (/^urls\[/i.test(name)) {
       const which = name.replace(/^urls\[|\]$/g, "").toLowerCase();
       const keys = URL_FIELDS[which] || URL_FIELDS.other;
-      const v = firstOf(profile, keys);
+      // No LinkedIn/GitHub on file: the bare site link stands in (see BARE_LINKS).
+      const v = firstOf(profile, keys) || BARE_LINKS[which] || "";
       // "Other website" only when it is not the same link as the portfolio box.
       if (v && !(which === "other" && fills.some((f) => /^urls\[/.test(f.path) && f.value === v))) text(name, v);
     }

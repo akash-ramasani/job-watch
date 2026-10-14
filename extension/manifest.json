@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.5.1",
+  "version": "1.6.2",
   "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse and Lever. You review and submit.",
   "permissions": [
     "storage",

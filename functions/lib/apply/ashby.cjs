@@ -181,13 +181,33 @@ function parsePlace(locationName) {
  *  posted city when it is a real place, the applicant's own city otherwise
  *  (remote roles, or no location on the posting), unless the profile sets
  *  locationStrategy "profile". */
+/** "$114.5K – $148K", "$120,000 - $150,000", "$150k+": { lo, hi } in dollars, or null. */
+function salaryRangeIn(text) {
+  const t = String(text || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  const num = (s, k) => { const n = Number(String(s).replace(/,/g, "")); return k ? n * 1000 : n; };
+  const m = t.match(/\$\s?(\d{2,3}(?:,\d{3})?(?:\.\d)?)\s?([kK])?\s?(?:–|-|—|to)\s?\$?\s?(\d{2,3}(?:,\d{3})?(?:\.\d)?)\s?([kK])?/);
+  if (!m) return null;
+  const lo = num(m[1], m[2] || (m[4] && Number(m[1]) < 1000)); const hi = num(m[3], m[4] || (m[2] && Number(m[3]) < 1000));
+  return lo >= 20000 && hi >= lo && hi < 2000000 ? { lo, hi } : null;
+}
+
 function locationFill(path, jobLocationName, profile) {
   const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
   // users/{uid}.locationStrategy = "profile" switches the widget to the
   // applicant's own city on every form (the engine's text answers already are).
   const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName)) : (parsePlace(jobLocationName) || own);
   if (!place) return null;
-  return { path, kind: "location", label: "Location", value: place.city, match: place.state ? `${place.city}, ${place.state}` : place.city, source: "rule" };
+  // Queries to try when the typeahead finds nothing for the bare city
+  // (Virta's widget had "No results" for "Hayward"): city + state code, city +
+  // state, the metro's main city, then the state alone. First hit wins.
+  const metro = metroOf(place.city);
+  const alternates = [...new Set([
+    place.abbr ? `${place.city}, ${place.abbr}` : "",
+    place.state ? `${place.city}, ${place.state}` : "",
+    metro?.display || "",
+    place.state || "",
+  ].filter((s) => s && s !== place.city))];
+  return { path, kind: "location", label: "Location", value: place.city, match: place.state ? `${place.city}, ${place.state}` : place.city, alternates, source: "rule" };
 }
 
 // ── Profile for this job ────────────────────────────────────────────────────
@@ -220,6 +240,17 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     yearsOfExperience: Number.isFinite(Number(user.yearsOfExperience)) ? Number(user.yearsOfExperience) : (years > 0 ? years : undefined),
     yearsOfExperienceNoInterns: yearsNoInterns > 0 ? yearsNoInterns : undefined,
     resumeText: buildProfileText(resume).toLowerCase(),
+    // Per-role text so "If yes, where?" can name the employers that show the experience.
+    roles: roles.map((r) => ({ title: r.title || r.role || "", company: r.company || r.employer || "", description: r.description || "" })),
+    // For degree, license and "have you worked here" gates.
+    education: Array.isArray(resume.education) ? resume.education : [],
+    certifications: Array.isArray(resume.certifications) ? resume.certifications : [],
+    companyName: job.companyName || "",
+    // Remote/hybrid history from the resume's role locations when the person
+    // has not said; "Yes, fully remote" / "Yes, hybrid" style answers map by prefix.
+    remoteExperience: user.remoteExperience ?? (roles.some((r) => /\bremote\b/i.test(r.location || "")) ? "Yes, fully remote" : roles.some((r) => /\bhybrid\b/i.test(r.location || "")) ? "Yes, hybrid" : undefined),
+    // The posting's own pay range ("$114.5K – $148K"), for number-only salary boxes.
+    jobSalaryRange: salaryRangeIn(`${job.compensationTierSummary || ""} ${stripHtml(job.descriptionHtml || "")}`),
     jobLocationName: job.locationName || "",
     country: user.country || "United States",
     heardAboutUs: user.heardAboutUs || "LinkedIn",
@@ -244,7 +275,7 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
 // ── Fills ───────────────────────────────────────────────────────────────────
 
 /** Turn mapped answers into fill instructions keyed by Ashby path. */
-function fillsFrom(questions, mapped, fieldKind, { survey = false } = {}) {
+function fillsFrom(questions, mapped, fieldKind, { survey = false, smsConsent = "" } = {}) {
   const fills = [];
   mapped.answers.forEach((a, i) => {
     const q = questions[i];
@@ -252,6 +283,9 @@ function fillsFrom(questions, mapped, fieldKind, { survey = false } = {}) {
     const kind = fieldKind(q.fields[0]);
     const labelOf = (v) => (q.fields[0].values || []).find((o) => String(o.value) === String(v))?.label ?? v;
     const base = { path: q.path, label: q.label, source: a.source, note: a.note, survey };
+    // Ashby's Phone field can carry its own SMS-consent radios; the content
+    // script needs the person's answer for them alongside the number.
+    if (q.ashbyType === "Phone") base.smsConsent = /^n/i.test(String(smsConsent || "")) ? "No" : "Yes";
     if (a.answers[0].isFile) { fills.push({ ...base, kind: "file", file: "resume" }); return; }
     if (kind === "multiselect") { fills.push({ ...base, kind: "multiselect", values: a.answers.map((x) => labelOf(x.value)) }); return; }
     if (kind === "select" || kind === "boolean") { fills.push({ ...base, kind, value: labelOf(a.answers[0].value) }); return; }
@@ -340,7 +374,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   // 5. Map + verify.
   const mapped = mapForm(questions, profile, { get: (label) => cache.get(label) });
   const verdict = verifyFourTimes(mapped, questions, profile);
-  fills.push(...fillsFrom(questions, mapped, fieldKind));
+  fills.push(...fillsFrom(questions, mapped, fieldKind, { smsConsent: profile.smsConsent }));
 
   // 5b. Cover letter File fields get the rendered PDF.
   let coverB64 = null;

@@ -128,14 +128,168 @@ test("US residency and time zone from the profile country", () => {
   assert.equal(answer(F("Are you currently based in the United States?", "Boolean"), { profile: abroad }), "No");
 });
 
+test("no social links on file: LinkedIn and GitHub get the bare site, portfolio stays blank", () => {
+  const bare = buildProfileForJob({ ...USER, linkedin: "", github: "", portfolio: "" }, RESUME, job(), { now: NOW });
+  assert.equal(answer(F("LinkedIn Profile:", "String"), { profile: bare }), "https://www.linkedin.com/");
+  assert.equal(answer(F("GitHub", "String", { required: false }), { profile: bare }), "https://www.github.com/");
+  assert.match(answer(F("Website / Portfolio:", "String", { required: false }), { profile: bare }), /^BLANK: left blank: no portfolio/);
+  assert.match(answer(F("Portfolio", "String"), { profile: bare }), /^PARKED/);
+  // A real link still wins.
+  assert.equal(answer(F("LinkedIn Profile:", "String")), "https://linkedin.com/in/ada");
+});
+
+test("'experience working as a <role>' reads the resume; 'If yes, where?' names the employers", () => {
+  const INFRA = { ...RESUME, roles: [{ ...RESUME.roles[0], description: RESUME.roles[0].description + " Owned the cloud infrastructure." }, RESUME.roles[1]] };
+  const p = buildProfileForJob(USER, INFRA, job(), { now: NOW });
+  assert.equal(answer(F("Do you have experience working as an Infrastructure Engineer?", "Boolean"), { profile: p }), "Yes");
+  assert.equal(answer(F("Do you have experience working as an Infrastructure Engineer?", "Boolean")), "No"); // plain resume never says infrastructure
+  assert.equal(answer(F("Do you have experience working as a Solutions Architect?", "Boolean"), { profile: p }), "No"); // nothing of it on the resume
+  assert.match(answer(F("Do you have experience working as an engineer?", "Boolean"), { profile: p }), /^PARKED/); // nothing specific to check
+  assert.deepEqual(engine.experienceWhere("Do you have experience working as an Infrastructure Engineer?", p.roles), ["Runn Technologies"]);
+  assert.deepEqual(engine.experienceWhere("Do you have experience with data pipelines?", p.roles), ["Acme"]);
+  const questions = qs([F("Do you have experience working as an Infrastructure Engineer?", "Boolean"), F("If yes, where?", "LongText", { required: false })]);
+  const m = engine.mapForm(questions, p, null);
+  assert.equal(m.answers[1].answers[0].value, "Runn Technologies");
+  assert.equal(m.answers[1].source, "resume");
+  // After a No (or a parked gate) the follow-up stays blank.
+  const noQs = qs([F("Do you have experience working as a Solutions Architect?", "Boolean"), F("If yes, where?", "LongText", { required: false })]);
+  assert.equal(engine.mapForm(noQs, p, null).answers[1].answers.length, 0);
+  const yearsQs = qs([F("Do you have a minimum of 2 years of professional software experience?", "Boolean"), F("If yes, where?", "LongText", { required: false })]);
+  assert.equal(engine.mapForm(yearsQs, p, null).answers[1].answers.length, 0); // Yes from years alone names no employer
+});
+
+test("required fields from the 2026-10-12 Virta form and the live-form sweep are answered", () => {
+  const p = buildProfileForJob(USER, RESUME, job(), { now: NOW });
+  // Phone with SMS-consent radios inside the field: the fill carries the consent answer.
+  const [phoneQ] = qs([F("Phone Number", "Phone")]);
+  const pm = engine.mapForm([phoneQ], p, null);
+  const pf = fillsFrom([phoneQ], pm, engine.fieldKind, { smsConsent: USER.smsConsent })[0];
+  assert.equal(pf.value, "415-555-0100");
+  assert.equal(pf.smsConsent, "Yes");
+  // Location typeahead fallbacks when the bare city finds nothing.
+  const lf = locationFill("_systemfield_location", "Remote - US", p);
+  assert.equal(lf.value, "Hayward");
+  assert.ok(lf.alternates.includes("Hayward, CA") && lf.alternates.includes("Hayward, California") && lf.alternates.includes("California"), JSON.stringify(lf.alternates));
+  // AI-tools experience level: the highest tier the resume supports.
+  const LEVELS = ["1 - Exploratory", "2 - Individual", "3 - Team", "4 - Cross-functional"];
+  const aiQ = "Select a response that accurately describes your level of experience with AI tools";
+  assert.equal(answer(F(aiQ, "ValueSelect", { options: LEVELS })), "1 - Exploratory"); // plain backend resume
+  const llm = buildProfileForJob(USER, { ...RESUME, summary: "Backend engineer who ships LLM agents and RAG pipelines with the OpenAI API." }, job(), { now: NOW });
+  assert.equal(answer(F(aiQ, "ValueSelect", { options: LEVELS }), { profile: llm }), "4 - Cross-functional");
+  const tools = buildProfileForJob(USER, { ...RESUME, summary: "Backend engineer who uses Cursor and Claude Code daily." }, job(), { now: NOW });
+  assert.equal(answer(F(aiQ, "ValueSelect", { options: LEVELS }), { profile: tools }), "2 - Individual");
+  // Location facts and willingness.
+  assert.equal(answer(F("Are you comfortable working from the location listed on this job description?", "Boolean")), "Yes");
+  assert.equal(answer(F("Do you currently live in San Francisco Bay Area OR Chicago Metro?", "Boolean")), "Yes");
+  assert.equal(answer(F("Do you currently live in Austin or Denver?", "Boolean")), "No");
+  assert.equal(answer(F("Where are you located?", "ValueSelect", { options: ["Montreal", "Other"] })), "Other");
+  assert.equal(answer(F("Do you want to work in a 100% remote environment on a long-term basis?", "Boolean")), "Yes");
+  assert.equal(answer(F("Are you willing to work in NYC in person 4-5 days a week?", "Boolean")), "Yes"); // hybrid Yes + relocate Yes
+  assert.equal(answer(F("Are you comfortable commuting to our location a minimum of 4 days per week?", "Boolean")), "Yes");
+  assert.deepEqual(answer(F("Which office are you applying to? (Select both if appropriate)", "MultiValueSelect", { options: ["San Francisco HQ - 181 Fremont Street", "New York City - 1 World Trade"] })), ["San Francisco HQ - 181 Fremont Street"]);
+  // Skills and seniority gates.
+  assert.equal(answer(F("Are you proficient in using Python?", "Boolean")), "Yes");
+  assert.equal(answer(F("Are you proficient in using Typescript or Javascript?", "Boolean")), "No");
+  assert.equal(answer(F("Do you have prior work experience in a finance or investment-related field?", "Boolean")), "No");
+  assert.equal(answer(F("Are you a current senior graduating between December 2026 and Summer 2027?", "ValueSelect", { options: ["Yes", "No"] })), "No");
+  // Compliance wording variants.
+  assert.equal(answer(F("Are you legally authorized and eligible for employment in the United States?", "Boolean")), "Yes");
+  assert.equal(answer(F("Will you now or in the future require Reducto to commence or sponsor an immigration case in order to employ you?", "Boolean")), "Yes");
+  assert.equal(answer(F("Do you need Chai to sponsor your work authorization in the United States?", "ValueSelect", { options: ["Yes - I need Chai’s sponsorship for a visa transfer", "Yes - I need Chai’s sponsorship for a new visa", "No - I am authorized to work in the U.S. without employer sponsorship"] })), "Yes - I need Chai’s sponsorship for a new visa");
+  assert.equal(answer(F("I authorize the RV Tech Talent Acquisition team to consider me for other job opportunities", "ValueSelect", { options: ["Yes", "No"] })), "Yes");
+  assert.match(answer(F("Prior Government Employment?", "Boolean")), /^PARKED/);
+  assert.equal(answer(F("Prior Government Employment?", "Boolean"), { profile: { ...p, priorGovernmentEmployment: "No" } }), "No");
+  // Salary as a number from the posting's own range; remote history from role locations.
+  const paid = buildProfileForJob(USER, RESUME, job({ descriptionHtml: "<p>Salary Range $120,000 - $160,000 • Offers Equity</p>" }), { now: NOW });
+  assert.deepEqual(paid.jobSalaryRange, { lo: 120000, hi: 160000 });
+  assert.equal(answer(F("Please share your base compensation expectations in USD:", "Number"), { profile: paid }), "150000");
+  assert.deepEqual(buildProfileForJob(USER, RESUME, job({ descriptionHtml: "<p>Salary Range $114.5K – $148K</p>" }), { now: NOW }).jobSalaryRange, { lo: 114500, hi: 148000 });
+  const remote = buildProfileForJob(USER, { ...RESUME, roles: [{ ...RESUME.roles[0], location: "Remote" }, RESUME.roles[1]] }, job(), { now: NOW });
+  assert.equal(answer(F("Have you previously worked in a remote or hybrid environment?", "ValueSelect", { options: ["Yes, fully remote", "Yes, hybrid", "No"] }), { profile: remote }), "Yes, fully remote");
+});
+
+test("live-form sweep (2026-10-12, 800 Ashby + Greenhouse forms): required fields that used to park", () => {
+  const p = buildProfileForJob(USER, RESUME, job({ companyName: "Halter" }), { now: NOW });
+  const YN = { options: ["Yes", "No"] };
+  // Degrees, licenses, scores.
+  assert.equal(answer(F("Do you have a four year degree?", "Boolean")), "Yes");
+  assert.equal(answer(F("Do you have a Master's, PhD or equivalent practical experience in Computer Science, Biology, Chemistry or Physics?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("Do you currently have a Juris Doctor (J.D.) degree or foreign equivalent?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Do you have your Series 7 AND Series 63 license?", "ValueSelect", YN)), "No");
+  assert.match(answer(F("GPA (Undergraduate)", "String")), /^PARKED: score needs/);
+  assert.equal(answer(F("GPA (Undergraduate)", "String"), { profile: { ...p, gpa: "3.8" } }), "3.8");
+  // Relationship with this or a named company; conflict lists; referrals.
+  assert.equal(answer(F("Are you currently employed by any construction companies doing work for SpaceXSI?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Are you currently, or have you ever been, employed by Deloitte in any capacity?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Are you currently an employee or have you been previously employed by Runn Technologies?", "ValueSelect", YN)), "Yes"); // on the resume
+  assert.equal(answer(F("Have you ever been an employee or contractor at Rula?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Are you a current Prompt Customer or employed by one?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Are you currently interviewing or actively being considered for a role at Autodesk?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Are you currently working with any of the following companies? (Note: You may not work concurrently)", "ValueSelect", { options: ["Acme Corp", "Globex", "None of the above"] })), "None of the above");
+  assert.equal(answer(F("Were you referred by a current Asset Living employee? If yes, please include the name of the employee.", "String")), "No");
+  assert.equal(answer(F("If you are a current Asset Living employee, have you informed your current manager of your interest?", "ValueSelect", { options: ["Yes", "No", "Not applicable"] })), "Not applicable");
+  // Work setup and location wording.
+  assert.equal(answer(F("Are you interested in a full-time or part-time position?", "ValueSelect", { options: ["Full-time", "Part-time"] })), "Full-time");
+  assert.equal(answer(F("Will you perform this work from the United States (excluding Wyoming and Illinois)?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("What country are you planning to work from?", "ValueSelect", { options: ["Canada", "United States", "Other"] })), "United States");
+  assert.equal(answer(F("Is the posted salary range aligned with your requirements?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("Are you able to work from San Francisco, CA?", "Boolean")), "Yes");
+  assert.equal(answer(F("Do you reside in any of the following areas: Denver, CO; Scottsdale, AZ; or Atlanta, GA?", "Boolean")), "No");
+  assert.equal(answer(F("Can you confirm that you can be on-site, 5 days/week at our Palo Alto, CA office?", "ValueSelect", { options: ["Yes, I can be on-site 5 days a week", "No, I cannot"] })), "Yes, I can be on-site 5 days a week");
+  assert.equal(answer(F("After onboarding, in-person attendance is required at least 3 days per week.", "ValueSelect", { options: ["I acknowledge", "I do not acknowledge"] })), "I acknowledge");
+  assert.equal(answer(F("Are you legally eligible to be employed in the United States?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("For United States-based applicants: Do you now or in the future require a visa to continue working in the US?", "ValueSelect", YN)), "Yes");
+  assert.match(answer(F("Will you now or in the future require visa sponsorship from Traba to work in the United States?", "LongText")), /^Yes\. I am authorized to work now on F-1 OPT and will need sponsorship/);
+  assert.equal(answer(F("Please select if you are a (i) U.S. citizen or national, (ii) U.S. lawful permanent resident, or (iii) protected individual", "ValueSelect", { options: ["I am a U.S. citizen, national, permanent resident or protected individual", "I am not any of the above"] })), "I am not any of the above");
+  assert.equal(answer(F("Notice: This position requires U.S. Citizenship to access defense information. Do you meet this requirement?", "ValueSelect", YN), { profile: { ...p, citizenshipStatus: "Non-U.S. citizen" } }), "No");
+  // Language proficiency, start month, how-you-heard wording, own-work statements.
+  assert.equal(answer(F("English Proficiency", "ValueSelect", { options: ["Native or bilingual", "Fluent", "Intermediate", "Basic"] })), "Native or bilingual");
+  assert.equal(answer(F("Khmer Proficiency", "ValueSelect", { options: ["Native", "Fluent", "Basic", "None"] })), "None");
+  assert.deepEqual(answer(F("Please indicate any languages in which you are fluent.", "MultiValueSelect", { options: ["English", "French", "Spanish"] })), ["English"]);
+  assert.equal(answer(F("Please select the month you will be able to start your internship.", "ValueSelect", { options: ["October", "November", "December", "January"] })), "October"); // next Monday after 2026-10-08
+  assert.equal(answer(F("How did you learn about this job?", "ValueSelect", { options: ["LinkedIn", "Indeed", "Referral", "Other"] })), "LinkedIn");
+  assert.match(answer(F("I confirm that my application materials and interview responses reflect my own work.", "ValueSelect", YN)), /^PARKED/);
+  assert.equal(answer(F("Middle Name", "String")), "N/A");
+  // Gates with gerunds, "personally", short language names, and alternatives.
+  assert.equal(answer(F("Do you have professional Python development experience, including designing and maintaining production services?", "Boolean")), "Yes");
+  assert.match(answer(F("Do you have experience managing production reliability in an AWS environment, including CI/CD and containers?", "Boolean")), /^PARKED/); // AWS yes, "reliability" unproven: mixed evidence parks
+  assert.equal(answer(F("Have you personally reviewed raw ANSI X12 files to identify the cause of a claim rejection?", "Boolean")), "No");
+  assert.equal(answer(F("Are you proficient in the C programming language?", "Boolean")), "No"); // "c" must not match inside "css"/"c++"
+  assert.equal(answer(F("Do you have experience with Python or Scala?", "Boolean")), "Yes");
+  // Second pass over the sweep: export rules, service, education, schedules, offices, clearances.
+  assert.equal(answer(F("Does the deemed export rule affect your employment by Everpure?", "ValueSelect", YN)), "Yes"); // not a U.S. person
+  assert.equal(answer(F("Have you served in the military?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Please select the highest level of education you have completed or are currently enrolled in.", "ValueSelect", { options: ["High school", "Bachelor's degree", "Master's degree", "Doctorate"] })), "Master's degree");
+  assert.equal(answer(F("Flexport operates globally, and this role requires collaborating with team members in Asia. Are you comfortable with meetings outside standard hours?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("Do you currently reside in the country this role is listed in?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("Do you currently reside in the country this role is listed in?", "ValueSelect", YN), { jobOver: { locationName: "London, United Kingdom" } }), "No");
+  assert.equal(answer(F("Which best describes your primary day-to-day engineering focus over the last 4+ years?", "ValueSelect", { options: ["Frontend web applications", "Backend services and infrastructure", "Mobile applications", "Embedded firmware"] })), "Backend services and infrastructure");
+  assert.equal(answer(F("What is your current notice period?", "ValueSelect", { options: ["1 month", "2 months", "3 months or more"] })), "1 month");
+  assert.equal(answer(F("Do you have an active Top Secret with SCI clearance?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Do you have an active Full Scope Polygraph (FSP)?", "ValueSelect", { options: ["Yes", "No, I do not"] })), "No, I do not");
+  assert.equal(answer(F("Citizenship Status", "ValueSelect", { options: ["U.S. Citizen", "Permanent Resident", "F-1 / OPT Student", "H-1B Visa Holder"] })), "F-1 / OPT Student");
+  assert.equal(answer(F("Where did you first see this job before applying?", "ValueSelect", { options: ["LinkedIn", "Company website", "Referral"] })), "LinkedIn");
+  assert.equal(answer(F("Are you a current APFM employee?", "ValueSelect", YN)), "No");
+  assert.equal(answer(F("Did an employee refer you to apply?", "ValueSelect", YN)), "No");
+  assert.deepEqual(answer(F("In which language(s) are you fluent (spoken) other than English?", "MultiValueSelect", { options: ["Spanish", "French", "None"] })), ["None"]);
+  assert.equal(answer(F("What is your preferred office location?", "ValueSelect", { options: ["Denver, CO", "Westlake, TX"] })), "Denver, CO"); // willing to relocate: first listed
+  assert.equal(answer(F("Which metropolitan area do you currently reside in?", "ValueSelect", { options: ["San Francisco", "New York", "Other"] })), "San Francisco");
+  assert.equal(answer(F("What country do you currently reside in?", "ValueSelect", { options: ["Canada", "United States"] })), "United States");
+  assert.equal(answer(F("Does the offered compensation meet your expectations?", "ValueSelect", YN)), "Yes");
+  assert.equal(answer(F("Are you subject to a non-competition agreement or any other agreement which would preclude you from working here?", "ValueSelect", YN), { profile: { ...p, employmentAgreements: "No" } }), "No");
+  assert.equal(answer(F("How many years of client-facing analytics, consulting, or stakeholder management experience do you have?", "ValueSelect", { options: ["0-1 years", "2-4 years", "5+ years"] })), "0-1 years");
+  assert.match(answer(F("AI Policy for Application", "ValueSelect", { options: ["I agree", "I do not agree"] })), /^PARKED/);
+});
+
 test("experience gates: years from the resume, technologies only when the resume shows them", () => {
   assert.equal(answer(F("Do you have a minimum of 7 years of experience building software?", "Boolean")), "No");
-  assert.match(answer(F("Do you have a minimum of 2 years of mobile engineering experience, not including internships?", "Boolean")), /^PARKED: resume does not show that kind/);
+  assert.equal(answer(F("Do you have a minimum of 2 years of mobile engineering experience, not including internships?", "Boolean")), "No"); // no mobile work on the resume
+  assert.equal(answer(F("Do you have a minimum of 7 years of engineering expereince (not including internships)?", "Boolean")), "No"); // typo ignored; 4 years < 7
   assert.equal(answer(F("Do you have a minimum of 2 years of professional software experience?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you have at least 2 years of experience building in AWS (with Terraform)?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you have more than three years deploying solutions at customers ?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you have experience with Kubernetes?", "Boolean")), "Yes");
-  assert.match(answer(F("Do you have experience with Kotlin?", "Boolean")), /^PARKED: resume does not show/);
+  assert.equal(answer(F("Do you have experience with Kotlin?", "Boolean")), "No"); // the resume names none of it: No is true
   assert.match(answer(F("Have you worked in-house at a technology company?", "Boolean")), /^PARKED/);
   assert.match(answer(F("Have you led US Government Affairs teams or functions in the past?", "Boolean")), /^PARKED/);
   assert.equal(answer(F("Are you familiar with or open to using AI tools (such as Github Copilot, ChatGPT, Claude) in your work?", "Boolean")), "Yes");

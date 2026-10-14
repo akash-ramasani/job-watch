@@ -57,9 +57,17 @@
     const input = controlOf(wrap);
     let filled = false;
 
+    const tel = wrap.querySelector("input[type=tel]");
     if (yesno) {
       type = "yesno";
       filled = !!yesno.querySelector("button[aria-pressed=true]");
+    } else if (tel && radios.length) {
+      // Ashby's Phone field with its SMS-consent radios inside the same block
+      // (Virta): a phone box first, consent second — never a radio group.
+      type = "tel";
+      options = [...radios].map((r) => ({ label: labelFor(r, wrap) }));
+      filled = !!tel.value?.trim() && !!wrap.querySelector("input[type=radio]:checked");
+      return { id: path, label, description, required, type, options, filled, survey, consent: true };
     } else if (radios.length) {
       type = "radio";
       options = [...radios].map((r) => ({ label: labelFor(r, wrap) }));
@@ -221,6 +229,23 @@
     return input.checked;
   }
 
+  /** Phone box plus the SMS-consent radios Ashby can put inside the same field. */
+  async function phone(path, value, consent) {
+    const wrap = wrapperOf(path);
+    const tel = wrap && (wrap.querySelector("input[type=tel]") || controlOf(wrap));
+    if (!tel) return { ok: false, error: "phone input not found" };
+    const typed = await fillText(path, value);
+    if (!typed.ok) return typed;
+    const radios = wrap.querySelectorAll("input[type=radio]");
+    if (!radios.length) return typed;
+    const want = /^n/i.test(String(consent || "")) ? "no" : "yes";
+    const labeled = [...radios].map((r) => ({ r, l: nrm(labelFor(r, wrap)) }));
+    const hit = labeled.find((x) => x.l.startsWith(want)) || labeled.find((x) => x.l.includes(want === "yes" ? "consent" : "do not"));
+    if (!hit) return { ok: true, picked: typed, consent: "no matching consent option", seen: labeled.map((x) => x.l) };
+    const ok = hit.r.checked || await clickOption(hit.r, wrap);
+    return { ok, consent: labelFor(hit.r, wrap) };
+  }
+
   async function radio(path, wanted) {
     const wrap = wrapperOf(path);
     if (!wrap) return { ok: false, error: "radio field not found" };
@@ -305,32 +330,43 @@
     return { ok: holds(), actual: node.value, how: "typed" };
   }
 
-  async function location(path, city, match) {
+  async function location(path, city, match, alternates) {
     const wrap = wrapperOf(path);
     const box = wrap && (wrap.querySelector("input[role=combobox]") || wrap.querySelector(".ashby-application-form-input-autocomplete") || controlOf(wrap));
     if (!box) return { ok: false, error: "location input not found" };
     const want = nrm(match || city);
     const wantCity = nrm(city);
-    box.focus();
-    box.click();
-    await sleep(120);
+    // "No results" is a row too; never count it as a suggestion.
+    const options = () => [...document.querySelectorAll("[role=listbox] [role=option], .ashby-application-form-input-autocomplete-popup-result")]
+      .filter((o) => o.offsetParent !== null && !/^no (results|matches|options)/i.test(o.textContent.trim()));
     // Type like a person: the suggestion list only queries on input events.
-    setNativeValue(box, "");
-    let typed = "";
-    for (const ch of String(city)) {
-      typed += ch;
-      setNativeValue(box, typed);
-      await sleep(45);
-    }
-    const options = () => [...document.querySelectorAll("[role=listbox] [role=option], .ashby-application-form-input-autocomplete-popup-result")].filter((o) => o.offsetParent !== null);
+    // The bare city first; when the widget finds nothing, the alternates
+    // (city + state, the metro's main city, the state) one by one.
+    const queries = [...new Set([String(city), ...(Array.isArray(alternates) ? alternates : [])].filter(Boolean))];
     let opts = [];
-    for (let i = 0; i < 40 && !opts.length; i++) { await sleep(100); opts = options(); }
-    if (!opts.length) {
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-      await sleep(400);
-      opts = options();
+    let typed = "";
+    for (const q of queries) {
+      box.focus();
+      box.click();
+      await sleep(120);
+      setNativeValue(box, "");
+      await sleep(150);
+      typed = "";
+      for (const ch of q) {
+        typed += ch;
+        setNativeValue(box, typed);
+        await sleep(45);
+      }
+      opts = [];
+      for (let i = 0; i < 35 && !opts.length; i++) { await sleep(100); opts = options(); }
+      if (!opts.length) {
+        box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        await sleep(500);
+        opts = options();
+      }
+      if (opts.length) break;
     }
-    if (!opts.length) return { ok: false, error: "no suggestions appeared", typed };
+    if (!opts.length) return { ok: false, error: "no suggestions appeared", typed, tried: queries };
     const texts = opts.map((o) => nrm(o.textContent));
     // "San Francisco, California" first, then city + state anywhere, then city.
     let idx = texts.findIndex((t) => t.startsWith(want));
@@ -382,5 +418,5 @@
       || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']");
   }
 
-  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, errors, submitted };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, errors, submitted, phone };
 })();

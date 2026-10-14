@@ -33,7 +33,7 @@ const { text } = await pdfParse(buf);
 const lines = text.split("\n").map((l) => l.replace(/\s+$/, "")).filter((l) => l.trim());
 
 // ── Sections ────────────────────────────────────────────────────────────────
-const HEADINGS = { profile: "summary", summary: "summary", skills: "skills", "technical skills": "skills", "professional experience": "experience", experience: "experience", "selected projects": "projects", projects: "projects", education: "education", certifications: "certifications" };
+const HEADINGS = { profile: "summary", summary: "summary", "professional summary": "summary", skills: "skills", "technical skills": "skills", "professional experience": "experience", experience: "experience", "selected projects": "projects", projects: "projects", education: "education", certifications: "certifications" };
 const sections = { header: [] };
 let cur = "header";
 for (const l of lines) {

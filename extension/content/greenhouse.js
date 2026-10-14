@@ -333,9 +333,10 @@
     }
     hl.hide();
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
-    banner(pending.length
-      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then Submit. (Saved to your Applications page.)`
-      : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then Submit.`);
+    const doneMsg = pending.length
+      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then press Submit.`
+      : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then press Submit.`;
+    banner(doneMsg, { action: submitAction(doneMsg) });
     // Record the attempt: every answer, everything left for the person
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [
@@ -385,13 +386,42 @@
   }
 
   let bannerEl = null;
-  function banner(text) {
+  function banner(text, { action = null } = {}) {
     if (!bannerEl) {
       bannerEl = document.createElement("div");
-      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center";
+      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center;display:flex;gap:12px;align-items:center;justify-content:center";
       document.body.appendChild(bannerEl);
     }
     bannerEl.textContent = text;
+    // Optional "Submit application" button: the PERSON presses it; it clicks
+    // Greenhouse's own Submit. Nothing submits on its own.
+    if (action) {
+      const b = document.createElement("button");
+      b.type = "button"; b.textContent = action.label;
+      b.style.cssText = "cursor:pointer;border:0;border-radius:8px;padding:6px 12px;font:600 13px system-ui;color:#fff;background:#059669;white-space:nowrap";
+      b.addEventListener("click", () => { b.disabled = true; action.onClick(b); });
+      bannerEl.appendChild(b);
+    }
+  }
+  function ghSubmitButton() {
+    return document.querySelector("#submit_app, button#submit_app, input#submit_app")
+      || [...document.querySelectorAll("button, input[type=submit]")].find((b) => /submit application|^submit$/i.test((b.textContent || b.value || "").trim()))
+      || null;
+  }
+  function submitAction(message) {
+    return {
+      label: "Submit application",
+      onClick: async () => {
+        const btn = ghSubmitButton();
+        if (!btn) { banner("JobWatch: could not find the Submit button. Scroll down and click it yourself."); return; }
+        btn.scrollIntoView({ block: "center" });
+        btn.click();
+        banner("JobWatch: submitting…");
+        await sleep(3500);
+        const stillHere = !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name");
+        if (stillHere) banner("JobWatch: Greenhouse did not accept it yet. Solve the CAPTCHA or fix the field it marks, then press Submit again.", { action: submitAction(message) });
+      },
+    };
   }
 
   // Greenhouse renders the form async; wait for the first name field, then run.

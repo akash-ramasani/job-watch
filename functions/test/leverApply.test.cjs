@@ -49,12 +49,12 @@ const POSTING = {
   descriptionBody: "<h3>The Role</h3><div>Build billing for dating apps in Python.</div>", lists: [{ text: "You will", content: "<li>Ship Python services on AWS</li>" }], additional: "<div>Hybrid in NYC.</div>", opening: "<div>Match Group is home to Tinder and Hinge.</div>",
 };
 
-function fakeDb() {
+function fakeDb(user = USER) {
   const snap = (data) => ({ exists: !!data, data: () => data });
   return {
     collection: () => ({
       doc: () => ({
-        get: async () => snap(USER),
+        get: async () => snap(user),
         collection: (name) => ({
           doc: () => ({ get: async () => snap(name === "resume" ? RESUME : null) }),
           where: () => ({ limit: () => ({ get: async () => ({ empty: true }) }) }),
@@ -82,6 +82,15 @@ function fakeOpenai(script) {
     } } },
   };
 }
+
+test("lever: no LinkedIn/GitHub on file fills the bare site links, portfolio stays empty", async () => {
+  const bare = { ...USER, linkedin: "", github: "", website: "", portfolio: "" };
+  const out = await prepareLeverApplication("uid1", "matchgroup", "0a5ad123-7c5b-4d88-b498-5a0262beb331", { db: fakeDb(bare), openai: null, model: "test", fetch: fakeFetch([]) }, { domFields: FIELDS, companyName: "Match Group" });
+  const by = Object.fromEntries(out.fills.map((f) => [f.path, f]));
+  assert.equal(by["urls[LinkedIn]"].value, "https://www.linkedin.com/");
+  assert.equal(by["urls[GitHub]"].value, "https://www.github.com/");
+  assert.equal(by["urls[Portfolio]"], undefined);
+});
 
 test("lever: scraped form end to end on the shared engine", async () => {
   const calls = [];

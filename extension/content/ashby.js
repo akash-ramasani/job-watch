@@ -1306,7 +1306,7 @@
 
   // ─── Overlay UI ──────────────────────────────────────────────────────────
   // ─── Premium Toast Notification ──────────────────────────────────────────
-  function showOverlay(text, type = "info") {
+  function showOverlay(text, type = "info", { action = null } = {}) {
     // Inject styles once
     if (!document.getElementById("jw-toast-styles")) {
       const s = document.createElement("style");
@@ -1335,10 +1335,17 @@
           line-height: 1 !important; margin: 0 !important; padding: 0 !important;
           display: flex; align-items: center; justify-content: center;
         }
-        #jw-overlay-text { 
-          flex: 1; word-break: break-word; 
+        #jw-overlay-text {
+          flex: 1; word-break: break-word;
           line-height: 1.5 !important; margin: 0 !important; padding: 0 !important;
         }
+        #jw-overlay-action {
+          flex-shrink: 0; cursor: pointer; border: 0; border-radius: 8px;
+          padding: 8px 12px; font: inherit; font-weight: 600; color: #fff;
+          background: linear-gradient(90deg,#10b981,#059669); white-space: nowrap;
+        }
+        #jw-overlay-action:hover { filter: brightness(1.1); }
+        #jw-overlay-action:disabled { opacity: 0.6; cursor: default; }
       `;
       document.head.appendChild(s);
     }
@@ -1380,7 +1387,45 @@
     el.style.borderColor = colors.border;
     el.querySelector("#jw-overlay-icon").textContent = icon;
     el.querySelector("#jw-overlay-text").textContent = message;
+    // Optional action button (e.g. "Submit application"). A fresh element each
+    // time, so an old handler never survives a new message.
+    el.querySelector("#jw-overlay-action")?.remove();
+    if (action) {
+      const b = document.createElement("button");
+      b.id = "jw-overlay-action"; b.type = "button"; b.textContent = action.label;
+      b.addEventListener("click", () => { b.disabled = true; action.onClick(b); });
+      el.appendChild(b);
+    }
   }
+
+  // ─── Submit from the overlay ───────────────────────────────────────────────
+  // The person presses the JobWatch button; it clicks Ashby's own Submit.
+  // Nothing submits without that press. The existing submission watchers
+  // record the application once Ashby shows its success page.
+  function ashbySubmitButton() {
+    const inForm = [...document.querySelectorAll(".ashby-application-form-container button, form button")];
+    return inForm.find((b) => b.type === "submit" || /submit application|^submit$/i.test((b.textContent || "").trim()))
+      || [...document.querySelectorAll("button")].find((b) => /submit application/i.test((b.textContent || "").trim()))
+      || null;
+  }
+  function submitAction(message, type) {
+    return {
+      label: "Submit application",
+      onClick: async () => {
+        const btn = ashbySubmitButton();
+        if (!btn) { showOverlay("❌ Could not find Ashby's Submit button. Scroll down and click it yourself.", "error"); return; }
+        btn.scrollIntoView({ block: "center" });
+        btn.click();
+        showOverlay("⏳ Submitting…");
+        await sleep(3000);
+        let done = false;
+        try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
+        if (!done) showOverlay("⚠️ Ashby did not accept it yet. Fix any field marked in red, then press Submit again.", "warning", { action: submitAction(message, type) });
+      },
+    };
+  }
+  /** Show the end-of-fill message with the Submit button attached. */
+  function offerSubmit(message, type) { showOverlay(message, type, { action: submitAction(message, type) }); }
 
   function removeOverlay() {
     const el = document.getElementById("jw-overlay");
@@ -1462,11 +1507,13 @@
         if (dom.type === "radio") return execAshby("radio", f.path, f.values[0]);
         return execAshby("checkboxes", f.path, f.values);
       case "location":
-        return execAshby("location", f.path, f.value, f.match);
+        return execAshby("location", f.path, f.value, f.match, f.alternates || []);
       case "date":
         if (dom.type !== "date") return execAshby("fillText", f.path, f.value);
         return execAshby("date", f.path, f.value);
       default:
+        // A phone box with SMS-consent radios inside it: number first, consent second.
+        if (dom.type === "tel" && dom.consent) return execAshby("phone", f.path, String(f.value ?? ""), f.smsConsent || "Yes");
         if (dom.type === "yesno") return execAshby("yesNo", f.path, f.value);
         if (dom.type === "radio") return execAshby("radio", f.path, f.value);
         if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
@@ -1579,10 +1626,10 @@
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
     if (manual.size) {
       const names = [...manual.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));
-      showOverlay(`⚠️ ${Object.keys(answersLog).length} filled. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""} (saved to your Applications page)`, "warning");
+      offerSubmit(`⚠️ ${Object.keys(answersLog).length} filled. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""}, then press Submit.`, "warning");
       console.warn("[JobWatch] Needs you:", needsAttention);
     } else {
-      showOverlay(`✅ ${Object.keys(answersLog).length} fields filled — review it, then click Submit yourself.`, "success");
+      offerSubmit(`✅ ${Object.keys(answersLog).length} fields filled — review it, then press Submit.`, "success");
     }
     // Record the attempt: every answer, everything left for the person.
     const mainFields = domFields.filter((d) => !d.survey);
@@ -1658,7 +1705,7 @@
         });
         let msg = `⚠️ Complete manually: ${displayLabels.join(", ")}`;
         if (stillEmpty.length > 2) msg += `, +${stillEmpty.length - 2} more`;
-        showOverlay(msg + " (saved to your Applications page)", "warning");
+        offerSubmit(msg + ", then press Submit.", "warning");
         console.warn("[JobWatch] Still missing:", stillEmpty);
         ledger("filled", {
           ...jobMeta(pendingJob), answersLog,
@@ -1673,7 +1720,7 @@
     // ── NEVER auto-submit: you review the form and click Submit yourself. ──
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
     ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: [], filledCount: Object.keys(answersLog).length, totalFields: fields.length, requiredTotal: fields.filter((f) => f.required).length, flow: "legacy" });
-    showOverlay("✅ Form filled — review it, then click Submit yourself.", "success");
+    offerSubmit("✅ Form filled — review it, then press Submit.", "success");
 
     watchForSubmit(pendingJob, answersLog);
 
