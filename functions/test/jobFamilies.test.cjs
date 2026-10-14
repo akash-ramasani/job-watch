@@ -26,6 +26,33 @@ test("software profile: every job that scored 40+ in the audit set is assessed",
   }
 });
 
+test("software profile: titles the 2026-10-11 audit found skipped are now assessed", () => {
+  // Every one of these was skipped before: a non-tech word won the title, a
+  // family regex had a gap, or a generic tech word carried the whole title.
+  for (const t of ["Manager, CUDA Driver", "Information Systems Security Officer - ISSO", "Senior Information System Security Officer (ISSO) II - Tucson, AZ",
+    "Senior Phishing Tradecraft Researcher", "Security GRC Senior Analyst", "GRC and Security Compliance Lead", "Security & IT Intern", "Staff CSIRT Analyst",
+    "CTI Analyst", "Data Protection Specialist", "Senior Director, Privacy, Product and Platform Security", "Detection Analyst",
+    "Research Intern, Spatial Intelligence - Summer 2027", "Research Intern, World Models and Synthetic Data for Autonomous Driving - Summer 2027",
+    "Senior IT Engineer", "IT Operations Engineer", "Principal IT Engineer - Networking", "Lead IT Architect", "Senior IT System Administrator", "Principal IT Technologist",
+    "Senior Architect, Data and Analytics", "DataOps - Lead Data Analyst", "Director of Data Governance & Enablement Platforms", "Senior Data Manager",
+    "Chief Architect (System Architecting, Requirements & Interfaces)", "Enterprise Business Architect", "Legal Systems Architect", "VP, IT Strategy and Architecture",
+    "Global Vice President, Compute Control Plane", "Vice President, Product Architecture & Security Platforms", "Director, Head of Core Banking Technology Platforms",
+    "NA Head of eFX and FX Front Office Technology ,Managing Director", "Staff Systems Eng, Navigation", "Control Systems Team Lead", "Field Technical Support",
+    "Partner & Agentforce Contact Center, Solution Consulting Director", "Platform Consultant Senior Expert", "Lead Technology Business Consultant",
+    "Quality Engineering", "Business Integration Testing Sr. Advisor, Individual Dental Operations", "Quantum Compute Simulation Scientist",
+    "Technical Specialist, Battery Algorithms and Digital Twin, Ford Energy", "Executive Director, Health100 App — Digital Product"]) {
+    assert.equal(shouldAssess(t, SDE, MISSION).assess, true, t);
+  }
+  // Architects of buildings and lecture halls are still not engineers; neither are PMs, recruiters or writers with "technical" in the title.
+  for (const t of ["Architect (Data Centers & Workplace) - Memphis", "Adjunct Faculty - Architecture", "Senior Technical Program Manager", "Technical Product Manager",
+    "Senior Technical Recruiter", "Senior-level Technical Writer", "Head of People Technology", "Security Guard", "Target Security Specialist", "Fire Service Technician"]) {
+    assert.equal(shouldAssess(t, SDE, MISSION).assess, false, t);
+  }
+  // Analyst profile: applied scientists count as data science; software titles still do not.
+  assert.equal(shouldAssess("Applied Scientist, Optimization & Logistics", DA, MISSION).assess, true);
+  assert.equal(shouldAssess("Manager, CUDA Driver", DA, MISSION).assess, false);
+});
+
 test("software profile skips other professions", () => {
   for (const t of ["Grad Pharmacist", "Family Nurse Practitioner - NP/PA (Part-time)", "GTM Recruiter (Fixed Term)", "Account Executive, Mid-Market",
     "Partner Marketing Manager, Online & Regional Events", "Demand Planner II (Hybrid)", "Senior Electrical Engineer (Onsite)", "Part-Time Keyholder - Park Meadows"]) {

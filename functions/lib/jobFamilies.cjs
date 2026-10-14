@@ -17,19 +17,19 @@
 const FAMILIES = {
   software: {
     label: "Software engineering",
-    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware|design engineer|ux engineer|ui engineer|design technologist|creative technologist|director of engineering|engineering director|head of engineering|vp,? (of )?engineering|chief technology officer)\b/i,
+    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware|design engineer|ux engineer|ui engineer|design technologist|creative technologist|director of engineering|engineering director|head of engineering|vp,? (of )?engineering|chief technology officer|cuda|gpu|kernel|device drivers?|driver (development|engineer\w*|software)|algorithms?|computational)\b/i,
   },
   ml_ai: {
     label: "Machine learning & AI",
-    re: /\b(machine learning|ml|ai|artificial intelligence|llm|nlp|computer vision|deep learning|applied scientist|research (engineer|scientist)|mlops|generative|genai|ai agents?|agentic|perception|autonomy|speech (recognition|scientist|engineer)|asr|robotics)\b/i,
+    re: /\b(machine learning|ml|ai|artificial intelligence|llm|nlp|computer vision|deep learning|applied scientist|research (engineer|scientist)|mlops|generative|genai|ai agents?|agentic|perception|autonomy|speech (recognition|scientist|engineer)|asr|robotics|research (intern|engineer|scientist|associate, (ai|ml|machine learning))|world models?|synthetic data|autonomous (driving|vehicles?|systems)|spatial intelligence|foundation models?|reinforcement learning|neural|transformers?|diffusion|multimodal|recommendation(s| systems?)?|ranking|search (relevance|quality|engineer\w*)|personalization|embeddings?|simulation)\b/i,
   },
   data_engineering: {
     label: "Data engineering",
-    re: /\b(data engineer(ing)?|etl|elt|analytics engineer(ing)?|data platform|big data|data (architect|infrastructure|warehouse|warehousing|pipeline|integration|ops|modeler|modeling)|database (engineer|developer|administrator)|dba|data management|data specialist)\b/i,
+    re: /\b(data engineer(ing)?|etl|elt|analytics engineer(ing)?|data platform|big data|data (architect|infrastructure|warehouse|warehousing|pipeline|integration|ops|modeler|modeling)|database (engineer|developer|administrator)|dba|data management|data specialist|dataops|data (governance|lineage|quality|trust|strategy|services|products?|manager|transformation|catalog|observability)|lakehouse|data lake|databricks|snowflake|spark|kafka|airflow)\b/i,
   },
   data_science: {
     label: "Data science",
-    re: /\b(data scien(ce|tist)|statistic(s|ian|al)|quantitative|quant|decision scien(ce|tist)|econometric|economist|experimentation|causal inference|operations research|biostatistic\w*)\b/i,
+    re: /\b(data scien(ce|tist)|statistic(s|ian|al)|quantitative|quant|decision scien(ce|tist)|econometric|economist|experimentation|causal inference|operations research|biostatistic\w*|applied scien(ce|tist)|modeler|predictive model\w*|forecasting scientist)\b/i,
   },
   data_analytics: {
     label: "Data & business analytics",
@@ -37,19 +37,19 @@ const FAMILIES = {
   },
   devops_cloud: {
     label: "DevOps, SRE & cloud",
-    re: /\b(devops|dev ops|devsecops|site reliability|sre|reliability engineer(ing)?|cloud|infrastructure|platform operations|build (and|&) release|release engineer|kubernetes|observability|production engineer(ing)?|systems administrator|sysadmin|linux|network (engineer|architect|administrator)|storage engineer|virtualization|networks?|service engineer|triage|rca)\b/i,
+    re: /\b(devops|dev ops|devsecops|site reliability|sre|reliability engineer(ing)?|cloud|infrastructure|platform operations|build (and|&) release|release engineer|kubernetes|observability|production engineer(ing)?|systems? administrator|sysadmin|linux|network (engineer|architect|administrator)|storage engineer|virtualization|networks?|service engineer|triage|rca|compute|control plane|data ?center (engineer\w*|operations|software)|platform (engineer\w*|architect\w*|team|lead)|terraform|ci\/cd|release management)\b/i,
   },
   security: {
     label: "Security",
-    re: /\b(security (engineer\w*|analyst|architect\w*|researcher|operations|software|developer|consultant|manager|lead|specialist, (cloud|network|application|product))|(application|product|cloud|network|information|infrastructure|data) security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*)\b/i,
+    re: /\b(security (engineer\w*|analyst|architect\w*|researcher|operations|software|developer|consultant|manager|lead|specialist, (cloud|network|application|product))|(application|product|cloud|network|information|infrastructure|data) security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*|isso|information systems? security|platform security|security (grc|compliance|risk|awareness|intern|administrator|program|platforms?)|csirt|cert team|security (&|and) it|it (&|and) security|grc|phishing|tradecraft|detection (analyst|engineer\w*)|cti|threat intelligence|fusion center|data protection|red team|blue team|purple team|malware|forensics|siem|zero trust|technology (risk|audit\w*|controls?))\b/i,
   },
   qa_test: {
     label: "QA & test automation",
-    re: /\b(qa|quality assurance|test (automation|engineer|lead|analyst)|automation engineer|sdet|software test\w*|tester)\b/i,
+    re: /\b(qa|quality assurance|test (automation|engineer|lead|analyst)|automation engineer|sdet|software test\w*|tester|quality engineer(ing)?|(integration|regression|performance|acceptance|software|system|automated) testing|test(ing)? (specialist|advisor|architect))\b/i,
   },
   solutions: {
     label: "Solutions & customer engineering",
-    re: /\b(solutions? (engineer|architect|consultant|specialist|lead|manager)|sales engineer|customer engineer|implementation (engineer|consultant|specialist|manager|lead)|integrations? (engineer|developer|specialist|architect)|technical account manager|tam|support engineer|technical support engineer|technical consultant|professional services|deployment (engineer|strategist)|onboarding engineer|partner engineer|pre-?sales|value engineer|solutions? (architecture|leader)|federal solution|industry solution)\b/i,
+    re: /\b(solutions? (engineer|architect|consultant|specialist|lead|manager)|sales engineer|customer engineer|implementation (engineer|consultant|specialist|manager|lead)|integrations? (engineer|developer|specialist|architect)|technical account manager|tam|support engineer|technical support engineer|technical consultant|professional services|deployment (engineer|strategist)|onboarding engineer|partner engineer|pre-?sales|value engineer|solutions? (architecture|leader)|federal solution|industry solution|solutions? consult\w*|technology consultant|technical (support|relationship|advisor|solutions?|account|specialist)|platform consultant|enablement architect|field (support|engineer)|applications? (specialist|consultant))\b/i,
   },
   it_support: {
     label: "IT & help desk",
@@ -65,7 +65,7 @@ const FAMILIES = {
   },
   design: {
     label: "Design & UX",
-    re: /\b(designer|design (lead|manager|director|systems)|ux|ui|user experience|user research(er)?|interaction design|visual design|graphic|creative director|illustrator|motion design|content design|product design|researcher)\b/i,
+    re: /\b(designer|design (lead|manager|director|systems)|ux|ui|user experience|user research(er)?|interaction design|visual design|graphic|creative director|illustrator|motion design|content design|product design|(ux|design|market|consumer) researcher)\b/i,
   },
   sales: {
     label: "Sales & business development",
@@ -105,7 +105,7 @@ const FAMILIES = {
   },
   trades_field: {
     label: "Trades, field & technician",
-    re: /\b(technician|tech [iv]+|mechanic|electrician|plumber|installer|driver|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot|security (officer|guard)|loss prevention|asset protection|target security)\b/i,
+    re: /\b(technician|tech [iv]+|mechanic|electrician|plumber|installer|(?<!cuda |device |gpu |kernel |software |display |graphics |print |linux |windows )drivers?|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot|security (officer|guard)|loss prevention|asset protection|target security)\b/i,
   },
   retail_hospitality: {
     label: "Retail, food & hospitality",
@@ -131,7 +131,8 @@ const FAMILIES = {
 
 FAMILIES.engineering_general = { label: "Other engineering", re: /$^/ }; // assigned in classifyTitle, never by pattern
 const FAMILY_IDS = Object.keys(FAMILIES).filter((id) => id !== "engineering_general");
-const ENGINEERING = new Set(["software", "ml_ai", "data_engineering", "devops_cloud", "security", "qa_test", "solutions", "hardware_eng", "engineering_general", "it_support"]);
+// it_support is not here on purpose: an "IT Engineer" is an engineer first.
+const ENGINEERING = new Set(["software", "ml_ai", "data_engineering", "devops_cloud", "security", "qa_test", "solutions", "hardware_eng", "engineering_general"]);
 
 /**
  * Every type a job title reads as. Empty = can't tell from the title.
@@ -148,8 +149,38 @@ function classifyTitle(title) {
   if (/\bIT\b/.test(t) && !found.includes("it_support")) found.push("it_support"); // "IT" only in capitals
   // An "engineer" title always carries an engineering type, even beside
   // another one ("Technical Product Manager / Engineer", "GRC Engineer").
-  if (/\bengineer(ing|s)?\b/i.test(t) && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
+  if (/\bengineer(ing|s)?\b|\beng\b/i.test(t) && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
+  // An architect of systems/software/data/the enterprise is engineering;
+  // only buildings, landscapes and lecture halls are not.
+  if (/\barchitect(s|ure|ing)?\b/i.test(t) && !/\b(building|landscape|interior|construction|naval|workplace|faculty|adjunct|real estate)\b/i.test(t)
+    && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
   return found;
+}
+
+// ── Tech signal in a title ─────────────────────────────────────────────────
+// For profiles that target engineering types, these words in a title mean the
+// job is assessed no matter what else the title says ("Manager, CUDA Driver",
+// "Global VP, Compute Control Plane", "Information Systems Security Officer").
+// Being generous here is cheap: the rule score is free and decides what the
+// AI sees; missing a real job is not.
+// data_engineering alone (an analyst profile) does not count: a software title is not her type.
+const ENGINEERING_TARGETS = ["software", "ml_ai", "devops_cloud", "security", "qa_test", "solutions", "engineering_general"];
+const TECH_TITLE_RE = /\b(software|developer|programm(er|ing)|coding|cuda|gpu|kernel|compiler|devops|devsecops|sre|kubernetes|cloud|infrastructure|machine learning|ml|ai|llm|agentic|ai agents?|dataops|data (engineer\w*|platform|pipelines?|infrastructure|architect\w*)|cyber\w*|infosec|appsec|isso|information systems? security|grc|phishing|threat|siem|forensics|malware|red team|pentest\w*|penetration test\w*|research (intern|scientist|engineer)|world models?|synthetic data|autonomous|robotics|simulation|computational|algorithm\w*|quant\w*|\bapi|sdk|saas|solutions? (engineer|architect|consult\w*)|technical (support|consultant|advisor|relationship|solutions?|account|specialist)|platform consultant|enablement architect|quality engineer\w*|test automation|sdet|automation engineer|systems? administrator|network engineer\w*|database|compute|control plane|technology platforms?|digital product|web|mobile|apps?|firmware|embedded|it (engineer\w*|architect\w*|technologist|systems?|ops|operations)|salesforce|workday|servicenow|sap|erp|observability|reliability|linux|aws|azure|gcp)\b/i;
+// Softer words that make a title worth assessing only when no family claims
+// it for another profession ("Control Systems Team Lead", "Field Technical Support").
+const TECH_HINT_RE = /\b(technolog(y|ies|ist)|technical|platforms?|digital|automation|systems?|data|intelligence|analytics?|scien(ce|tist)|security|it|eng|architect\w*)\b/i;
+// Technology leadership ("Head of Core Banking Technology Platforms") unless
+// the title says it is HR, sales, finance, audit or risk.
+const TECH_LEAD_RE = /\btechnolog(y|ies)\b/i;
+const LEAD_RE = /\b(head|director|vp|vice president|managing director|lead|manager|cto|chief)\b/i;
+const NON_TECH_LEAD_RE = /\b(recruit\w*|sourc\w*|talent|people|hr|human resources|benefits|rewards|sales|marketing|account\w*|audit\w*|risk|compliance|treasury|procurement|purchase|writer|editor|animator|legal|counsel)\b/i;
+function techTitle(title, families) {
+  const t = String(title || "");
+  if (TECH_TITLE_RE.test(t)) return true;
+  if (TECH_LEAD_RE.test(t) && LEAD_RE.test(t) && !NON_TECH_LEAD_RE.test(t)) return true;
+  // Hints count only for titles no other profession has claimed (or IT, which is close).
+  const unclaimed = !families.length || families.every((f) => f === "it_support");
+  return unclaimed && TECH_HINT_RE.test(t);
 }
 
 // What a profile of each kind should see scored: its own type plus the
@@ -241,7 +272,7 @@ function descriptionFits(description, targets, min = 2) {
 // A title of another type is still assessed when its description is dense
 // with the profile's own vocabulary (a "Finance & Business Management" role
 // that is really SQL/Tableau analytics).
-const STRONG_DESCRIPTION_TERMS = 8;
+const STRONG_DESCRIPTION_TERMS = 6; // was 8; lowered 2026-10-11 so no job of a selected type is missed
 
 /**
  * Should this user's AI assessment run on this job?
@@ -254,8 +285,11 @@ function shouldAssess(title, targets, description = "") {
   const families = classifyTitle(title);
   if (!targets || !targets.length) return { assess: true, families, why: "unknown" };
   if (String(title || "").trim().length < 3) return { assess: true, families, why: "unknown" }; // no real title
+  if (families.some((f) => targets.includes(f))) return { assess: true, families, why: "type" };
+  // Engineering profiles: any tech signal in the title is enough. Never miss
+  // a job of a selected type because another word in the title won.
+  if (targets.some((f) => ENGINEERING_TARGETS.includes(f)) && techTitle(title, families)) return { assess: true, families, why: "tech-title" };
   if (families.length) {
-    if (families.some((f) => targets.includes(f))) return { assess: true, families, why: "type" };
     if (descriptionFits(description, targets, STRONG_DESCRIPTION_TERMS)) return { assess: true, families, why: "description" };
     return { assess: false, families, why: "type" };
   }
