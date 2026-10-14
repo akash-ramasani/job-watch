@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 /**
- * Check a Lever / Workable / SmartRecruiters / BambooHR careers page before or
- * after adding it as a feed. Read-only: fetches the board as the sync would
+ * Check a Lever / Workable / SmartRecruiters / BambooHR careers page — or any
+ * platform in functions/lib/boards.cjs (peopleadmin, neogov, paycom, adp,
+ * pageup, icims, cornerstone, paylocity, taleo, ukg, interfolio, silkroad,
+ * applicantpro, avature, brassring, phenom, jazzhr, breezy, successfactors) —
+ * before or after adding it as a feed. Read-only: fetches the board as the sync would
  * (last N days, US only, with descriptions) and prints what it would write.
  *
  *   node scripts/check-board.mjs lever https://jobs.lever.co/palantir
@@ -15,7 +18,7 @@ const arg = (name, dflt) => {
   return i > 0 ? Number(process.argv[i + 1]) : dflt;
 };
 if (!source || !url) {
-  console.error("usage: node scripts/check-board.mjs <lever|workable|smartrecruiters|bamboohr> <careers url or slug> [--days 3] [--show 3]");
+  console.error("usage: node scripts/check-board.mjs <source> <careers url or slug> [--days 3] [--show 3]   (source: lever, workable, smartrecruiters, bamboohr, peopleadmin, neogov, paycom, adp, pageup, icims, cornerstone, paylocity, taleo, ukg, interfolio, silkroad, applicantpro, avature, brassring, phenom, jazzhr, breezy, successfactors)");
   process.exit(1);
 }
 

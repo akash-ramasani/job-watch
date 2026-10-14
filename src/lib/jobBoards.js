@@ -7,9 +7,35 @@
 //   smartrecruiters  https://jobs.smartrecruiters.com/<CompanyId>
 //   bamboohr         https://<company>.bamboohr.com/careers
 
-export const BOARD_SOURCES = ["lever", "workable", "smartrecruiters", "bamboohr"];
+// Platforms handled by functions/lib/boards.cjs. The pasted career-site URL is
+// kept as the feed URL; the backend derives the listing endpoint from it.
+export const EXTRA_BOARD_RULES = {
+  peopleadmin: { title: "PeopleAdmin", placeholder: "https://<school>.peopleadmin.com/postings/search", example: "e.g. University of Utah, UAB", test: (u) => /\.peopleadmin\.com/i.test(u.hostname) || /^\/postings(\/|$)/i.test(u.pathname) },
+  neogov: { title: "NEOGOV", placeholder: "https://www.governmentjobs.com/careers/<agency>", example: "e.g. University of Hawaii, Cal State", test: (u) => /(governmentjobs|schooljobs)\.com$/i.test(u.hostname) && /^\/careers\/[^/]+/i.test(u.pathname) },
+  paycom: { title: "Paycom", placeholder: "https://www.paycomonline.net/v4/ats/web.php/jobs?clientkey=<KEY>", example: "e.g. University of Kansas", test: (u) => /paycomonline\.net$/i.test(u.hostname) && (u.searchParams.has("clientkey") || /\/portal\//i.test(u.pathname)) },
+  adp: { title: "ADP Workforce Now", placeholder: "https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=<cid>&ccId=<ccId>", example: "e.g. UT Health, University of Arizona", test: (u) => /workforcenow\.adp\.com$/i.test(u.hostname) && u.searchParams.has("cid") },
+  pageup: { title: "PageUp", placeholder: "https://<x>.pageuppeople.com/<n>/ci/en-us/listing", example: "e.g. Virginia Tech", test: (u) => /pageuppeople\.com$/i.test(u.hostname) || /^\/[a-z]{2}-[a-z]{2}\/(listing|rss)/i.test(u.pathname) },
+  icims: { title: "iCIMS", placeholder: "https://<company>.icims.com/jobs/search", example: "e.g. OHSU, Emory", test: (u) => /\.icims\.com$/i.test(u.hostname) && !/^(www|login)\./i.test(u.hostname) },
+  cornerstone: { title: "Cornerstone", placeholder: "https://<corp>.csod.com/ux/ats/careersite/<n>/home?c=<corp>", example: "e.g. University of Arizona", test: (u) => /\.csod\.com$/i.test(u.hostname) && /\/ux\/ats\/careersite\/\d+/i.test(u.pathname) },
+  paylocity: { title: "Paylocity", placeholder: "https://recruiting.paylocity.com/recruiting/jobs/All/<guid>/<Company>", example: "e.g. A.T. Still University", test: (u) => /recruiting\.paylocity\.com$/i.test(u.hostname) && /\/recruiting\/jobs\/(All|List)\//i.test(u.pathname) },
+  taleo: { title: "Taleo", placeholder: "https://<org>.taleo.net/careersection/<n>/jobsearch.ftl", example: "e.g. UT Southwestern", test: (u) => /\.taleo\.net$/i.test(u.hostname) },
+  ukg: { title: "UKG Pro", placeholder: "https://recruiting2.ultipro.com/<tenant>/JobBoard/<guid>/", example: "e.g. Scripps Research", test: (u) => /(\.ultipro\.com|\.ukg\.net)$/i.test(u.hostname) && /\/JobBoard\//i.test(u.pathname) },
+  interfolio: { title: "Interfolio", placeholder: "https://apply.interfolio.com/<institution>/positions", example: "e.g. University of Oklahoma", test: (u) => /^apply\.interfolio\.com$/i.test(u.hostname) && /^\/\d+\/positions/i.test(u.pathname) },
+  silkroad: { title: "SilkRoad", placeholder: "https://jobs.silkroad.com/<Company>/<Site>", example: "e.g. Boston University", test: (u) => /^jobs\.silkroad\.com$/i.test(u.hostname) && /^\/[^/]+\/[^/]+/.test(u.pathname) },
+  applicantpro: { title: "ApplicantPro", placeholder: "https://<company>.applicantpro.com/jobs/", example: "e.g. PAVIR, Niagara University", test: (u) => /applicantpro\.com$/i.test(u.hostname) },
+  avature: { title: "Avature", placeholder: "https://<company>.avature.net/jobs", example: "e.g. University of Colorado", test: (u) => /\.avature\.net$/i.test(u.hostname) || /SearchJobs|JobDetail/i.test(u.pathname) },
+  brassring: { title: "BrassRing", placeholder: "https://sjobs.brassring.com/TGnewUI/Search/Home/Home?partnerid=<p>&siteid=<s>", example: "e.g. Texas Tech, University of Kansas", test: (u) => /brassring\.com$/i.test(u.hostname) && u.searchParams.has("partnerid") },
+  phenom: { title: "Phenom", placeholder: "https://careers.<company>.com/us/en", example: "e.g. Yale, UVA", test: (u) => /^\/[a-z]{2}\/[a-z]{2}(\/|$)/i.test(u.pathname) },
+  jazzhr: { title: "JazzHR", placeholder: "https://<company>.applytojob.com/apply", example: "e.g. University of Mary", test: (u) => /\.applytojob\.com$/i.test(u.hostname) },
+  breezy: { title: "Breezy HR", placeholder: "https://<company>.breezy.hr", example: "e.g. Reed College", test: (u) => /\.breezy\.hr$/i.test(u.hostname) },
+  successfactors: { title: "SuccessFactors", placeholder: "https://careers.<company>.com/search/", example: "e.g. Purdue", test: (u) => /^\/search\/?$/i.test(u.pathname) || /\/job\//i.test(u.pathname) },
+};
+export const EXTRA_BOARD_SOURCES = Object.keys(EXTRA_BOARD_RULES);
+
+export const BOARD_SOURCES = ["lever", "workable", "smartrecruiters", "bamboohr", ...EXTRA_BOARD_SOURCES];
 
 export const BOARD_RULES = {
+  ...Object.fromEntries(EXTRA_BOARD_SOURCES.map((id) => [id, { title: EXTRA_BOARD_RULES[id].title, label: `${EXTRA_BOARD_RULES[id].title} Careers Page URL`, placeholder: EXTRA_BOARD_RULES[id].placeholder, example: EXTRA_BOARD_RULES[id].example }])),
   lever: {
     title: "Lever",
     label: "Lever Careers Page URL",
@@ -52,6 +78,14 @@ export function parseBoardCareerUrl(source, raw) {
     }
     host = u.hostname.toLowerCase();
     parts = u.pathname.split("/").filter(Boolean);
+  }
+
+  if (EXTRA_BOARD_RULES[source]) {
+    if (bare) return null;
+    const u = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    if (!EXTRA_BOARD_RULES[source].test(u)) return null;
+    // The sync derives the listing endpoint; the first run verifies the site.
+    return { slug: u.hostname, careerUrl: u.href.replace(/[#].*$/, ""), apiUrl: null };
   }
 
   if (source === "lever") {

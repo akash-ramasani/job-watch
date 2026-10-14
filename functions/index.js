@@ -39,6 +39,7 @@ const { jsonrepair } = require("jsonrepair");
 
 // p-limit CommonJS import fix
 const pLimitPkg = require("p-limit");
+const extraBoards = require("./lib/boards.cjs");
 const pLimit = pLimitPkg.default ?? pLimitPkg;
 
 // Admin user — owns the shared job corpus. All other users get personalized
@@ -46,7 +47,7 @@ const pLimit = pLimitPkg.default ?? pLimitPkg;
 const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 
 // OpenAI is the sole AI provider for all AI-powered features
-// (scoring, assistant chat, cover letters, form-field mapping,
+// (scoring, assistant chat, form-field mapping,
 // name pronunciation, resume parsing).
 //
 // The API key is stored in Google Secret Manager and injected at runtime.
@@ -325,6 +326,25 @@ exports.exchangeExtensionCode = onRequest(
  *   Layer 4: Heartbeat polling → catches network-delayed ejections
  *   Layer 5: Session audit log → full history in users/{uid}/sessionHistory
  */
+/**
+ * Is this phone number linked to a registered account? The login page asks
+ * before sending an OTP, so unknown numbers never receive a code or create a user.
+ */
+exports.checkPhoneRegistered = onCall({ region: REGION, maxInstances: 10, enforceAppCheck: false }, async (request) => {
+  const phone = String(request.data?.phone || "").trim();
+  if (!/^\+[1-9]\d{6,14}$/.test(phone)) throw new HttpsError("invalid-argument", "Enter the number in international format, e.g. +1 415 555 0123.");
+  try {
+    const user = await admin.auth().getUserByPhoneNumber(phone);
+    const profile = await db.collection("users").doc(user.uid).get();
+    const deactivated = profile.exists && profile.get("accountStatus") === "deactivated";
+    return { registered: Boolean(user.email) && !user.disabled && !deactivated };
+  } catch (err) {
+    if (err?.code === "auth/user-not-found") return { registered: false };
+    logger.error("checkPhoneRegistered error:", err);
+    throw new HttpsError("internal", "Could not check the phone number.");
+  }
+});
+
 exports.registerSession = onRequest(
   { region: REGION, maxInstances: 10, cors: CORS_ORIGINS },
   async (req, res) => {
@@ -335,6 +355,12 @@ exports.registerSession = onRequest(
     try {
       const decoded = await verifyToken(req);
       const uid = decoded.uid;
+
+      // A phone number that isn't linked to a registered (email) account gets no
+      // session and no user document; the login page deletes the stray Auth user.
+      if (!decoded.email && decoded.phone_number) {
+        return res.status(403).json({ ok: false, error: "This phone number is not linked to any account." });
+      }
 
       const crypto = require("crypto");
       const sessionToken = crypto.randomBytes(32).toString("hex");
@@ -591,7 +617,7 @@ exports.syncRecentJobsHourly = onSchedule(
             durationMs,
 
             ok: true,
-            scanned: summary.jobsFetched,
+            scanned: summary.feedsProcessed,
             updated: summary.jobsWritten,
             jobsWritten: summary.jobsWritten,
 
@@ -699,7 +725,7 @@ exports.runSyncNow = onRequest(
         ok: true,
         userId,
         dryRun: false,
-        scanned: summary.jobsFetched,
+        scanned: summary.feedsProcessed,
         updated: summary.jobsWritten,
 
 
@@ -720,7 +746,7 @@ exports.runSyncNow = onRequest(
           durationMs,
 
           ok: true,
-          scanned: summary.jobsFetched,
+          scanned: summary.feedsProcessed,
           updated: summary.jobsWritten,
           jobsWritten: summary.jobsWritten,
 
@@ -1596,6 +1622,12 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
         newlySeen[id] = todayIso;
         continue;
       }
+      // Boards whose list carries no dates (Taleo, iCIMS, Avature, …): the seed
+      // run only remembers what is already posted; later runs process new IDs.
+      if (isFirstRun && row.ageDays == null && extraBoards.has(source)) {
+        newlySeen[id] = todayIso;
+        continue;
+      }
       candidates.push(row);
     }
 
@@ -1831,7 +1863,8 @@ async function fetchOracleNewJobs({ userId, feedId, url, now, runBudget, harvest
  * SmartRecruiters (US postings only) and BambooHR need one detail call per new posting.
  * ----------------------------
  */
-const BOARD_SOURCES = new Set(["lever", "workable", "smartrecruiters", "bamboohr"]);
+// The four built-in boards plus the platforms in lib/boards.cjs (PeopleAdmin, NEOGOV, Paycom, ADP, …).
+const BOARD_SOURCES = new Set(["lever", "workable", "smartrecruiters", "bamboohr", ...extraBoards.SOURCES]);
 const BOARD_CONCURRENCY = 6;
 const SMARTRECRUITERS_PAGE_SIZE = 100;
 const boardLimiter = pLimit(BOARD_CONCURRENCY);
@@ -1843,6 +1876,7 @@ const boardLimiter = pLimit(BOARD_CONCURRENCY);
 function parseBoardFeedUrl(source, feedUrl) {
   const raw = String(feedUrl || "").trim();
   if (!raw) return null;
+  if (extraBoards.has(source)) return extraBoards.parse(source, raw);
   // A bare slug: "palantir", "design-pickle", "ServiceNow", "rfbinder".
   const bare = /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(raw) ? raw : null;
   let host = "";
@@ -2041,12 +2075,15 @@ async function fetchBoardNewJobs(source, { userId, feedId, url, now, runBudget, 
     },
   };
 
+  const extra = extraBoards.has(source)
+    ? extraBoards.adapter(source, parsed, { now, maxAge, ageDaysFromIsoDate, isUSCountry, looksUS: workdayLocationLooksUS, recentEnough })
+    : null;
   const results = await fetchNewJobsById({
     userId, feedId, now, runBudget, harvest,
     source,
     label: `${source} ${parsed.slug}`,
-    pageSize: source === "smartrecruiters" ? SMARTRECRUITERS_PAGE_SIZE : Number.MAX_SAFE_INTEGER,
-    ...adapters[source],
+    pageSize: extra ? extra.pageSize : source === "smartrecruiters" ? SMARTRECRUITERS_PAGE_SIZE : Number.MAX_SAFE_INTEGER,
+    ...(extra ? { fetchPage: extra.fetchPage, fetchDetail: extra.fetchDetail, keep: extra.keep } : adapters[source]),
   });
   return results.map(({ row, detail }) => ({ id: row.id, list: row.raw, detail, parsed }));
 }
@@ -2127,6 +2164,19 @@ function normalizeBoardJob(source, rawJob, { companyName, companyKey, now }) {
     if (d.employmentStatusLabel || list.employmentStatusLabel) meta["Employment Type"] = d.employmentStatusLabel || list.employmentStatusLabel;
     if (d.compensation) meta["Compensation"] = String(d.compensation);
     html = d.description || "";
+  } else if (extraBoards.has(source)) {
+    const n = extraBoards.normalize(source, parsed, rawJob, { now, ageDaysFromIsoDate, isUSCountry, looksUS: workdayLocationLooksUS });
+    if (!n) return null;
+    title = n.title;
+    jobUrl = n.jobUrl;
+    locParts = n.locParts;
+    us = Boolean(n.us);
+    remote = Boolean(n.remote);
+    workplaceType = n.workplaceType || (remote ? "remote" : null);
+    sourceUpdatedTs = n.postedIso ? toTimestampOrNull(n.postedIso) : null;
+    postedDay = sourceUpdatedTs ? null : n.postedDay || null;
+    Object.assign(meta, n.meta || {});
+    html = n.html || "";
   }
 
   // Day-precision dates: postings from today are stamped with the detection
@@ -2168,6 +2218,10 @@ function normalizeBoardJob(source, rawJob, { companyName, companyKey, now }) {
 async function fetchBoardDescription(source, externalId, feedUrl) {
   const parsed = parseBoardFeedUrl(source, feedUrl);
   if (!parsed || !externalId) return null;
+  if (extraBoards.has(source)) {
+    const html = await extraBoards.description(source, parsed, externalId, {});
+    return html ? stripHtml(html) : null;
+  }
   const id = encodeURIComponent(externalId);
   if (source === "lever") {
     const html = leverDescriptionHtml(await boardFetchJson(`${parsed.api}/${id}?mode=json`));
@@ -3684,122 +3738,6 @@ Rules:
       const msg = e instanceof Error ? e.message : String(e);
       logger.error("parseResume failed:", msg, e?.stack);
       return res.status(500).json({ error: msg });
-    }
-  }
-);
-
-/**
- * ----------------------------
- * 1-Click AI Cover Letter Generator
- * ----------------------------
- */
-exports.generateCoverLetter = onCall(
-  {
-    region: REGION,
-    minInstances: 0,
-    maxInstances: 10,
-    timeoutSeconds: 60,
-    secrets: [OPENAI_API_KEY],
-  },
-  async (request) => {
-    // 1. Auth check
-    const uid = request.auth?.uid;
-    if (!uid) {
-      throw new HttpsError("unauthenticated", "You must be logged in to generate a cover letter.");
-    }
-
-    // Single-session enforcement for Callable functions
-    const sessionToken = request.rawRequest?.headers?.["x-session-token"];
-    if (sessionToken) {
-      const userSnap = await db.collection("users").doc(uid).get();
-      if (userSnap.exists) {
-        const activeToken = userSnap.data()?.activeSession?.token;
-        if (activeToken && activeToken !== sessionToken) {
-          throw new HttpsError("unauthenticated", "Session expired. You have been signed out because another login was detected.");
-        }
-      }
-    }
-
-    const { jobId } = request.data;
-    if (!jobId) {
-      throw new HttpsError("invalid-argument", "Missing jobId.");
-    }
-
-    try {
-      // Check if AI is enabled
-      const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
-
-      if (settingsSnap.exists && settingsSnap.data()?.aiScoringEnabled === false) {
-        throw new HttpsError("failed-precondition", "AI features are currently disabled in your settings.");
-      }
-
-      // 2. Fetch User Resume
-      const resumeSnap = await db.collection("users").doc(uid).collection("resume").doc("profile").get();
-      if (!resumeSnap.exists) {
-        throw new HttpsError("failed-precondition", "No resume profile found. Please upload a resume first.");
-      }
-
-      const resumeText = [];
-      const dOptions = resumeSnap.data();
-      if (dOptions.rawText) resumeText.push(dOptions.rawText);
-      const builtResumeStr = resumeText.join("\\n\\n").trim();
-      if (!builtResumeStr) {
-        throw new HttpsError("failed-precondition", "Your resume has no parseable text. Please re-upload.");
-      }
-
-      // 3. Fetch Job Details (jobs live in the shared admin corpus)
-      const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
-      if (!jobSnap.exists) {
-        throw new HttpsError("not-found", "Job not found in database.");
-      }
-      const jobData = jobSnap.data();
-      const jobDesc = (jobData.fullDescription || jobData.title || "No description available.").slice(0, 5000);
-      const companyName = jobData.companyName || "the company";
-      const jobTitle = jobData.title || "the role";
-
-      // 4. Construct Prompt & Call AI
-      const systemPrompt = `You are an expert career coach making highly professional, modern, and engaging cover letters.`;
-
-      const userPrompt = `
-Write a 3-paragraph compelling cover letter bridging this exact resume and this specific job at ${companyName} for the ${jobTitle} role.
-
-Rules:
-1. Write conversationally and exactly like a human software engineer. DO NOT use AI text patterns, overly complex SAT vocabulary, or fluffy corporate buzzwords.
-2. NEVER use em-dashes (—). Strip them from your vocabulary completely. Use commas or short, punchy sentences instead.
-3. Focus on exactly how the candidate's specific past experience maps to the job requirements.
-4. Use a standard business letter format (without the physical address block).
-5. Do not include placeholders like "[Your Name]" unless absolutely necessary; try to extract the name from the resume or leave it generically signed "Sincerely,\n[Applicant]".
-6. Keep it to exactly 3 well-crafted paragraphs. No bullet points.
-7. Return ONLY the final text of the cover letter. Do not include introductory conversational text.
-
-## Job Description
-${jobDesc}
-
-## Candidate Resume
-${builtResumeStr}
-`;
-
-      const client = requireOpenAI();
-      const completion = await client.chat.completions.create(
-          {
-            model: OPENAI_FAST_MODEL,
-            max_tokens: 600,
-            temperature: 0.7,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-          },
-          { timeout: 30000 }
-        );
-      const generatedText = completion.choices?.[0]?.message?.content?.trim() || "";
-
-      if (!generatedText) throw new Error("AI returned an empty string.");
-
-      return { ok: true, text: generatedText };
-    } catch (err) {
-      logger.error("generateCoverLetter error:", err);
-      throw new HttpsError("internal", "Failed to generate cover letter: " + err.message);
     }
   }
 );

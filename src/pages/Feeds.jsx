@@ -199,17 +199,85 @@ function detectSourceFromUrl(raw) {
   if (u.includes("workable.com")) return "workable";
   if (u.includes("smartrecruiters.com/")) return "smartrecruiters";
   if (u.includes(".bamboohr.com")) return "bamboohr";
+  if (u.includes("peopleadmin.com") || /\/postings(\/|$)/.test(u)) return "peopleadmin";
+  if (u.includes("governmentjobs.com/careers/") || u.includes("schooljobs.com/careers/")) return "neogov";
+  if (u.includes("paycomonline.net")) return "paycom";
+  if (u.includes("workforcenow.adp.com")) return "adp";
+  if (u.includes("pageuppeople.com")) return "pageup";
+  if (u.includes(".icims.com")) return "icims";
+  if (u.includes(".csod.com")) return "cornerstone";
+  if (u.includes("recruiting.paylocity.com")) return "paylocity";
+  if (u.includes(".taleo.net")) return "taleo";
+  if (u.includes(".ultipro.com") || u.includes(".ukg.net")) return "ukg";
+  if (u.includes("apply.interfolio.com")) return "interfolio";
+  if (u.includes("jobs.silkroad.com")) return "silkroad";
+  if (u.includes("applicantpro.com")) return "applicantpro";
+  if (u.includes(".avature.net")) return "avature";
+  if (u.includes("brassring.com")) return "brassring";
+  if (u.includes(".applytojob.com")) return "jazzhr";
+  if (u.includes(".breezy.hr")) return "breezy";
+  if (/\/us\/en(\/|$)/.test(u)) return "phenom";
+  if (/\/search\/?$/.test(u)) return "successfactors";
   return "greenhouse";
 }
 
 function prettySourceLabel(source) {
   if (source === "ashby" || source === "ashbyhq") return "AshbyHQ";
+  if (source === "greenhouse") return "Greenhouse";
   if (source === "eightfold") return "Eightfold.ai";
   if (source === "netflix") return "Netflix";
   if (source === "workday") return "Workday";
   if (source === "oracle") return "Oracle Cloud";
   if (BOARD_RULES[source]) return BOARD_RULES[source].title;
-  return "Greenhouse";
+  return source ? source.replace(/^./, (c) => c.toUpperCase()) : "Career site";
+}
+
+// One colour per platform family so a wall of cards reads at a glance.
+const SOURCE_TONE = {
+  greenhouse: "bg-emerald-50 text-emerald-700 ring-emerald-600/15",
+  ashby: "bg-violet-50 text-violet-700 ring-violet-600/15",
+  ashbyhq: "bg-violet-50 text-violet-700 ring-violet-600/15",
+  lever: "bg-sky-50 text-sky-700 ring-sky-600/15",
+  workday: "bg-blue-50 text-blue-700 ring-blue-600/15",
+  oracle: "bg-red-50 text-red-700 ring-red-600/15",
+  smartrecruiters: "bg-lime-50 text-lime-700 ring-lime-600/15",
+  workable: "bg-cyan-50 text-cyan-700 ring-cyan-600/15",
+  bamboohr: "bg-green-50 text-green-700 ring-green-600/15",
+  peopleadmin: "bg-amber-50 text-amber-700 ring-amber-600/15",
+  neogov: "bg-orange-50 text-orange-700 ring-orange-600/15",
+  paycom: "bg-teal-50 text-teal-700 ring-teal-600/15",
+  adp: "bg-rose-50 text-rose-700 ring-rose-600/15",
+  icims: "bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/15",
+  cornerstone: "bg-indigo-50 text-indigo-700 ring-indigo-600/15",
+  taleo: "bg-stone-100 text-stone-700 ring-stone-600/15",
+  ukg: "bg-pink-50 text-pink-700 ring-pink-600/15",
+  phenom: "bg-purple-50 text-purple-700 ring-purple-600/15",
+  successfactors: "bg-yellow-50 text-yellow-800 ring-yellow-600/15",
+};
+const sourceTone = (source) => SOURCE_TONE[source] || "bg-slate-50 text-slate-700 ring-slate-600/15";
+
+/** "3m ago" / "2h ago" / "Oct 12" for a Firestore Timestamp, Date or ISO string. */
+function relTime(value) {
+  const d = value?.toDate ? value.toDate() : value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)}h ago`;
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** The employer's own site for the logo and the caption, from the feed's website field or its careers host. */
+const VENDOR_HOST = /(greenhouse\.io|ashbyhq\.com|lever\.co|myworkdayjobs\.com|oraclecloud\.com|smartrecruiters\.com|workable\.com|bamboohr\.com|peopleadmin\.com|governmentjobs\.com|schooljobs\.com|paycomonline\.net|adp\.com|pageuppeople\.com|icims\.com|csod\.com|paylocity\.com|taleo\.net|ultipro\.com|ukg\.net|interfolio\.com|silkroad\.com|applicantpro\.com|avature\.net|brassring\.com|applytojob\.com|breezy\.hr|eightfold\.ai|netflix\.net)$/i;
+function orgDomainFromCareerUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    if (VENDOR_HOST.test(host)) return null;
+    const parts = host.split(".");
+    return parts.length > 2 && /^(careers?|jobs?|hr|apply|employment|recruit\w*|talent|www)$/.test(parts[0]) ? parts.slice(1).join(".") : host;
+  } catch {
+    return null;
+  }
 }
 
 function validateUrlForSource(source, rawUrl) {
@@ -244,6 +312,9 @@ function validateUrlForSource(source, rawUrl) {
 function getDomainFromFeed(feed) {
   try {
     const url = feed.url || "";
+    if (feed.website) return String(feed.website).toLowerCase().replace(/^www\./, "");
+    const own = orgDomainFromCareerUrl(url);
+    if (own) return own;
     // Eightfold often has domain in params or subdomain
     if (feed.source === "eightfold" || url.includes("eightfold.ai")) {
       const match = url.match(/domain=([^&]+)/);
@@ -293,13 +364,13 @@ const LogoImage = ({ src, alt, company }) => {
   };
 
   return (
-    <div className="relative h-12 w-full flex items-center justify-center">
+    <div className="relative flex h-full w-full items-center justify-center">
       <img
         src={src}
         alt={alt}
         loading="lazy"
         onLoad={handleLoad}
-        className={`max-h-12 w-full object-contain filter grayscale group-hover:grayscale-0 transition-all duration-1000 ease-out ${
+        className={`max-h-9 max-w-[40px] object-contain filter grayscale group-hover:grayscale-0 transition-all duration-700 ease-out ${
           loaded ? "opacity-100 scale-100" : "opacity-0 scale-95"
         }`}
         onError={(e) => {
@@ -760,57 +831,88 @@ export default function Feeds({ user }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-0.5 overflow-hidden rounded-2xl ring-1 ring-gray-100 bg-gray-100">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {activeFeeds.map((feed, idx) => {
             const domain = getDomainFromFeed(feed);
             const logoUrl = `https://img.logo.dev/${domain}?token=${LOGO_KEY}&retina=true`;
-            
+            const source = feed.source || detectSourceFromUrl(feed.url);
+            // Feed docs change only when their health changes, so the caption is the
+            // failure time when there is one and the day the feed was added otherwise.
+            const failedAgo = feed.lastError ? relTime(feed.lastErrorAt) : null;
+            const added = relTime(feed.createdAt);
+
             return (
-              <ScrollReveal key={feed.id} delay={(idx % 4) * 100}>
-                <div className="group relative bg-white p-8 sm:p-10 flex flex-col items-center justify-center h-full min-h-[220px] hover:z-10 transition-all duration-300 hover:shadow-2xl hover:shadow-indigo-500/10">
-                  <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+              <ScrollReveal key={feed.id} delay={(idx % 4) * 60}>
+                <div className={`group relative flex h-full flex-col rounded-2xl bg-white p-5 shadow-sm ring-1 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-indigo-500/10 ${feed.lastError ? "ring-red-200" : "ring-gray-100 hover:ring-indigo-100"}`}>
+                  <div className="absolute right-3 top-3 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                     <button
                       onClick={() => copyToClipboard(feed.url)}
-                      className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                      title="Copy Feed URL"
+                      className="rounded-md bg-gray-50 p-1.5 text-gray-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+                      title="Copy feed URL"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                       </svg>
                     </button>
                     <button
                       onClick={() => archiveFeed(feed.id)}
                       disabled={busyArchiveId === feed.id}
-                      className="p-1.5 rounded-md bg-gray-50 text-gray-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                      title="Archive Feed"
+                      className="rounded-md bg-gray-50 p-1.5 text-gray-400 transition-colors hover:bg-amber-50 hover:text-amber-600"
+                      title="Archive feed"
                     >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" d="m20.25 7.5-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
                       </svg>
                     </button>
                   </div>
 
-                  <div className="w-full flex flex-col items-center">
-                    <div className="mb-6 w-full">
-                      <LogoImage
-                         src={logoUrl}
-                        alt={feed.company}
-                        company={feed.company}
-                      />
+                  <div className="flex items-start gap-3.5 pr-14">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gray-50 ring-1 ring-gray-100">
+                      <LogoImage src={logoUrl} alt={feed.company} company={feed.company} />
                     </div>
-                    <h4 className="text-sm font-bold text-gray-900 text-center uppercase tracking-tight">
-                      {feed.lastError && <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-400 align-middle" title={feed.lastError} />}
-                      {feed.company}
-                    </h4>
-                    <span className="mt-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-[9px] font-black uppercase tracking-widest text-indigo-600 ring-1 ring-inset ring-indigo-700/10">
-                      {prettySourceLabel(feed.source || detectSourceFromUrl(feed.url))}
-                    </span>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-gray-900" title={feed.company}>
+                        {feed.company}
+                      </h4>
+                      <a
+                        href={feed.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-0.5 block truncate text-xs text-gray-400 transition-colors hover:text-indigo-600"
+                        title={feed.url}
+                      >
+                        {domain}
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="mt-auto flex items-center justify-between gap-2 pt-4">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset ${sourceTone(source)}`}>
+                        {prettySourceLabel(source)}
+                      </span>
+                      {feed.capExempt && (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/15" title="H-1B cap-exempt employer">
+                          Cap-exempt
+                        </span>
+                      )}
+                    </div>
+                    {feed.lastError ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-red-500" title={feed.lastError}>
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        Sync failed{failedAgo ? ` · ${failedAgo}` : ""}
+                      </span>
+                    ) : added ? (
+                      <span className="shrink-0 text-[11px] text-gray-400" title="Added">
+                        Added {added}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               </ScrollReveal>
             );
           })}
-          
+
           {activeFeeds.length === 0 && (
             <div className="col-span-full bg-white py-20 text-center">
               <p className="text-sm text-gray-400 italic">No active feeds. Add one above to start monitoring.</p>
