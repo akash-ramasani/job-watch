@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { signInWithEmailAndPassword, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
-import { auth } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
 import OtpInput from "../components/OtpInput.jsx";
 import PhoneInput from "../components/PhoneInput.jsx";
@@ -66,6 +67,15 @@ export default function Login() {
     destroyRecaptcha();
 
     try {
+      // Only registered numbers get an OTP: an unknown number must not create an account.
+      const { data } = await httpsCallable(functions, "checkPhoneRegistered")({ phone });
+      if (!data?.registered) {
+        track("login_failed", { method: "phone", reason: "phone_not_registered" });
+        const msg = "This phone number is not linked to any account.";
+        setErr(msg);
+        showToast(msg, "error");
+        return;
+      }
       const verifier = new RecaptchaVerifier(auth, "login-recaptcha-container", {
         size: "invisible",
         callback: () => {},

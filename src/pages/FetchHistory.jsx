@@ -198,7 +198,7 @@ export default function FetchHistory({ user }) {
 
                   <div>
                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
-                      Scanned
+                      Boards checked
                     </span>
                     <span className="font-bold">{scanned.toLocaleString()}</span>
                   </div>
@@ -207,7 +207,7 @@ export default function FetchHistory({ user }) {
 
                   <div>
                     <span className="text-gray-400 font-black uppercase text-[9px] tracking-widest mr-1.5">
-                      Fetched
+                      Postings read
                     </span>
                     <span className="font-bold">{fetched.toLocaleString()}</span>
                   </div>

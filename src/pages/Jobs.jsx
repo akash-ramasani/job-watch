@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { doc, onSnapshot } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
-import { jsPDF } from "jspdf";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
@@ -109,8 +108,6 @@ export default function Jobs({ user, userMeta, preferences }) {
     setSearchParams(next, { replace: true });
   }, [selectedKeys, titleSearch, stateFilter, timeframe, setSearchParams]);
 
-  // Cover Letter State
-  const [clState, setClState] = useState({ isOpen: false, job: null, loading: false, text: "", error: "" });
   // Tailored Resume State
   const [trState, setTrState] = useState({ isOpen: false, job: null, loading: false, data: null, error: "" });
 
@@ -257,34 +254,6 @@ export default function Jobs({ user, userMeta, preferences }) {
     );
   }, [user?.uid]);
 
-  const handleGenerateCoverLetter = async (e, job) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setClState({ isOpen: true, job, loading: true, text: "", error: "" });
-    const startedAt = Date.now();
-    track("cover_letter_requested", { source: job.source, company: job.companyName });
-    try {
-      const coverLetterFn = httpsCallable(functions, "generateCoverLetter", { headers: { "X-Session-Token": localStorage.getItem("jw_session_token") || "" } });
-      const res = await coverLetterFn({ jobId: job.id });
-      if (res.data?.text) {
-        track("cover_letter_generated", {
-          source: job.source,
-          duration_ms: Date.now() - startedAt,
-          chars: res.data.text.length,
-        });
-        setClState({ isOpen: true, job, loading: false, text: res.data.text, error: "" });
-      } else {
-        throw new Error("No text returned");
-      }
-    } catch (err) {
-      console.error("Cover Letter gen error:", err);
-      // Clean up firebase error msg
-      const cleanMsg = err.message ? err.message.replace(/\[.*\]\s*/, "") : "Failed to generate";
-      track("cover_letter_failed", { reason: cleanMsg?.slice(0, 80) });
-      setClState({ isOpen: true, job, loading: false, text: "", error: cleanMsg });
-    }
-  };
-
   const handleGenerateResume = async (e, job, force = false) => {
     e?.preventDefault?.();
     e?.stopPropagation?.();
@@ -322,48 +291,6 @@ export default function Jobs({ user, userMeta, preferences }) {
     if (format === "tex") downloadResumeTex(resume, resumeContact(), resumeFileBase());
     else downloadResumePdf(resume, resumeContact(), resumeFileBase());
     track("tailored_resume_downloaded", { company: trState.job?.companyName, format });
-  };
-
-  const handleDownloadPdf = () => {
-    if (!clState.text) return;
-    const doc = new jsPDF();
-    
-    doc.setFont("times", "normal");
-    doc.setFontSize(12);
-    
-    const marginLeft = 20;
-    const marginTop = 30;
-    const maxWidth = 170;
-    const lineHeight = 6.5; 
-
-    const paragraphs = clState.text.split(/\n\s*\n/);
-    let cursorY = marginTop;
-
-    paragraphs.forEach((paragraph) => {
-      const lines = doc.splitTextToSize(paragraph.trim(), maxWidth);
-      
-      lines.forEach((line) => {
-        if (cursorY > 275) {
-          doc.addPage();
-          cursorY = marginTop;
-        }
-        doc.text(line, marginLeft, cursorY);
-        cursorY += lineHeight; 
-      });
-      
-      cursorY += 5; // Extra gap between paragraphs
-    });
-
-    const company = clState.job?.companyName || "Company";
-    const role = titleCase(clState.job?.title) || "Role";
-    const fullName = userMeta?.fullName || user?.displayName || "User";
-    
-    // Sanitize filename by removing invalid characters
-    const fileName = `${company} - ${role} - ${fullName} - Cover Letter.pdf`
-      .replace(/[<>:"/\\|?*]/g, "_")
-      .trim();
-
-    doc.save(fileName);
   };
 
   const toggleCompany = (key) => {
@@ -423,10 +350,8 @@ export default function Jobs({ user, userMeta, preferences }) {
   }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
-  const relatedJobs = useMemo(() => jobs.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes, relevance)), [jobs, myScores, jobTypes, relevance]);
   // Wait for the user's job types too, so unrelated jobs never flash in.
   const listLoading = loading || jobTypes === null;
-  const scoredShare = relatedJobs.length ? relatedJobs.filter((j) => myScores[j.id]).length / relatedJobs.length : 1;
 
   const renderJobItem = (job) => {
     const updatedShort = job._updatedShort || "N/A";
@@ -511,12 +436,6 @@ export default function Jobs({ user, userMeta, preferences }) {
                   title="Make a version of your resume for this job"
                 >
                   Resume
-                </button>
-                <button
-                  onClick={(e) => handleGenerateCoverLetter(e, job)}
-                  className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 ring-1 ring-inset ring-indigo-200/50 transition-colors"
-                >
-                  Cover Letter
                 </button>
               </>
             )}
@@ -687,7 +606,7 @@ export default function Jobs({ user, userMeta, preferences }) {
               <div className="space-y-4">
                 <div className="flex items-center gap-2 px-1">
                   <label className="caps-label text-gray-400 uppercase tracking-widest text-[10px] font-black">
-                    Filter by Company (A-Z)
+                    Companies with open jobs (A-Z)
                   </label>
                   <span className="bg-gray-100 text-gray-500 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
                     {companies.length}
@@ -792,11 +711,6 @@ export default function Jobs({ user, userMeta, preferences }) {
             <Link to="/profile" className="font-semibold text-indigo-600 hover:text-indigo-700">Go to Profile</Link>
           </div>
         )}
-        {!listLoading && aiOn && hasResume && jobs.length > 0 && scoredShare < 0.5 && (
-          <div className="px-6 py-3 border-b border-gray-100 bg-gray-50 text-sm text-gray-600">
-            Scoring these jobs against your resume. Scores fill in over the next few hours.
-          </div>
-        )}
         {listLoading ? (
           <div className="flex-grow divide-y divide-gray-100">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -820,81 +734,6 @@ export default function Jobs({ user, userMeta, preferences }) {
           )}
         </div>
       </div>
-
-      <AnimatePresence>
-        {clState.isOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/40 backdrop-blur-sm"
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]"
-            >
-              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100 bg-gray-50/50">
-                <div>
-                  <h3 className="text-sm font-bold text-gray-900">AI Cover Letter</h3>
-                  <p className="text-[11px] font-semibold text-indigo-600 uppercase tracking-widest mt-0.5">
-                    {clState.job?.companyName} • {titleCase(clState.job?.title)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setClState({ ...clState, isOpen: false })}
-                  className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-
-              <div className="p-6 flex-1 overflow-y-auto">
-                {clState.loading ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-center text-gray-400">
-                    <svg className="w-8 h-8 animate-spin text-indigo-500 mb-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" className="opacity-25" />
-                      <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" className="opacity-75" />
-                    </svg>
-                    <p className="text-sm font-bold text-gray-700">Writing highly targeted letter...</p>
-                    <p className="text-xs text-gray-500 mt-1">Analyzing your resume against the JD.</p>
-                  </div>
-                ) : clState.error ? (
-                  <div className="p-4 bg-red-50 text-red-600 rounded-xl text-sm whitespace-pre-wrap font-mono ring-1 ring-inset ring-red-200">
-                    {clState.error}
-                  </div>
-                ) : (
-                  <div className="text-[13px] text-gray-800 leading-relaxed font-serif whitespace-pre-wrap space-y-4">
-                    {clState.text}
-                  </div>
-                )}
-              </div>
-
-              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 flex justify-end gap-3">
-                <button
-                  onClick={() => setClState({ ...clState, isOpen: false })}
-                  className="px-4 py-2 text-xs font-bold text-gray-600 hover:text-gray-800 transition-colors"
-                >
-                  Close
-                </button>
-                <button
-                  onClick={handleDownloadPdf}
-                  disabled={!clState.text || clState.loading}
-                  className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
-                >
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download PDF
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Tailored Resume Modal */}
       <TailoredResumeModal

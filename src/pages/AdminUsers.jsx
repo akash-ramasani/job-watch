@@ -414,6 +414,8 @@ export default function AdminUsers({ user }) {
       const ms = (t) => (t?.toMillis ? t.toMillis() : null);
       setUsersList(
         usersSnap.docs
+          // A phone-only sign-in that was rejected leaves a session-only doc behind: no email, no name.
+          .filter((d) => { const x = d.data(); return x.email || x.fullName || x.firstName || x.accountStatus; })
           .map((d) => {
             const x = d.data();
             return {
@@ -443,7 +445,8 @@ export default function AdminUsers({ user }) {
     httpsCallable(functions, "getAdminUsersList")()
       .then(({ data }) => {
         const byId = new Map((data?.users || []).map((u) => [u.id, u]));
-        setUsersList((prev) => prev.map((u) => {
+        // Only accounts that exist in Firebase Auth are real users.
+        setUsersList((prev) => prev.filter((u) => byId.has(u.id)).map((u) => {
           const a = byId.get(u.id);
           return a ? { ...u, email: a.email || u.email, fullName: u.fullName || a.fullName, lastSignInTime: a.lastSignInTime || u.lastSignInTime } : u;
         }));
