@@ -152,7 +152,9 @@ export default function App() {
       }
     });
     const unsubPrefs = onSnapshot(prefRef, (snap) => {
-      if (snap.exists()) setPreferences(snap.data());
+      // Keep the default when the doc exists but was only ever written with
+      // other fields (e.g. jobTypes): a missing aiScoringEnabled means on.
+      if (snap.exists()) setPreferences({ aiScoringEnabled: true, ...snap.data() });
     });
 
     return () => {
