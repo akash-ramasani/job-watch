@@ -285,12 +285,13 @@ export default function Jobs({ user, userMeta, preferences }) {
     const fullName = trState.data?.resume?.header?.name || userMeta?.fullName || user?.displayName || "Resume";
     return `${trState.job?.companyName || "Company"} - ${titleCase(trState.job?.title) || "Role"} - ${fullName} - Resume`;
   };
-  const handleDownloadResume = (format) => {
+  const handleDownloadResume = async (format) => {
     const resume = trState.data?.resume;
     if (!resume) return;
+    let renderer = "tex";
     if (format === "tex") downloadResumeTex(resume, resumeContact(), resumeFileBase());
-    else downloadResumePdf(resume, resumeContact(), resumeFileBase());
-    track("tailored_resume_downloaded", { company: trState.job?.companyName, format });
+    else renderer = await downloadResumePdf(resume, resumeContact(), resumeFileBase());
+    track("tailored_resume_downloaded", { company: trState.job?.companyName, format, renderer });
   };
 
   const toggleCompany = (key) => {

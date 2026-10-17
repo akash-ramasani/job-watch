@@ -1,0 +1,366 @@
+\ifdefined\pdfgentounicode\input{glyphtounicode}\pdfgentounicode=1\fi
+
+\documentclass[a4paper,11pt]{article}
+
+%-------------------------
+% PACKAGES
+%-------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{needspace}
+\usepackage[a4paper, margin=0.4in]{geometry}
+
+%-------------------------
+% PAGE STYLE
+%-------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\urlstyle{rm}
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+\hypersetup{
+    colorlinks=false,
+    pdfborder={0 0 0},
+    pdftitle={Avery Example Resume},
+    pdfauthor={Avery Example}
+}
+
+%-------------------------
+% SECTION FORMATTING
+%-------------------------
+\titleformat{\section}{
+    \vspace{-8pt}
+    \scshape
+    \raggedright
+    \large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+%-------------------------
+% CUSTOM COMMANDS
+%-------------------------
+\newcommand{\resumeItem}[1]{
+    \item\small{
+        #1
+        \vspace{-1pt}
+    }
+}
+
+\newcommand{\resumeSubheading}[4]{
+    \Needspace{5\baselineskip}
+    \vspace{-1pt}\item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+        \textbf{#1} & #2 \\
+        \textit{#3} & \textit{#4} \\
+    \end{tabular*}
+    \vspace{-5pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \Needspace{4\baselineskip}
+    \vspace{-1pt}\item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+        \textbf{#1} & #2 \\
+    \end{tabular*}
+    \vspace{-5pt}
+}
+
+\newcommand{\resumeSubHeadingListStart}{
+    \begin{itemize}[leftmargin=0in, label={}]
+}
+
+\newcommand{\resumeSubHeadingListEnd}{
+    \end{itemize}
+}
+
+\newcommand{\resumeItemListStart}{
+    \begin{itemize}[
+        leftmargin=0.18in,
+        itemsep=1pt,
+        parsep=1pt,
+        topsep=3pt
+    ]
+}
+
+\newcommand{\resumeItemListEnd}{
+    \end{itemize}
+    \vspace{-5pt}
+}
+%-------------------------
+% DOCUMENT
+%-------------------------
+\begin{document}
+
+%=========================================================
+% HEADER
+%=========================================================
+\begin{center}
+    \textbf{\LARGE \scshape Avery Example} \\ \vspace{3pt}
+    \small Springfield, IL 62701 \,$|$\, +1-555-010-2030 \,$|$\, \href{mailto:avery@example.com}{\underline{avery@example.com}} \\ \vspace{1pt}
+    \href{https://github.com/avery-example}{\underline{github.com/avery-example}} \,$|$\, \href{https://linkedin.com/in/avery-example}{\underline{linkedin.com/in/avery-example}}
+\end{center}
+
+\vspace{-7pt}
+
+%=========================================================
+% PROFILE
+%=========================================================
+\section{Profile}
+
+\small{
+Software engineer with 5+ years of experience shipping \textbf{production backend systems, cloud infrastructure, and LLM-powered products end-to-end}. Builds daily with AI-assisted tools and has shipped agentic features on the Anthropic and OpenAI APIs --- \textasciitilde{}100\% of the time, 50\% cheaper \& faster (C++/C\#, \$1M+).
+}
+
+\vspace{1pt}
+
+%=========================================================
+% SKILLS
+%=========================================================
+\section{Skills}
+
+\resumeSubHeadingListStart
+
+\resumeItem{\textbf{Languages:} TypeScript, Python, Java, SQL, C++}
+
+\resumeItem{\textbf{Backend / APIs:} Node.js, Fastify, REST APIs, WebSockets, Model Context Protocol (MCP)}
+
+\resumeItem{\textbf{Cloud / DevOps:} AWS (App Runner, ECS, S3), Docker, Kubernetes, Terraform, GitHub Actions, CI/CD, Linux}
+
+\resumeSubHeadingListEnd
+
+%=========================================================
+% PROFESSIONAL EXPERIENCE
+%=========================================================
+\section{Professional Experience}
+
+\resumeSubHeadingListStart
+
+%---------------------------------------------------------
+% EXAMPLE CORP
+%---------------------------------------------------------
+\resumeSubheading
+    {Example Corp}
+    {Jun 2026 -- Present}
+    {Senior Software Engineer}
+    {Remote}
+
+\resumeItemListStart
+
+\resumeItem{
+    \textbf{Sole engineer shipping a production TypeScript platform rebuild end-to-end}: 8 services spanning a Fastify API with 200+ routes and Next.js apps, backed by 1,300+ automated tests.
+}
+
+\resumeItem{
+    Cut monthly \textbf{AWS spend by 52\%} through an infrastructure audit and service rightsizing, with 65\% projected after legacy retirement.
+}
+
+\resumeItem{
+    Designed a \textbf{79-table PostgreSQL schema with 71 versioned migrations} (Drizzle ORM); applied every production migration with zero data loss.
+}
+
+\resumeItem{
+    Built an \textbf{LLM pipeline on the Anthropic and OpenAI APIs} that drafts schema-validated copy and launches campaigns through an idempotent Temporal workflow.
+}
+
+\resumeItem{
+    Replaced Auth0 with \textbf{first-party session-based authentication} that revokes access on the next request after sign-out, suspension, or password change.
+}
+
+\resumeItem{
+    Automated deployment of 6 services with \textbf{GitHub Actions, GitHub OIDC, Docker, Amazon ECR, and AWS App Runner}, with no long-lived credentials.
+}
+
+\resumeItem{
+    Integrated \textbf{16 external providers}, including Google Ads, Meta Marketing, Stripe, OpenAI, and Anthropic, with metered usage reporting and webhooks.
+}
+
+\resumeItem{
+    Owned \textbf{production support}, resolving critical incidents and documenting system architecture for the team.
+}
+
+\resumeItemListEnd
+
+%---------------------------------------------------------
+% SECOND COMPANY
+%---------------------------------------------------------
+\resumeSubheading
+    {Second Company}
+    {Aug 2024 -- May 2026}
+    {Software Engineer}
+    {San Jose, California}
+
+\resumeItemListStart
+
+\resumeItem{
+    Led a \textbf{zero-downtime DB2 to PostgreSQL migration} with end-to-end data validation, improving query performance.
+}
+
+\resumeItem{
+    Designed high-volume \textbf{REST APIs in Spring Boot and JPA} handling millions of daily transactions with Ignite and Hibernate caching.
+}
+
+\resumeItem{
+    Modernized Spring Batch jobs and migrated them to \textbf{AWS ECS}, cutting batch processing time by 30\%.
+}
+
+\resumeItem{
+    Built Python dashboards for \textbf{real-time cluster monitoring} and internal reporting, speeding up incident debugging.
+}
+
+\resumeItemListEnd
+
+%---------------------------------------------------------
+% THIRD COMPANY
+%---------------------------------------------------------
+\resumeSubheading
+    {Third Company}
+    {May 2022 -- Jul 2024}
+    {Software Development Engineer II}
+    {Hyderabad, India}
+
+\resumeItemListStart
+
+\resumeItem{
+    Engineered scalable backend services and internal APIs in \textbf{Python, FastAPI, and Flask}, improving request latency by 30\%.
+}
+
+\resumeItem{
+    Automated deployment and monitoring with \textbf{Docker, Kubernetes, Terraform, and Jenkins}, reducing manual infrastructure effort by 40\%.
+}
+
+\resumeItem{
+    Improved reliability with \textbf{Prometheus and Grafana}, maintaining 99.9\% uptime and debugging incidents from logs and metrics.
+}
+
+\resumeItemListEnd
+
+%---------------------------------------------------------
+% FOURTH COMPANY
+%---------------------------------------------------------
+\resumeSubheading
+    {Fourth Company}
+    {Jan 2021 -- May 2022}
+    {Software Development Engineer I}
+    {Hyderabad, India}
+
+\resumeItemListStart
+
+\resumeItem{
+    Engineered a reporting platform used by \textbf{5,000+ scientists}, cutting report-generation time from hours to seconds through optimized SQL and ETL pipelines (Flask, REST APIs).
+}
+
+\resumeItem{
+    Designed computer vision and geospatial \textbf{machine learning pipelines} reaching 96 to 97\% accuracy with a TensorFlow CNN served through Flask endpoints.
+}
+
+\resumeItemListEnd
+
+\resumeSubHeadingListEnd
+
+%=========================================================
+% SELECTED PROJECTS
+%=========================================================
+\section{Selected Projects}
+
+\resumeSubHeadingListStart
+
+%---------------------------------------------------------
+% OPEN-SOURCE JOB-TRACKING PLATFORM
+%---------------------------------------------------------
+\resumeProjectHeading
+    {Open-Source Job-Tracking Platform}
+    {\href{https://github.com/avery-example/job-watch}{\underline{github.com/avery-example/job-watch}}}
+
+\resumeItemListStart
+
+\resumeItem{
+    Built and open-sourced an end-to-end job-tracking platform (React 19, Firebase Gen 2) that \textbf{monitors 950+ companies across nine ATS platforms} using smart pagination, Firestore TTL, and asynchronous processing.
+}
+
+\resumeItem{
+    Designed \textbf{hybrid job scoring}: a rule-based score for every posting with LLM evaluation reserved for high-scoring matches; cut Firestore reads by 99\%.
+}
+
+\resumeItemListEnd
+
+%---------------------------------------------------------
+% OPERATIONS HUB
+%---------------------------------------------------------
+\resumeProjectHeading
+    {Operations Hub}
+    {}
+
+\resumeItemListStart
+
+\resumeItem{
+    Architected an internal catalog-management application with \textbf{Next.js App Router, Prisma ORM, and PostgreSQL}, including RBAC and NextAuth authentication.
+}
+
+\resumeItemListEnd
+
+%---------------------------------------------------------
+% 3-NODE KUBERNETES HOMELAB AND DISTRIBUTED LOG MONITORING
+%---------------------------------------------------------
+\resumeProjectHeading
+    {3-Node Kubernetes Homelab and Distributed Log Monitoring}
+    {}
+
+\resumeItemListStart
+
+\resumeItem{
+    Built a three-node \textbf{Kubernetes cluster} on repurposed hardware with a FastAPI service that scans multi-GB log files with reverse chunked reads, covered by pytest.
+}
+
+\resumeItemListEnd
+
+\resumeSubHeadingListEnd
+
+%=========================================================
+% EDUCATION
+%=========================================================
+\section{Education}
+
+\resumeSubHeadingListStart
+
+\resumeSubheading
+    {State University}
+    {}
+    {Master of Science, Computer Science}
+    {Springfield, Illinois}
+
+\resumeSubheading
+    {Example University}
+    {2016 -- 2020}
+    {Bachelor of Technology, Computer Science and Artificial Intelligence}
+    {Hyderabad, India}
+
+\resumeSubHeadingListEnd
+
+%=========================================================
+% CERTIFICATIONS
+%=========================================================
+\section{Certifications}
+
+\resumeSubHeadingListStart
+
+\resumeItem{AWS Certified Solutions Architect -- Associate}
+
+\resumeItem{Certified Kubernetes Administrator (CKA)}
+
+\resumeSubHeadingListEnd
+
+%=========================================================
+% END DOCUMENT
+%=========================================================
+\end{document}

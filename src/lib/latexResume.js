@@ -26,6 +26,7 @@ export function latexToText(s) {
     .replace(/\\textbackslash\{\}/g, "\\").replace(/\\textasciitilde\{\}/g, "~").replace(/\\textasciicircum\{\}/g, "^")
     .replace(/---/g, "—").replace(/--/g, "–")
     .replace(/\\\\/g, " ").replace(/\\vspace\{[^}]*\}/g, "").replace(/\$\|\$/g, "|")
+    .replace(/\\[,;:! ]/g, " ") // \, \; \: \! and "\ " are spacing commands, e.g. the header's \,$|$\, separators
     .replace(/\\[a-zA-Z]+\s*/g, "")
     .replace(/[{}]/g, "")
     .replace(/\*\*\s*\*\*/g, "")
@@ -104,7 +105,8 @@ export function parseLatexResume(tex) {
     const block = body.slice(cStart + "\\begin{center}".length, cEnd);
     const nameMatch = block.match(/\\scshape\s+([^}]*)\}/) || block.match(/\\textbf\{\\LARGE\s+([^}]*)\}/);
     header.name = nameMatch ? latexToText(nameMatch[1]).replace(/\*\*/g, "") : "";
-    const rest = latexToText(block.replace(/\\textbf\{\\LARGE[^}]*\}\s*\}?/, "")).replace(/\*\*/g, "").replace(header.name, "");
+    // A line break (\\) between contact lines separates entries like $|$ does.
+    const rest = latexToText(block.replace(/\\textbf\{\\LARGE[^}]*\}\s*\}?/, "").replace(/\\\\/g, " $|$ ")).replace(/\*\*/g, "").replace(header.name, "");
     const parts = rest.split("|").map((s) => s.trim()).filter(Boolean);
     for (const c of parts) {
       if (/@/.test(c)) header.email = c;

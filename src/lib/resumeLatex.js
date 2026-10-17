@@ -4,8 +4,9 @@
 // look as their hand-written resume. Pure functions, no DOM: also used by
 // scripts/test-tailored-resume.mjs to compile-check real output.
 
-const PREAMBLE = String.raw`\input{glyphtounicode}
-\pdfgentounicode=1
+// pdfTeX (Overleaf's default) gets the glyph-to-unicode map for copy/paste
+// and ATS parsing; XeTeX (Tectonic, our server compile) skips those lines.
+const preamble = (name) => String.raw`\ifdefined\pdfgentounicode\input{glyphtounicode}\pdfgentounicode=1\fi
 
 \documentclass[a4paper,11pt]{article}
 
@@ -20,7 +21,8 @@ const PREAMBLE = String.raw`\input{glyphtounicode}
 \usepackage{enumitem}
 \usepackage{hyperref}
 \usepackage{fancyhdr}
-\usepackage[a4paper, margin=0.38in]{geometry}
+\usepackage{needspace}
+\usepackage[a4paper, margin=0.4in]{geometry}
 
 %-------------------------
 % PAGE STYLE
@@ -38,7 +40,9 @@ const PREAMBLE = String.raw`\input{glyphtounicode}
 
 \hypersetup{
     colorlinks=false,
-    pdfborder={0 0 0}
+    pdfborder={0 0 0},
+    pdftitle={${escapeLatex(name)} Resume},
+    pdfauthor={${escapeLatex(name)}}
 }
 
 %-------------------------
@@ -62,6 +66,7 @@ const PREAMBLE = String.raw`\input{glyphtounicode}
 }
 
 \newcommand{\resumeSubheading}[4]{
+    \Needspace{5\baselineskip}
     \vspace{-1pt}\item
     \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
         \textbf{#1} & #2 \\
@@ -71,6 +76,7 @@ const PREAMBLE = String.raw`\input{glyphtounicode}
 }
 
 \newcommand{\resumeProjectHeading}[2]{
+    \Needspace{4\baselineskip}
     \vspace{-1pt}\item
     \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
         \textbf{#1} & #2 \\
@@ -144,16 +150,22 @@ export function buildResumeLatex(resume, contact = {}) {
   const h = { ...(contact || {}), ...(resume?.header || {}) };
   const name = h.name || contact.name || "";
 
-  const contactBits = [
+  // Line 1: where to reach you. Line 2: where to read more. Same split as the
+  // hand-written template, with its \,$|$\, separators.
+  const SEP = " \\,$|$\\, ";
+  const line1 = [
     h.location ? escapeLatex(h.location) : null,
     h.phone ? escapeLatex(h.phone) : null,
     h.email ? hrefUnderline(`mailto:${h.email}`, h.email) : null,
+  ].filter(Boolean).join(SEP);
+  const line2 = [
     h.github ? hrefUnderline(h.github, stripUrlScheme(h.github)) : null,
     h.linkedin ? hrefUnderline(h.linkedin, stripUrlScheme(h.linkedin)) : null,
-  ].filter(Boolean);
+  ].filter(Boolean).join(SEP);
+  const contactLines = [line1, line2].filter(Boolean);
 
   const out = [];
-  out.push(PREAMBLE);
+  out.push(preamble(name));
   out.push(String.raw`%-------------------------
 % DOCUMENT
 %-------------------------
@@ -163,10 +175,8 @@ export function buildResumeLatex(resume, contact = {}) {
 % HEADER
 %=========================================================
 \begin{center}
-    \textbf{\LARGE \scshape ${escapeLatex(name)}} \\ \vspace{3pt}
-
-    \small
-    ${contactBits.join("\n    $|$\n    ")}
+    \textbf{\LARGE \scshape ${escapeLatex(name)}}${contactLines.length ? " \\\\ \\vspace{3pt}" : ""}
+${contactLines.map((l, i) => `    ${i === 0 ? "\\small " : ""}${l}${i < contactLines.length - 1 ? " \\\\ \\vspace{1pt}" : ""}`).join("\n")}
 \end{center}
 
 \vspace{-7pt}

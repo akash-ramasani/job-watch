@@ -49,7 +49,7 @@ const FAMILIES = {
   },
   solutions: {
     label: "Solutions & customer engineering",
-    re: /\b(solutions? (engineer|architect|consultant|specialist|lead|manager)|sales engineer|customer engineer|implementation (engineer|consultant|specialist|manager|lead)|integrations? (engineer|developer|specialist|architect)|technical account manager|tam|support engineer|technical support engineer|technical consultant|professional services|deployment (engineer|strategist)|onboarding engineer|partner engineer|pre-?sales|value engineer|solutions? (architecture|leader)|federal solution|industry solution|solutions? consult\w*|technology consultant|technical (support|relationship|advisor|solutions?|account|specialist)|platform consultant|enablement architect|field (support|engineer)|applications? (specialist|consultant))\b/i,
+    re: /\b(solutions? (engineer|architect|consultant)|sales engineer|customer engineer|implementation (engineer|consultant|specialist|manager|lead)|integrations? (engineer|developer|specialist|architect)|technical account manager|tam|support engineer|technical support engineer|technical consultant|deployment (engineer)|onboarding engineer|partner engineer|pre-?sales|value engineer|solutions? (architecture|leader)|federal solution|industry solution|solutions? consult\w*|technology consultant|technical (relationship|advisor|solutions?|account)|platform consultant|enablement architect|field (support|engineer)|applications? (specialist|consultant))\b/i,
   },
   it_support: {
     label: "IT & help desk",
@@ -93,23 +93,23 @@ const FAMILIES = {
   },
   healthcare: {
     label: "Healthcare & clinical",
-    re: /\b(nurse|nursing|rn|lpn|np|pa-c|physician|doctor|md|clinical|clinician|pharmac\w*|therapist|therapy|medical|patient|phlebotom\w*|dental|dentist|radiolog\w*|sonograph\w*|surgical|surgeon|psychiatr\w*|psycholog\w*|counselor|caregiver|care (coordinator|manager)|health (coach|educator)|practitioner|scribe|behavioral health|lab(oratory)? (technician|technologist|assistant)|veterinar\w*|optometr\w*|dietitian|respiratory|family care|mental health|care experience|health)\b/i,
+    re: /\b(nurse|nursing|rn|lpn|np|pa-c|physician|doctor|md|clinical|clinician|pharmac\w*|therapist|therapy|medical|patient|facilitator|crisis intervention|\bsud\b|mental health|behavioral|care coach|advanced practice|epilepsy|neurolog\w*|inpatient|outpatient|refractive|reimbursement|specimen|phlebotom\w*|phlebotom\w*|dental|dentist|radiolog\w*|sonograph\w*|polysomnograph\w*|sleep (?:lab|center|technolog\w*|technician)|echocardiograph\w*|electrophysiolog\w*|mri|ct technolog\w*|nuclear medicine|respiratory|cardiovascular technolog\w*|histolog\w*|cytolog\w*|anesthes\w*|perfusion\w*|dialysis|ultrasound|x-?ray|mammograph\w*|audiolog\w*|surgical|surgeon|psychiatr\w*|psycholog\w*|counselor|caregiver|care (coordinator|manager)|health (coach|educator)|practitioner|scribe|behavioral health|lab(oratory)? (technician|technologist|assistant)|veterinar\w*|optometr\w*|dietitian|respiratory|family care|mental health|care experience|health)\b/i,
   },
   hardware_eng: {
     label: "Hardware & other engineering",
-    re: /\b(mechanical|electrical|hardware|electronics?|rf|analog|mixed[- ]signal|asic|fpga|soc design|silicon|semiconductor|chip|pcb|layout|circuit|power (electronics|systems|engineer)|civil|structural|chemical|materials?|manufacturing|process engineer|industrial engineer|quality engineer|reliability engineer|aerospace|propulsion|avionics|optical|photonics|thermal|mechatronics|robotics engineer|controls engineer|test engineer|validation engineer|packaging|hvac|fire protection|geotechnical|environmental engineer|mining|petroleum|nuclear|battery|cell engineer|substation|transmission|utility|design verification|verification engineer|payload|quantum|fabrication|tooling|fragrance|compounder|sensory|olfactive|aseptic|qc manager|quality manager|driller|quality|building technology)\b/i,
+    re: /\b(mechanical|electrical|hardware|electronics?|rf|analog|mixed[- ]signal|asic|fpga|soc design|silicon|semiconductor|chip|pcb|layout|circuit|vlsi|rtl|physical design|design verification|dft|signal integrity|transportation|line engineer|protection (?:&|and) control|maintenance|process (?:development|engineer\w*)|epitaxy|cvd|metrology|equipment|wafer|compression|guidance|flight|commissioning|electro-?mechanical|propulsion|structural|civil|manufacturing|industrial|field service|hvac|plant|piping|facilities|environmental|chemical|materials|photonics|optical|opto-?\w*|lab engineer|guest facing devices|power (electronics|systems|engineer)|civil|structural|chemical|materials?|manufacturing|process engineer|industrial engineer|quality engineer|reliability engineer|aerospace|propulsion|avionics|optical|photonics|thermal|mechatronics|robotics engineer|controls engineer|test engineer|validation engineer|packaging|hvac|fire protection|geotechnical|environmental engineer|mining|petroleum|nuclear|battery|cell engineer|substation|transmission|utility|design verification|verification engineer|payload|quantum|fabrication|tooling|fragrance|compounder|sensory|olfactive|aseptic|qc manager|quality manager|driller|quality|building technology)\b/i,
   },
   operations: {
     label: "Operations, supply chain & logistics",
-    re: /\b(operations (manager|associate|specialist|coordinator|lead|director)|business operations|supply chain|logistics|warehouse|fulfillment|distribution|inventory|procurement|purchasing|buyer|sourcing|planner|planning|demand|materials manager|fleet|dispatch|shipping|receiving|facilities|workplace|real estate|vendor management|strategy (and|&) operations|bizops|revops|sales operations|chief of staff|order to cash|processing center|process management|strategic projects|country launch|market operations|customer operations|experiences? lead|commodity|supplier|new product introduction|npi|business partner|strategist|strategy|launch|site manager|vendor operations|performance excellence|s&o)\b/i,
+    re: /\b(operations (manager|associate|specialist|coordinator|lead|director)|business operations|(?:product|business|revenue|sales|people|marketing|finance) ops\b|supply chain|logistics|warehouse|fulfillment|distribution|inventory|procurement|purchasing|buyer|sourcing|planner|planning|demand|materials manager|fleet|dispatch|shipping|receiving|facilities|workplace|real estate|vendor management|strategy (and|&) operations|bizops|revops|sales operations|chief of staff|order to cash|processing center|process management|strategic projects|country launch|market operations|customer operations|experiences? lead|commodity|supplier|new product introduction|npi|business partner|strategist|strategy|launch|site manager|vendor operations|performance excellence|s&o)\b/i,
   },
   trades_field: {
     label: "Trades, field & technician",
-    re: /\b(technician|tech [iv]+|mechanic|electrician|plumber|installer|(?<!cuda |device |gpu |kernel |software |display |graphics |print |linux |windows )drivers?|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot|security (officer|guard)|loss prevention|asset protection|target security)\b/i,
+    re: /\b(technician|tech [iv]+|mechanic|cleaner|attendant|vehicle operator|proctor|electrician|plumber|installer|(?<!cuda |device |gpu |kernel |software |display |graphics |print |linux |windows )drivers?|cdl|operator|machinist|welder|assembler|assembly|maintenance|field service|construction|foreman|superintendent|carpenter|laborer|janitor|custodian|groundskeeper|inspector|lineman|crew|protective services|pilot|security (officer|guard)|loss prevention|asset protection|target security)\b/i,
   },
   retail_hospitality: {
     label: "Retail, food & hospitality",
-    re: /\b(retail|store|cashier|barista|crew member|restaurant|server|cook|chef|kitchen|hospitality|hotel|front desk|housekeep\w*|sales associate|merchandis\w*|stocker|shift (lead|supervisor)|branch manager|teller|banker associate|keyholder|team member|dashmart|associate - |store associate)\b/i,
+    re: /\b(retail|store|cashier|mobile expert|barista|crew member|restaurant|server|cook|chef|kitchen|hospitality|hotel|front desk|housekeep\w*|sales associate|merchandis\w*|stocker|shift (lead|supervisor)|branch manager|teller|banker associate|keyholder|team member|dashmart|associate - |store associate)\b/i,
   },
   admin_office: {
     label: "Administrative & office",
@@ -138,21 +138,72 @@ const ENGINEERING = new Set(["software", "ml_ai", "data_engineering", "devops_cl
  * Every type a job title reads as. Empty = can't tell from the title.
  * Parenthesised asides and trailing locations don't count ("(Hybrid)", "- Remote").
  */
+// A program/project/product manager (or "Program Management Engineer") is a PM
+// whatever product is in the title; a "Technical Product Manager / Engineer" keeps the engineer.
+const SALES_ENG_RE = /\b(pre-?sales|sales engineer\w*|gtm engineer\w*|customer success engineer\w*|product marketing engineer\w*|solutions? (?:engineer\w*|architect\w*|consultant\w*)|field (?:application|applications) engineer\w*)\b/i;
+const PM_RE = { test: (t) => /\b(program|programme|project|product) management engineer\w*\b/i.test(t)
+  || (/\b(program|programme|project|product) manager\b/i.test(t) && !/\b(engineer\w*|developer|scientist|architect\w*|programmer|researcher)\b/i.test(t)) };
+// Leadership of a tech function ("Director of Engineering, Logistics", "Senior
+// Director, Privacy, Product and Platform Security"), as opposed to an org
+// adjective ("Compute Engineering Business Operations Manager").
+const TECH_LEADERSHIP_RE = { test: (t) => /\b(director|head|vp|vice president|chief|manager|lead)(?: of|,)? (?:[\w&]+,? ){0,3}(engineering|security|technolog\w*|platform|software|data|infrastructure|architecture|it|solutions?)\b/i.test(t)
+  || /\b(engineering|security|technolog\w*|platform|software|data|infrastructure|architecture|solutions?) (?:[\w&]+,? ){0,1}(director|head|vp|vice president|lead|manager)\b/i.test(t) };
+const ENGINEER_ROLE_RE = /\b(engineers?|developer|software|scientist|architects?|programmer|researcher)\b/i;
+const ENGINEER_NOUN_RE = /\b(engineer\w*|developer|software|scientist|architect\w*|programmer|researcher)\b/i;
+// A discipline naming the engineering itself ("Mechanical Engineering Manager",
+// "Manufacturing Engineer"), not a domain tag ("FDE - Manufacturing").
+const DISCIPLINE_RE = /\b(mechanical|electrical|civil|structural|manufacturing|industrial|chemical|materials|aerospace|mechatronics|hvac|piping|process) (?:engineer\w*|design\w*|technician\w*)\b/i;
+const CHIP_RE = /\b(vlsi|rtl|asic|fpga|physical design|design verification|soc design|silicon|mixed[- ]signal|dft|signal integrity)\b/i;
+// Abbreviations and misspellings seen in real titles ("Graduate Mechnical/Hdwr
+// Eningeer I"), expanded so the family patterns can read them.
+const TITLE_FIXES = [
+  [/\b(?:hdwr|hdw|hw)\b/gi, "hardware"], [/\bsw\b/gi, "software"], [/\bmech\b/gi, "mechanical"], [/\belec\b/gi, "electrical"],
+  [/\bmfg\b/gi, "manufacturing"], [/\bengr\b/gi, "engineer"], [/\bmechnical\b/gi, "mechanical"], [/\belectical\b/gi, "electrical"],
+  [/\b(?:eningeer|enginer|engineeer|enginner|engieer|engineeer)(s|ing)?\b/gi, "engineer$1"],
+];
 function classifyTitle(title) {
-  const t = String(title || "")
+  let t = String(title || "")
     .replace(/\(([^)]*)\)/g, " $1 ")
     .replace(/[_|/]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+  for (const [re, to] of TITLE_FIXES) t = t.replace(re, to);
+  if (/\b(cnc|plc|ladder logic)\b/i.test(t)) return ["trades_field"]; // a CNC/PLC "programmer" runs machines
   if (!t) return [];
   const found = FAMILY_IDS.filter((id) => FAMILIES[id].re.test(t));
+  // Chip-design words name the field: "RTL Design Engineer" is hardware, not
+  // software "design", and "Design Verification" is not security verification.
+  if (CHIP_RE.test(t)) return ["hardware_eng", ...found.filter((f) => !["hardware_eng", "software", "security", "qa_test", "engineering_general"].includes(f))];
+  // An engineering discipline in the title ("Mechanical Engineering Manager")
+  // beats the generic software match on "engineering manager".
+  if (DISCIPLINE_RE.test(t) && !/\bsoftware\b/i.test(t)) return ["hardware_eng", ...found.filter((f) => !["hardware_eng", "software", "qa_test", "engineering_general"].includes(f))];
+  // Physical security is operations, not cyber security.
+  if (/\b(physical security|security (?:guard|officer)|loss prevention|assets? protection)\b/i.test(t)) return ["operations", ...found.filter((f) => !["security", "operations"].includes(f))];
+  // A program/project/product manager is not an engineer because "software" is in the title.
+  if (PM_RE.test(t)) return ["program_project", ...found.filter((f) => !ENGINEERING.has(f) && f !== "program_project")];
+  // Postdocs and legal engineers belong to their own professions, whatever else the title says.
+  if (/\bpost-?\s?doc\w*\b/i.test(t)) return ["science_research", ...found.filter((f) => !ENGINEERING.has(f) && f !== "science_research")];
+  if (/\blegal engineer\w*\b/i.test(t)) return ["legal_compliance"];
+  // Customer-facing engineering (pre-sales, sales, GTM, customer success,
+  // product marketing) is its own career, whatever tech words follow.
+  if (SALES_ENG_RE.test(t)) return ["solutions", "sales", ...found.filter((f) => !ENGINEERING.has(f) && f !== "sales")];
+  // A trades title ("Autonomous Vehicle Operator", "Robotics Technician") is
+  // not an engineering job because of a tech word, unless it is an engineer's.
+  if (found.includes("trades_field") && !ENGINEER_NOUN_RE.test(t)) return found.filter((f) => !ENGINEERING.has(f));
+  // Likewise any non-engineering profession's title ("Cloud Hosting Finance
+  // Analyst", "Compute Engineering Business Operations Manager"): a tech word
+  // in it does not make it engineering unless the role itself is an engineer's.
+  if (found.some((f) => NON_TECH_CLAIMS.includes(f)) && !ENGINEER_ROLE_RE.test(t) && !SPECIFIC_TECH_RE.test(t) && !TECH_LEADERSHIP_RE.test(t)) return found.filter((f) => !ENGINEERING.has(f));
   if (/\bIT\b/.test(t) && !found.includes("it_support")) found.push("it_support"); // "IT" only in capitals
   // An "engineer" title always carries an engineering type, even beside
   // another one ("Technical Product Manager / Engineer", "GRC Engineer").
-  if (/\bengineer(ing|s)?\b|\beng\b/i.test(t) && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
+  // "Engineering" as an org name ("Compute Engineering Business Operations
+  // Manager") does not make a manager/analyst an engineer; "Engineer" as the role does.
+  const nonTechRole = found.some((f) => NON_TECH_CLAIMS.includes(f)) && !/\bengineers?\b/i.test(t);
+  if (/\bengineer(ing|s)?\b|\beng\b/i.test(t) && !found.some((f) => ENGINEERING.has(f)) && !found.includes("trades_field") && !nonTechRole) found.push("engineering_general");
   // An architect of systems/software/data/the enterprise is engineering;
   // only buildings, landscapes and lecture halls are not.
-  if (/\barchitect(s|ure|ing)?\b/i.test(t) && !/\b(building|landscape|interior|construction|naval|workplace|faculty|adjunct|real estate)\b/i.test(t)
+  if (/\barchitect(s|ure|ing)?\b/i.test(t) && !/\b(building|landscape|interior|construction|naval|workplace|faculty|adjunct|real estate|learning|instructional|curriculum|brand|experience|solutions? sales)\b/i.test(t)
     && !found.some((f) => ENGINEERING.has(f))) found.push("engineering_general");
   return found;
 }
@@ -165,7 +216,7 @@ function classifyTitle(title) {
 // AI sees; missing a real job is not.
 // data_engineering alone (an analyst profile) does not count: a software title is not her type.
 const ENGINEERING_TARGETS = ["software", "ml_ai", "devops_cloud", "security", "qa_test", "solutions", "engineering_general"];
-const TECH_TITLE_RE = /\b(software|developer|programm(er|ing)|coding|cuda|gpu|kernel|compiler|devops|devsecops|sre|kubernetes|cloud|infrastructure|machine learning|ml|ai|llm|agentic|ai agents?|dataops|data (engineer\w*|platform|pipelines?|infrastructure|architect\w*)|cyber\w*|infosec|appsec|isso|information systems? security|grc|phishing|threat|siem|forensics|malware|red team|pentest\w*|penetration test\w*|research (intern|scientist|engineer)|world models?|synthetic data|autonomous|robotics|simulation|computational|algorithm\w*|quant\w*|\bapi|sdk|saas|solutions? (engineer|architect|consult\w*)|technical (support|consultant|advisor|relationship|solutions?|account|specialist)|platform consultant|enablement architect|quality engineer\w*|test automation|sdet|automation engineer|systems? administrator|network engineer\w*|database|compute|control plane|technology platforms?|digital product|web|mobile|apps?|firmware|embedded|it (engineer\w*|architect\w*|technologist|systems?|ops|operations)|salesforce|workday|servicenow|sap|erp|observability|reliability|linux|aws|azure|gcp)\b/i;
+const TECH_TITLE_RE = /\b(software|developer|programm(er|ing)|coding|cuda|gpu|kernel|compiler|devops|devsecops|sre|kubernetes|cloud|infrastructure|machine learning|ml|ai|llm|agentic|ai agents?|dataops|data (engineer\w*|platform|pipelines?|infrastructure|architect\w*)|cyber\w*|infosec|appsec|isso|information systems? security|grc|phishing|threat|siem|forensics|malware|red team|pentest\w*|penetration test\w*|research (intern|scientist|engineer)|world models?|synthetic data|autonomous|robotics|simulation|computational|algorithm\w*|quant\w*|\bapi|sdk|saas|technical (consultant|advisor|relationship|solutions?|account)|platform consultant|enablement architect|software quality engineer\w*|test automation|sdet|automation engineer|systems? administrator|network engineer\w*|database|compute|control plane|technology platforms?|digital product|web|mobile|apps?|firmware|embedded|it (engineer\w*|architect\w*|technologist|systems?|ops|operations)|salesforce|workday|servicenow|sap|erp|observability|reliability|linux|aws|azure|gcp)\b/i;
 // Softer words that make a title worth assessing only when no family claims
 // it for another profession ("Control Systems Team Lead", "Field Technical Support").
 const TECH_HINT_RE = /\b(technolog(y|ies|ist)|technical|platforms?|digital|automation|systems?|data|intelligence|analytics?|scien(ce|tist)|security|it|eng|architect\w*)\b/i;
@@ -174,19 +225,33 @@ const TECH_HINT_RE = /\b(technolog(y|ies|ist)|technical|platforms?|digital|autom
 const TECH_LEAD_RE = /\btechnolog(y|ies)\b/i;
 const LEAD_RE = /\b(head|director|vp|vice president|managing director|lead|manager|cto|chief)\b/i;
 const NON_TECH_LEAD_RE = /\b(recruit\w*|sourc\w*|talent|people|hr|human resources|benefits|rewards|sales|marketing|account\w*|audit\w*|risk|compliance|treasury|procurement|purchase|writer|editor|animator|legal|counsel)\b/i;
+// Tech words specific enough to name a role on their own ("Information Systems
+// Security Officer"), unlike "autonomous", "mobile" or "data".
+const SPECIFIC_TECH_RE = /\b(information systems? security|isso|cyber\w*|infosec|appsec|grc|siem|pentest\w*|penetration test\w*|forensics|malware|threat (intel\w*|hunt\w*|detection)|devops|devsecops|sre|kubernetes|cuda|compiler|kernel|sdk|\bapi\b)\b/i;
+const NON_TECH_CLAIMS = ["trades_field", "retail_hospitality", "admin_office", "healthcare", "education", "hr_recruiting", "legal_compliance", "sales", "marketing", "customer_success", "operations", "finance"];
+/** "strong" (the title names a tech role), "hint" (a tech-ish word only) or false. */
 function techTitle(title, families) {
   const t = String(title || "");
-  if (TECH_TITLE_RE.test(t)) return true;
-  if (TECH_LEAD_RE.test(t) && LEAD_RE.test(t) && !NON_TECH_LEAD_RE.test(t)) return true;
+  if (/\b(cnc|plc|ladder logic)\b/i.test(t)) return false; // machine programming, not software
+  if (/\bpost-?\s?doc\w*\b/i.test(t)) return false; // a postdoc is a PhD research post, whatever the field
+  if (PM_RE.test(t)) return false; // a PM, whatever the product
+  if (SALES_ENG_RE.test(t)) return false; // customer-facing engineering, whatever the product
+  if (TECH_LEAD_RE.test(t) && LEAD_RE.test(t) && !NON_TECH_LEAD_RE.test(t)) return "strong";
+  // A title another, non-engineering profession has claimed ("Sr Mobile
+  // Expert" in retail, "Autonomous Vehicle Operator") is not a tech job
+  // because of a tech word, unless it is an engineer's.
+  // ("Engineering" as an org name does not count; "Engineer" as the role does.)
+  if (families.some((f) => NON_TECH_CLAIMS.includes(f)) && !ENGINEER_ROLE_RE.test(t) && !SPECIFIC_TECH_RE.test(t)) return false;
+  if (TECH_TITLE_RE.test(t)) return "strong";
   // Hints count only for titles no other profession has claimed (or IT, which is close).
   const unclaimed = !families.length || families.every((f) => f === "it_support");
-  return unclaimed && TECH_HINT_RE.test(t);
+  return unclaimed && TECH_HINT_RE.test(t) ? "hint" : false;
 }
 
 // What a profile of each kind should see scored: its own type plus the
 // types people with that background realistically move into.
 const ADJACENT = {
-  software: ["software", "ml_ai", "data_engineering", "devops_cloud", "security", "qa_test", "solutions", "data_science", "engineering_general"],
+  software: ["software", "ml_ai", "data_engineering", "devops_cloud", "security", "qa_test", "data_science", "engineering_general"],
   ml_ai: ["ml_ai", "software", "data_science", "data_engineering", "engineering_general"],
   data_engineering: ["data_engineering", "software", "data_analytics", "data_science", "devops_cloud", "ml_ai", "engineering_general"],
   data_science: ["data_science", "data_analytics", "ml_ai", "data_engineering"],
@@ -262,17 +327,39 @@ const VOCAB_FOR = {
   data: ["data_analytics", "data_science", "data_engineering"],
 };
 
-/** Does a description use the core vocabulary of any targeted type (at least `min` distinct terms)? null = no vocabulary applies. */
-function descriptionFits(description, targets, min = 2) {
+// Vocabulary of professions none of the targets cover. A title that can't be
+// read is still another profession's job when its description is dense with
+// these and no denser with the targets' words (an HPE mechanical posting still
+// says "cloud", "data" and "CAD software" in its boilerplate).
+const OTHER_VOCAB = ["mechanical", "thermal", "cad", "solidworks", "creo", "pro ?engineer", "sheet metal", "tooling", "fea", "gd&t", "heat transfer", "enclosures?", "machining",
+  "pcb", "schematics?", "verilog", "vhdl", "rtl", "oscilloscope", "firmware", "hvac", "structural", "civil engineering", "surveying", "geotechnical", "welding", "piping",
+  "nursing", "patient care", "patients", "clinical", "pharmacy", "gaap", "accounting", "payroll", "audit(s|ing)?", "litigation", "paralegal", "warehouse", "forklift", "cdl"];
+const OTHER_RE = OTHER_VOCAB.map((w) => new RegExp(`(^|[^a-z0-9])${w}($|[^a-z0-9])`, "i"));
+const countHits = (res, text) => res.filter((re) => re.test(text)).length;
+
+/**
+ * Does a description use the core vocabulary of any targeted type (at least
+ * `min` distinct terms)? null = no vocabulary applies. With `strict`, another
+ * profession's vocabulary that is at least as dense (3+ terms) rules it out.
+ */
+function descriptionFits(description, targets, min = 2, { strict = false } = {}) {
   const vocabs = Object.keys(VOCAB_FOR).filter((v) => VOCAB_FOR[v].some((f) => targets.includes(f)));
   if (!vocabs.length) return null;
   const text = String(description || "").replace(/<[^>]+>/g, " ");
-  return vocabs.some((v) => VOCAB_RE[v].filter((re) => re.test(text)).length >= min);
+  const best = Math.max(...vocabs.map((v) => countHits(VOCAB_RE[v], text)));
+  if (best < min) return false;
+  if (strict) {
+    const other = countHits(OTHER_RE, text);
+    if (other >= 3 && other >= best) return false;
+  }
+  return true;
 }
 // A title of another type is still assessed when its description is dense
 // with the profile's own vocabulary (a "Finance & Business Management" role
 // that is really SQL/Tableau analytics).
 const STRONG_DESCRIPTION_TERMS = 6; // was 8; lowered 2026-10-11 so no job of a selected type is missed
+const HINT_DESCRIPTION_TERMS = 3; // title has only a tech-ish word ("Technical Specialist")
+const UNKNOWN_DESCRIPTION_TERMS = 4; // title can't be read at all
 
 /**
  * Should this user's AI assessment run on this job?
@@ -285,16 +372,31 @@ function shouldAssess(title, targets, description = "") {
   const families = classifyTitle(title);
   if (!targets || !targets.length) return { assess: true, families, why: "unknown" };
   if (String(title || "").trim().length < 3) return { assess: true, families, why: "unknown" }; // no real title
-  if (families.some((f) => targets.includes(f))) return { assess: true, families, why: "type" };
+  // "Quality Engineer II" is medical-device or manufacturing quality as often
+  // as software QA: without a software/test word it is decided by the description.
+  const qualityOnly = /\bquality (?:engineer\w*|engineering|assurance)\b/i.test(title) && !/\b(software|automation|test\w*|qa|sdet|web|mobile|api|sre|platform)\b/i.test(title);
+  if (!qualityOnly && families.some((f) => targets.includes(f))) return { assess: true, families, why: "type" };
   // Engineering profiles: any tech signal in the title is enough. Never miss
   // a job of a selected type because another word in the title won.
-  if (targets.some((f) => ENGINEERING_TARGETS.includes(f)) && techTitle(title, families)) return { assess: true, families, why: "tech-title" };
+  const tech = targets.some((f) => ENGINEERING_TARGETS.includes(f)) ? techTitle(title, families) : false;
+  if (tech === "strong" && !qualityOnly) return { assess: true, families, why: "tech-title" };
+  // A hint alone ("Technical Specialist", "Field Technical Support") is not a
+  // tech job: the description has to use the targets' vocabulary (3+ terms,
+  // and not be denser with another profession's). No description: assess.
+  if (tech === "hint" || qualityOnly) {
+    if (!description || String(description).length < 200) return { assess: true, families, why: "unknown" };
+    return descriptionFits(description, targets, HINT_DESCRIPTION_TERMS, { strict: true })
+      ? { assess: true, families, why: "description" }
+      : { assess: false, families, why: "type" };
+  }
   if (families.length) {
     if (descriptionFits(description, targets, STRONG_DESCRIPTION_TERMS)) return { assess: true, families, why: "description" };
     return { assess: false, families, why: "type" };
   }
   if (!description || String(description).length < 200) return { assess: true, families, why: "unknown" };
-  const fits = descriptionFits(description, targets);
+  // No readable title at all: only a description dense with the targets'
+  // vocabulary (4+ distinct terms) gets the job assessed.
+  const fits = descriptionFits(description, targets, UNKNOWN_DESCRIPTION_TERMS, { strict: true });
   return { assess: fits !== false, families, why: fits === null ? "unknown" : "description" };
 }
 

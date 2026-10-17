@@ -2,9 +2,13 @@
 // Shared by the Profile page (your resume) and the Jobs page (a resume
 // tailored to one job), so both produce identical files.
 //
-//   PDF   — drawn with jsPDF in the same layout as the LaTeX template
+//   PDF   — the .tex typeset by Tectonic on the server (compileResumePdf), so
+//           it is the real document in the user's template; if the server
+//           can't compile, the same layout is drawn locally with jsPDF
 //   .tex  — the LaTeX template itself (src/lib/resumeLatex.js), for Overleaf
 import { jsPDF } from "jspdf";
+import { httpsCallable } from "firebase/functions";
+import { functions } from "../firebase";
 import { buildResumeLatex, emphasisRuns } from "./resumeLatex.js";
 
 /** Contact details from the signed-in account, used when the resume has no header of its own. */
@@ -49,11 +53,33 @@ export function downloadResumeTex(resume, contact, fileBase) {
   saveBlob(new Blob([tex], { type: "application/x-tex;charset=utf-8" }), `${safeFileName(fileBase)}.tex`);
 }
 
-export function downloadResumePdf(resume, contact, fileBase) {
+/**
+ * Download the resume as a PDF. Resolves to "latex" when the server typeset
+ * it, "local" when the jsPDF fallback drew it.
+ */
+export async function downloadResumePdf(resume, contact, fileBase) {
+  const tex = buildResumeLatex(resume, contact);
+  try {
+    const compile = httpsCallable(functions, "compileResumePdf", { headers: { "X-Session-Token": localStorage.getItem("jw_session_token") || "" } });
+    const res = await compile({ tex });
+    const b64 = res.data?.pdfBase64;
+    if (!b64) throw new Error("No PDF returned");
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    saveBlob(new Blob([bytes], { type: "application/pdf" }), `${safeFileName(fileBase)}.pdf`);
+    return "latex";
+  } catch (err) {
+    console.warn("compileResumePdf failed; drawing the PDF locally instead:", err?.message || err);
+    drawResumePdfLocally(resume, contact, fileBase);
+    return "local";
+  }
+}
+
+/** Fallback renderer: the template's layout approximated with jsPDF (Times, A4). */
+export function drawResumePdfLocally(resume, contact, fileBase) {
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageW = doc.internal.pageSize.getWidth();
   const pageH = doc.internal.pageSize.getHeight();
-  const margin = 0.38 * 72; // matches the template's geometry margin=0.38in
+  const margin = 0.4 * 72; // matches the template's geometry margin=0.4in
   const width = pageW - margin * 2;
   const FONT = "times";
   let y = margin + 4;

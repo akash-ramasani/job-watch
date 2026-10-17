@@ -186,4 +186,25 @@ async function rebuildUserJobScores(userId, dbInstance) {
   return count;
 }
 
-module.exports = { writeUserScores, updateUserScoreRollup, rebuildUserJobScores, freshnessKey, MAX_SCORES_IN_AGG, SCORE_TTL_DAYS };
+/**
+ * Listed jobs that have a score doc but no rollup entry (scored while they
+ * were off the lists, then listed again) are filled in from their score docs:
+ * two reads for the lists are already done by the caller, plus one read per
+ * missing job. Returns how many were repaired.
+ */
+async function repairScoreRollup(userId, listedIds, dbInstance) {
+  const db = dbInstance || admin.firestore();
+  const rollupRef = db.collection("users").doc(userId).collection("aggregations").doc("myJobScores");
+  const snap = await rollupRef.get();
+  if (!snap.exists || !listedIds?.size) return 0;
+  const scores = snap.data().scores || {};
+  const missing = [...listedIds].filter((id) => !scores[id]).slice(0, 500);
+  if (!missing.length) return 0;
+  const docs = await db.getAll(...missing.map((id) => db.collection("users").doc(userId).collection("jobScores").doc(id)));
+  const entries = docs.filter((d) => d.exists).map((d) => ({ jobId: d.id, ...d.data() }));
+  if (!entries.length) return 0;
+  await updateUserScoreRollup(userId, entries, db, { listedIds });
+  return entries.length;
+}
+
+module.exports = { writeUserScores, updateUserScoreRollup, rebuildUserJobScores, repairScoreRollup, freshnessKey, MAX_SCORES_IN_AGG, SCORE_TTL_DAYS };

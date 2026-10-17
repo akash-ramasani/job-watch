@@ -31,6 +31,8 @@ const NOT_CONSIDERED = "(?:should not apply|need not apply|(?:are |is )?not elig
 
 const PHRASES = {
   citizen: [
+    // A citizenship tag in a title or heading: "Software Engineer (US Citizen)", "US Citizens Only"
+    re(`\\(\\s*${US} citizens?(?:hip)?(?: only| required)?\\s*\\)`),
     re(`\\bmust (?:be|hold|have|possess|maintain)(?: a| an)? (?:\\(i\\) )?${US} citizen(?:ship)?\\b`),
     re(`\\b${US} citizenship\\b[^.;]{0,25}\\b(?:required|mandatory|a requirement|needed|a must|is a condition)\\b`),
     re(`\\b(?:requires?|requiring|required:?) (?:active |current )?${US} citizenship\\b`),
@@ -45,6 +47,12 @@ const PHRASES = {
     re(`\\b${US} citizenship (?:and|&) [^.;]{0,90}\\b(?:are|is) required\\b`),
   ],
   clearance: [
+    // "TS/SCI clearance on day one", "Secret clearance at time of hire"
+    re(`\\b(?:ts\\/sci|top secret|secret)(?: security)? clearance\\b[^.;]{0,40}\\b(?:on day (?:one|1)|day one|day 1|at (?:the )?(?:time of )?(?:hire|start)|upon hire|to start|at hire|prior to start)\\b`),
+    // A requirement line that is nothing but the clearance: "Active TS/SCI with CI poly", "TS/SCI clearance"
+    re(`^(?:[-•*]\\s*)?(?:an? )?(?:active |current )?(?:ts\\/sci|top secret|secret)(?: security)?(?: clearance)?(?: w(?:ith|\\/) (?:a )?(?:ci |fs |full[- ]scope |fsp )?poly(?:graph)?)?\\.?$`),
+    re(`\\b(?:ts\\/sci|top secret)\\b[^.;]{0,60}\\b(?:required|is a must|mandatory)\\b`),
+    re(`\\bmust (?:currently )?(?:have|hold|possess|maintain)(?: an?)? (?:ts\\/sci|top secret|secret)\\b`),
     re(`\\b(?:active|current|existing)\\b[^.;]{0,40}\\b(?:ts\\/sci|top secret|secret|security|dod|doe|q|l)\\b[^.;]{0,20}\\bclearance\\b[^.;]{0,30}\\b(?:required|needed|must)\\b`),
     re(`\\bmust (?:currently )?(?:have|hold|possess|maintain)(?: an?)? (?:active|current)\\b[^.;]{0,40}\\bclearance\\b`),
     re(`\\b(?:requires?|required:?|requiring) (?:an? )?(?:active|current)\\b[^.;]{0,40}\\bclearance\\b`),

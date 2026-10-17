@@ -65,10 +65,22 @@ test("close siblings earn partial credit, languages don't", () => {
   assert.equal(cov.Scala, "no");
 });
 
-test("years and seniority caps match the AI score's", () => {
-  const r = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Staff Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS"]) });
-  assert.equal(r.score, 35);
+test("years and seniority screens match the AI score's", () => {
+  const r = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS"]) });
+  assert.equal(r.score, 0);
+  assert.equal(r.screened, true);
+  assert.equal(r.aiWorthy, false);
   assert.match(r.capNote, /Asks for 10\+ years/);
+  // Beyond the old 15-year parse limit, and a principal title, are screened too.
+  const nvidia = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Principal System Software Engineer - CUDA Driver", description: jd(["15+ years of relevant systems software development experience", "Strong C programming skills", "Python"]) });
+  assert.equal(nvidia.score, 0);
+  assert.equal(nvidia.minYears, 15);
+  const twenty = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["20+ years of experience", "Python"]) });
+  assert.equal(twenty.minYears, 20);
+  assert.equal(twenty.screened, true);
+  // Seven years is within reach for someone with 5.7.
+  const seven = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["7+ years of experience", "Python", "AWS"]) });
+  assert.ok(seven.score > 0 && !seven.screened);
 });
 
 test("role distance: near types capped at 60, far at 30, other fields at 15", () => {
@@ -97,8 +109,8 @@ test("which jobs still go to the AI", () => {
   assert.ok(own.score < 40 && own.aiWorthy, `own-type middling job: ${own.score}`); // own type, rule unsure
   const other = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Account Executive", description: jd(["Salesforce", "Excel"]) });
   assert.equal(other.aiWorthy, false);
-  const years = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Staff Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
-  assert.ok(years.score <= 35 && years.aiWorthy, "strong match held down by years");
+  const years = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
+  assert.equal(years.aiWorthy, false); // screened as too senior: no model call
   const blank = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Software Engineer", description: "<p>Join our team!</p>" });
   assert.equal(blank.aiWorthy, true);
 });

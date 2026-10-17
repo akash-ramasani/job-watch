@@ -27,6 +27,10 @@
 
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest, onCall, HttpsError } = require("firebase-functions/v2/https");
+const { setGlobalOptions } = require("firebase-functions/v2");
+// The module itself (OpenAI + Anthropic SDKs, adapters, pdf tooling) needs
+// ~260 MiB at startup, so the 256 MiB default is not enough for any function.
+setGlobalOptions({ memory: "512MiB" });
 const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const nodeCrypto = require("crypto");
 const { defineSecret } = require("firebase-functions/params");
@@ -50,11 +54,14 @@ const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 // (scoring, assistant chat, form-field mapping,
 // name pronunciation, resume parsing).
 //
-// The API key is stored in Google Secret Manager and injected at runtime.
+// The API keys are stored in Google Secret Manager and injected at runtime.
 // Every function that calls OpenAI must include `secrets: [OPENAI_API_KEY]`
-// in its options.
+// in its options; every function that scores jobs also needs ANTHROPIC_API_KEY.
 const OpenAI = require("openai");
+// Loaded on first use: only the scorer needs it, and it is a heavy module.
+let Anthropic = null;
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
+const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 
 // Default OpenAI models used across features. Override via env if needed.
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini";
@@ -73,7 +80,26 @@ function requireOpenAI() {
   return new OpenAI({ apiKey });
 }
 
+// Job scoring (jobFit.assessJobFit) runs on Claude Haiku: same price class as
+// gpt-4o-mini, much stronger, and the candidate prefix is prompt-cached. If the
+// Anthropic key isn't configured the scorer falls back to the OpenAI fast model
+// so a missing secret never stops scoring.
+const SCORER_MODEL = process.env.SCORER_MODEL || "claude-haiku-5-5";
+let warnedNoAnthropic = false;
+function requireScorer() {
+  const apiKey = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
+  // The secret must exist for deploys to succeed, so it may hold a placeholder
+  // ("unset") until a real key is pasted in; only a real key switches scoring.
+  if (/^sk-ant-/.test(apiKey)) {
+    if (!Anthropic) Anthropic = require("@anthropic-ai/sdk");
+    return { client: new Anthropic({ apiKey, maxRetries: 2 }), model: SCORER_MODEL };
+  }
+  if (!warnedNoAnthropic) { warnedNoAnthropic = true; logger.warn("ANTHROPIC_API_KEY not set to a real key: scoring with OpenAI " + OPENAI_FAST_MODEL); }
+  return { client: requireOpenAI(), model: OPENAI_FAST_MODEL };
+}
+
 const { normalizeToMapLocation } = require("./lib/locationNormalizer.cjs");
+const { tectonicAvailable, validateResumeTex, compileResumeTex } = require("./lib/resumePdf.cjs");
 const { chooseResumeLocation } = require("./lib/resumeLocation.cjs");
 const { FIT_VERSION, assessJobFit, buildProfileText, profileStampOf, candidateYearsOf, screenedFit, isSoftwareCandidate, recentTitlesOf, PROMPT_VERSION } = require("./lib/jobFit.cjs");
 const { familiesForProfile, shouldAssess, targetsKey, FAMILY_IDS } = require("./lib/jobFamilies.cjs");
@@ -142,7 +168,8 @@ function jobSignature(job) {
 function auditPick(userId, jobId) {
   return nodeCrypto.createHash("sha1").update(`${userId}|${jobId}`).digest()[0] % 100 < AUDIT_PERCENT;
 }
-const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota/i.test(err?.message || "");
+// OpenAI: insufficient_quota. Anthropic: 400 "Your credit balance is too low".
+const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota|credit balance is too low/i.test(err?.message || "");
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
 // by req ID against users/{uid}/feedState/{feedId} instead of by the
@@ -573,7 +600,7 @@ exports.syncRecentJobsHourly = onSchedule(
     timeoutSeconds: 540,
     memory: "1GiB",
     maxInstances: 3,
-    secrets: [OPENAI_API_KEY],
+    secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
   async () => {
     const now = admin.firestore.Timestamp.now();
@@ -669,7 +696,7 @@ exports.syncRecentJobsHourly = onSchedule(
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/runSyncNow?userId=<UID>
  */
 exports.runSyncNow = onRequest(
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 3, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 3, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
     let decodedToken;
     try {
@@ -804,7 +831,7 @@ exports.runSyncNow = onRequest(
  */
 exports.rescoreJobs = onRequest(
   // invoker "public" only opens the URL; verifyToken below still restricts it to the admin.
-  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 1, cors: CORS_ORIGINS, invoker: "public", secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 540, memory: "1GiB", maxInstances: 1, cors: CORS_ORIGINS, invoker: "public", secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
     let decoded;
     try {
@@ -848,8 +875,12 @@ exports.rescoreJobs = onRequest(
       });
     }
 
+    // screenOnly: only the free screens run (no model), see scoreNewJobsForUser.
+    const screenOnly = body.screenOnly === true;
+    // ruleOnly: full rule scoring while the AI stays paused (rule scores, flagged for the AI later); no model calls.
+    const ruleOnly = body.ruleOnly === true;
     // Manual rescoring respects the global pause unless the caller overrides it.
-    if (body.ignorePause !== true && await aiScoringPaused()) {
+    if (!screenOnly && !ruleOnly && body.ignorePause !== true && await aiScoringPaused()) {
       return res.status(409).json({ error: "AI job scoring is paused (users/{admin}/settings/aiControl.pauseJobScoring). Run scripts/ai-scoring-pause.mjs off, or pass ignorePause: true." });
     }
 
@@ -860,35 +891,41 @@ exports.rescoreJobs = onRequest(
     const snaps = ids.length ? await db.getAll(...ids.map((id) => jobsCol.doc(id))) : [];
     const jobs = snaps.filter((s) => s.exists).map((s) => ({ jobDocId: s.id, ...s.data() }));
 
-    if (!dryRun) {
-      if (!jobs.length) return res.json({ ok: true, dryRun, userId: targetUid, requested: 0, scored: 0, results: [] });
+    if (!dryRun || screenOnly) {
+      if (!jobs.length) return res.json({ ok: true, dryRun, screenOnly, userId: targetUid, requested: 0, scored: 0, results: [] });
       const scoresCol = db.collection("users").doc(targetUid).collection("jobScores");
       const readScores = async () => new Map((await db.getAll(...jobs.map((j) => scoresCol.doc(j.jobDocId)))).map((s) => [s.id, s.exists ? s.data() : {}]));
       const before = await readScores();
+      const collect = [];
       const scored = await scoreNewJobsForUser(targetUid, jobs.map((j) => ({
         jobDocId: j.jobDocId, source: j.source, externalId: j.externalId, jobUrl: j.jobUrl, feedUrl: "",
-      })), { deadlineMs, force: true, ignorePause: body.ignorePause === true });
-      const after = await readScores();
+      })), { deadlineMs, force: true, ignorePause: body.ignorePause === true, screenOnly, dryRun, collect });
+      // A dry run reports what would have been written; a screen-only run leaves untouched jobs at their old score.
+      const after = dryRun ? new Map(collect.map((r) => [r.jobId, { score: r.score, reason: r.reason, fit: r.fit }])) : await readScores();
       return res.json({
-        ok: true, dryRun, userId: targetUid, requested: ids.length, scored,
-        results: jobs.map((j) => ({
-          id: j.jobDocId, title: j.title, company: j.companyName,
-          old: before.get(j.jobDocId)?.score ?? null,
-          new: after.get(j.jobDocId)?.score ?? null,
-          reason: after.get(j.jobDocId)?.reason || "",
-          scoreVersion: after.get(j.jobDocId)?.fit?.version ?? null,
-        })),
+        ok: true, dryRun, screenOnly, userId: targetUid, requested: ids.length, scored,
+        results: jobs.map((j) => {
+          const a = after.get(j.jobDocId);
+          const old = before.get(j.jobDocId)?.score ?? null;
+          return {
+            id: j.jobDocId, title: j.title, company: j.companyName, old,
+            new: a ? (a.score ?? null) : (screenOnly ? old : null),
+            reason: a?.reason || (screenOnly && !a ? before.get(j.jobDocId)?.reason || "" : ""),
+            scoreVersion: a?.fit?.version ?? null,
+            screened: Boolean(a?.fit?.screened),
+          };
+        }),
       });
     }
 
-    const client = requireOpenAI();
+    const scorer = requireScorer();
     const profileText = buildProfileText(profile);
     const limiter = pLimit(SCORING_CONCURRENCY);
     const results = await Promise.all(jobs.map((j) => limiter(async () => {
       if (Date.now() > deadlineMs) return { id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null, new: null, reason: "skipped (time)" };
       try {
         const fit = j.fullDescription
-          ? await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears: candidateYearsOf(profile), softwareCandidate: isSoftwareCandidate(profile), candidateTitles: recentTitlesOf(profile), jobTitle: j.title, jobDescription: j.fullDescription })
+          ? await assessJobFit({ client: scorer.client, model: scorer.model, profileText, candidateYears: candidateYearsOf(profile), softwareCandidate: isSoftwareCandidate(profile), candidateTitles: recentTitlesOf(profile), jobTitle: j.title, jobDescription: j.fullDescription })
           : null;
         return {
           id: j.jobDocId, title: j.title, company: j.companyName, old: j.relevanceScore ?? null,
@@ -1086,6 +1123,17 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     }
   }
 
+  // Listed jobs scored while they were off the lists get their rollup entry back (cheap).
+  if (listedIds) {
+    try {
+      const { repairScoreRollup } = require("./lib/userJobScores.cjs");
+      const repaired = await repairScoreRollup(userId, listedIds, db);
+      if (repaired) logger.info(`score rollup repaired for ${userId}: ${repaired} listed jobs`);
+    } catch (err) {
+      logger.warn(`score rollup repair failed for ${userId}: ${err?.message || err}`);
+    }
+  }
+
   // AWAIT scoring — Cloud Functions terminate any un-awaited Promises immediately upon return!
   if (newJobsForScoring.length > 0) {
     await scoreNewJobsForUser(userId, newJobsForScoring, { deadlineMs, listedIds }).catch((err) =>
@@ -1099,6 +1147,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     if (userId === ADMIN_UID) {
       try {
         const otherUids = (await listAiEnabledUserIds()).filter((u) => u !== ADMIN_UID);
+        logger.info(`scoring fan-out: ${otherUids.length} other user(s) [${otherUids.join(",")}] for ${newJobsForScoring.length} new jobs; ${Math.round((deadlineMs - Date.now()) / 1000)}s left`);
         for (const uid of otherUids) {
           await scoreNewJobsForUser(uid, newJobsForScoring, { deadlineMs, listedIds }).catch((err) =>
             logger.error(`scoreNewJobsForUser fan-out failed userId=${uid}: ${err?.message || err}`)
@@ -2924,7 +2973,10 @@ async function fetchJobDescription(source, externalId, feedUrl, descriptionHint,
  * Stops starting new jobs after `deadlineMs`; those stay unscored and are
  * picked up by rescoreBacklog on a later run. Returns the number scored.
  */
-async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null, listedIds = null, screen = true, ignorePause = false } = {}) {
+// screenOnly: re-run only the free screens (job type, eligibility, too senior)
+// and write nothing for jobs that pass them, so existing AI scores survive.
+// dryRun: compute but write nothing; results go to `collect` when given.
+async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, force = false, failedIds = null, listedIds = null, screen = true, ignorePause = false, screenOnly = false, dryRun = false, collect = null } = {}) {
   if (!newJobs || newJobs.length === 0) return 0;
   const isAdmin = userId === ADMIN_UID;
   // Global pause: rule scores only, nothing goes to OpenAI (see aiScoringPaused).
@@ -3021,7 +3073,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   if (todo.length === 0) return 0;
   logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}${aiPaused ? " (AI paused: rule scores only)" : ""}`);
 
-  const client = aiPaused ? null : requireOpenAI();
+  const scorer = aiPaused ? null : requireScorer();
   const limiter = pLimit(SCORING_CONCURRENCY);
   const scoredAt = admin.firestore.Timestamp.now();
   const results = []; // { jobId, score, reason, fit }
@@ -3036,10 +3088,22 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   // Not eligible (needs sponsorship; the job requires US citizenship or a
   // clearance, or won't sponsor): recorded and hidden, never scored.
   const blockedFit = (job, why) => ({ ...screenedFit({ families: [], why: "eligibility" }), blocked: why, reason: why, capNote: why, profileStamp, targetsKey: tk, scoredAt });
+  // Flags stored on the job come from the patterns of the day it was fetched;
+  // an empty list is re-read from the description with today's patterns and
+  // written back, so a clearance line the old patterns missed still rules
+  // the job out for everyone who needs sponsorship.
   const eligibilityBlock = (job, description) => {
     if (!needsVisa) return null;
-    const flags = job.el || (description ? eligibilityOf(description).flags : []);
-    return blockedReason(flags, true);
+    let flags = Array.isArray(job.el) && job.el.length ? job.el : null;
+    if (!flags && description) {
+      // The title counts too: "Software Engineer - Reliability (US Citizen)".
+      flags = eligibilityOf(`${job.title || ""}. ${description}`).flags;
+      if (flags.length && job.jobDocId) {
+        job.el = flags;
+        db.collection("users").doc(ADMIN_UID).collection("jobs").doc(job.jobDocId).set({ el: flags }, { merge: true }).catch(() => {});
+      }
+    }
+    return blockedReason(flags || [], true);
   };
   if (needsVisa) {
     todo = todo.filter((job) => {
@@ -3056,6 +3120,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     for (const job of todo) {
       const gate = shouldAssess(job.title, targets, job.fullDescription);
       job.families = gate.families;
+      job.gateWhy = gate.why;
       if (gate.assess) { toAssess.push(job); continue; }
       if (auditPick(userId, job.jobDocId)) { audits.add(job.jobDocId); toAssess.push(job); continue; }
       const fit = { ...screenedFit(gate), profileStamp, targetsKey: tk, scoredAt };
@@ -3095,6 +3160,24 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     jobId: job.jobDocId, score: rule.score, reason: rule.reason,
     fit: { ...rule, version: RULE_FIT_VERSION, profileStamp, targetsKey: tk, scoredAt, sig: job.sig || null, ...(aiPending ? { aiPending: true } : {}) },
   });
+  // An audit sample is a job the type gate rejected, scored anyway to measure
+  // what the gate misses. Unless it scores well it stays hidden, as the gate
+  // decided; the score it got is kept for the audit.
+  const auditHidden = (job, score) => {
+    const fit = { ...screenedFit({ families: job.families || [], why: "type" }), profileStamp, targetsKey: tk, scoredAt, audit: true, auditScore: score };
+    return { jobId: job.jobDocId, score: 0, reason: fit.reason, fit };
+  };
+  // A job let in on description evidence only (no title of a targeted type)
+  // that then scores poorly is not the user's kind of job: hidden, not shown
+  // as a weak match. The score it got is kept for the record.
+  // A title another field claims ("Cloud Hosting Finance Analyst") has to score
+  // well to stay; a title that says nothing just has to look plausible.
+  const weakMin = (job) => ((job.families || []).length ? 60 : 40);
+  const weakEvidence = (job) => !["type", "tech-title"].includes(job.gateWhy || "type");
+  const weakHidden = (job, score) => {
+    const fit = { ...screenedFit({ families: [], why: "type" }), profileStamp, targetsKey: tk, scoredAt, weakEvidence: true, evidenceScore: score };
+    return { jobId: job.jobDocId, score: 0, reason: fit.reason, fit };
+  };
 
   // Out of OpenAI credits: stop calling it at the first such error; jobs keep
   // their rule score, flagged for the AI once credits return.
@@ -3118,6 +3201,8 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         }
       }
       if (!description || description.length < 50) {
+        // A job with neither a readable title nor a description can't be judged: hidden, not shown unscored.
+        if (!(job.families || []).length) { results.push({ jobId: job.jobDocId, score: 0, reason: NO_DESCRIPTION, fit: { ...screenedFit({ families: [], why: "type" }), reason: NO_DESCRIPTION, capNote: NO_DESCRIPTION, profileStamp, targetsKey: tk, scoredAt, noDescription: true } }); return; }
         results.push({ jobId: job.jobDocId, score: -1, reason: NO_DESCRIPTION });
         return;
       }
@@ -3131,15 +3216,28 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
       // Free first: the rule score. The AI only sees jobs that might be good
       // matches — unless this is a forced rescore or an audit sample.
       const rule = ruleAssessJob({ profile, jobTitle: job.title, description, targets, mine });
-      const wantsAi = force || audits.has(job.jobDocId) || rule.aiWorthy;
-      if (!wantsAi) { ruleOnly++; results.push(ruleResult(job, rule, false)); return; }
+      if (screenOnly) {
+        if (rule.screened) results.push(ruleResult(job, rule, false));
+        else if (audits.has(job.jobDocId) && rule.score < 40) results.push(auditHidden(job, rule.score));
+        else if (weakEvidence(job) && rule.score < weakMin(job)) results.push(weakHidden(job, rule.score));
+        return;
+      }
+      // Screened by the rules (too senior for the candidate): final, even on a forced rescore.
+      const wantsAi = !rule.screened && (force || audits.has(job.jobDocId) || rule.aiWorthy);
+      if (!wantsAi) { ruleOnly++; results.push(weakEvidence(job) && rule.score < weakMin(job) ? weakHidden(job, rule.score) : ruleResult(job, rule, false)); return; }
       // AI unavailable (paused, or out of credits): keep the rule score, flagged for the AI later.
-      if (outOfCredits || aiPaused) { if (alreadyWaiting(job)) skippedForTime++; else results.push(ruleResult(job, rule, true)); return; }
+      if (outOfCredits || aiPaused) {
+        if (audits.has(job.jobDocId) && rule.score < 40) results.push(auditHidden(job, rule.score));
+        else if (weakEvidence(job) && rule.score < weakMin(job)) results.push(weakHidden(job, rule.score));
+        else if (alreadyWaiting(job)) skippedForTime++;
+        else results.push(ruleResult(job, rule, true));
+        return;
+      }
 
       let fit = await priorFitFor(job.sig).catch(() => null); // scored before under another id
       for (let attempt = 1; attempt <= 4 && !fit; attempt++) {
         try {
-          fit = await assessJobFit({ client, model: OPENAI_FAST_MODEL, profileText, candidateYears, softwareCandidate, candidateTitles, jobTitle: job.title, jobDescription: description });
+          fit = await assessJobFit({ client: scorer.client, model: scorer.model, profileText, candidateYears, softwareCandidate, candidateTitles, jobTitle: job.title, jobDescription: description });
           if (!fit) await new Promise((r) => setTimeout(r, 800));
         } catch (err) {
           if (isOutOfCredits(err)) { outOfCredits = true; break; }
@@ -3157,7 +3255,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         return;
       }
       const stored = { ...fit, profileStamp, scoredAt, sig: job.sig || null, rule: { score: rule.score, version: RULE_VERSION }, ...(audits.has(job.jobDocId) ? { audit: true, families: job.families || [] } : {}) };
-      results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit: stored });
+      if (audits.has(job.jobDocId) && fit.score < 40) results.push(auditHidden(job, fit.score));
+      else if (weakEvidence(job) && fit.score < weakMin(job)) results.push(weakHidden(job, fit.score));
+      else results.push({ jobId: job.jobDocId, score: fit.score, reason: fit.reason, fit: stored });
       if (audits.has(job.jobDocId) && fit.score >= 40) auditMisses.push({ jobId: job.jobDocId, title: job.title, score: fit.score, families: job.families || [] });
       logger.info(`Scored ${job.jobDocId} for ${userId}: ${fit.score} (coverage ${fit.coverage}, ${fit.roleFit}/${fit.seniorityFit}) — ${fit.reason}`);
     } catch (err) {
@@ -3207,11 +3307,12 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
   }
 
   const good = results.filter((r) => r.score >= 0);
+  if (collect) collect.push(...good);
   // Only unreadable descriptions count toward giving up on a job; API errors
   // (outages, rate limits) don't, so an outage never retires jobs.
   if (failedIds) failedIds.push(...results.filter((r) => r.score < 0 && r.reason === NO_DESCRIPTION).map((r) => r.jobId));
   try {
-    if (good.length) {
+    if (good.length && !dryRun) {
       const { writeUserScores } = require("./lib/userJobScores.cjs");
       await writeUserScores(userId, good.map((r) => ({ jobId: r.jobId, score: r.score, reason: r.reason, fit: r.fit })), db, { listedIds });
     }
@@ -3228,7 +3329,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
  * made with this method against this version of the profile, else a fresh
  * one — stored for the job card too.
  */
-async function getOrAssessFit({ uid, jobId, job, profile, client }) {
+async function getOrAssessFit({ uid, jobId, job, profile }) {
   const profileStamp = profileStampOf(profile);
   const scoreRef = db.collection("users").doc(uid).collection("jobScores").doc(jobId);
   const existing = (await scoreRef.get()).data()?.fit;
@@ -3240,8 +3341,7 @@ async function getOrAssessFit({ uid, jobId, job, profile, client }) {
   if (!description) description = await fetchJobDescription(job.source, job.externalId, "", null, job.jobUrl);
   if (!description || description.length < 50) return null;
   const fit = await assessJobFit({
-    client: client || requireOpenAI(),
-    model: OPENAI_FAST_MODEL,
+    ...requireScorer(),
     profileText: buildProfileText(profile),
     candidateYears: candidateYearsOf(profile),
     softwareCandidate: isSoftwareCandidate(profile),
@@ -3317,7 +3417,10 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   // The Profile page shows these as the default job types.
   const autoJobTypes = familiesForProfile(profile);
   if (JSON.stringify(marker.autoJobTypes || []) !== JSON.stringify(autoJobTypes)) await markerRef.set({ autoJobTypes }, { merge: true });
-  if (marker.backlogClearedFor === clearKey && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) return 0;
+  if (marker.backlogClearedFor === clearKey && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) {
+    logger.info(`rescoreBacklog: userId=${userId} cleared ${Math.round((Date.now() - marker.backlogClearedAt.toMillis()) / 60000)} min ago, skipping`);
+    return 0;
+  }
 
   // Jobs that failed repeatedly for this resume (no readable description, etc.).
   const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
@@ -3328,6 +3431,7 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk, skipAiPending: aiDown });
 
   if (stale.length === 0) {
+    logger.info(`rescoreBacklog: userId=${userId} nothing stale on the Jobs page`);
     await markerRef.set({ backlogClearedFor: clearKey, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
     return 0;
   }
@@ -3810,7 +3914,8 @@ exports.generateTailoredResume = onCall(
     minInstances: 0,
     maxInstances: 10,
     timeoutSeconds: 120,
-    secrets: [OPENAI_API_KEY],
+    memory: "1GiB",
+    secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
   async (request) => {
     const uid = request.auth?.uid;
@@ -3897,7 +4002,7 @@ exports.generateTailoredResume = onCall(
     // The match report is the same assessment that scores the job card, so the
     // two always agree. Reuse it when it's current; otherwise assess now, in
     // parallel with the rewrite, and store it for the card too.
-    const fitPromise = getOrAssessFit({ uid, jobId, job, profile, client }).catch((err) => {
+    const fitPromise = getOrAssessFit({ uid, jobId, job, profile }).catch((err) => {
       logger.warn(`generateTailoredResume: fit assessment failed for ${jobId}: ${err?.message}`);
       return null;
     });
@@ -4185,7 +4290,7 @@ exports.mapFormFields = onCall(
   {
     region: REGION,
     timeoutSeconds: 30,
-    memory: "256MiB",
+    memory: "512MiB",
     maxInstances: 10,
     secrets: [OPENAI_API_KEY],
   },
@@ -4552,7 +4657,7 @@ ${fieldList}`;
 
 // ── Generate name pronunciation ─────────────────────────────────────────────
 exports.generateNamePronunciation = onRequest(
-  { region: REGION, timeoutSeconds: 15, memory: "128MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 15, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -4689,6 +4794,53 @@ exports.recordApplication = onCall({ region: REGION, maxInstances: 10 }, async (
     throw new HttpsError("internal", e.message);
   }
 });
+
+/**
+ * compileResumePdf — typeset a resume's LaTeX (the same .tex the web app
+ * offers for Overleaf) with Tectonic and return the PDF, so the downloaded
+ * PDF is the real document in the user's template. The engine and its
+ * resource cache are installed at build time (scripts/setup-tectonic.cjs).
+ * Input: { tex }. Output: { pdfBase64, bytes }.
+ */
+exports.compileResumePdf = onCall(
+  // invoker: public — the callable checks the Firebase ID token itself; without
+  // this, Cloud Run rejects browser calls with a 401 before the code runs.
+  { region: REGION, timeoutSeconds: 120, memory: "1GiB", maxInstances: 5, invoker: "public" },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "You must be logged in to download a resume.");
+    const sessionToken = request.rawRequest?.headers?.["x-session-token"];
+    if (sessionToken) {
+      const userSnap = await db.collection("users").doc(uid).get();
+      const activeToken = userSnap.exists ? userSnap.data()?.activeSession?.token : null;
+      if (activeToken && activeToken !== sessionToken) {
+        throw new HttpsError("unauthenticated", "Session expired. You have been signed out because another login was detected.");
+      }
+    }
+    const { tex } = request.data || {};
+    try {
+      validateResumeTex(tex);
+    } catch (err) {
+      throw new HttpsError("invalid-argument", err.message);
+    }
+    if (!(await tectonicAvailable())) {
+      // What the build left behind, so a missing engine can be diagnosed from the logs.
+      const fsp = require("node:fs/promises");
+      const ls = async (d) => fsp.readdir(d).then((x) => x.join(",")).catch((e) => `(${e.code})`);
+      logger.error(`compileResumePdf: tectonic is not installed (did the gcp-build step run?) dir=${__dirname} files=[${await ls(__dirname)}] .tectonic=[${await ls(`${__dirname}/.tectonic`)}] bin=[${await ls(`${__dirname}/.tectonic/bin`)}] env.GOOGLE_NODE_RUN_SCRIPTS=${process.env.GOOGLE_NODE_RUN_SCRIPTS}`);
+      throw new HttpsError("unavailable", "The LaTeX compiler is not available on the server.");
+    }
+    const startedAt = Date.now();
+    try {
+      const { pdf } = await compileResumeTex(tex);
+      logger.info(`compileResumePdf: uid=${uid} ${tex.length} chars → ${pdf.length} bytes in ${Date.now() - startedAt} ms`);
+      return { pdfBase64: pdf.toString("base64"), bytes: pdf.length };
+    } catch (err) {
+      logger.error(`compileResumePdf failed for uid=${uid}: ${err?.message}`);
+      throw new HttpsError("internal", `LaTeX compile failed: ${String(err?.message || err).slice(0, 300)}`);
+    }
+  }
+);
 
 exports.getAdminUsersList = onCall({ region: REGION, maxInstances: 3, enforceAppCheck: false }, async (request) => {
   if (!request.auth || request.auth.uid !== "7Tojjo8l5PZIYctPmdwncf7PC133") {

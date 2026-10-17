@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { doc, onSnapshot } from "firebase/firestore";
+import { doc, onSnapshot, getDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { ADMIN_UID } from "../App.jsx";
 import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
@@ -110,6 +110,21 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
     );
   }, [user?.uid]);
 
+  // Live totals for the counter strip: companies with open roles and open
+  // postings, from the shared rollups every signed-in user can read.
+  const [live, setLive] = useState({ companies: 0, jobs: 0 });
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      getDoc(doc(db, "users", ADMIN_UID, "aggregations", "companyStats")),
+      getDoc(doc(db, "users", ADMIN_UID, "aggregations", "mapClusters")),
+    ]).then(([companies, clusters]) => {
+      if (cancelled) return;
+      setLive({ companies: Number(companies.data()?.totalCompanies) || 0, jobs: Number(clusters.data()?.totalJobs) || 0 });
+    }).catch((err) => console.warn("HeroOverlays: live totals failed", err));
+    return () => { cancelled = true; };
+  }, []);
+
   const recentJobs = useMemo(
     () => (jobTypes === null ? [] : allRecent.filter((j) => isRelatedJob(j, myScores[j.id], jobTypes, { needsSponsorship: needsSponsorship(userMeta) })).slice(0, 20)),
     [allRecent, myScores, jobTypes, userMeta]
@@ -149,7 +164,6 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
   }, [recentJobs.length]);
 
   const tickerJob = recentJobs[tickerIdx];
-  const nextUp = recentJobs.slice(0, 3);
 
   /* ── Pin live ticker over the matching bubble on the map ── */
   // Match the ticker job's location text against known bubble cities (by longest
@@ -303,42 +317,8 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
 
         {/* ── BOTTOM ROW ───────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 sm:gap-4">
-          {/* LEFT cluster: Next-up card (or onboarding pill when empty) */}
+          {/* LEFT cluster: onboarding pill when the user has nothing yet */}
           <div className="flex flex-col items-start gap-2 w-full sm:max-w-[300px] order-2 sm:order-1">
-            {nextUp.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5, delay: 0.2 }}
-                className="pointer-events-auto rounded-2xl bg-white/80 backdrop-blur-xl border border-white/60 shadow-2xl shadow-indigo-500/10 p-4 w-full"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-700">
-                    Next up · For you
-                  </p>
-                  <Link to="/jobs" className="text-[10px] font-bold text-indigo-600 hover:text-indigo-700">
-                    View all →
-                  </Link>
-                </div>
-                <ul className="space-y-2">
-                  {nextUp.map((j) => (
-                    <li key={j.id} className="group flex items-center gap-2 text-xs">
-                      <div className="h-7 w-7 flex-shrink-0 rounded-md bg-gradient-to-br from-indigo-100 to-violet-100 flex items-center justify-center text-[10px] font-bold text-indigo-700">
-                        {(j.companyName || "?").slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-semibold text-gray-900 truncate group-hover:text-indigo-600 transition-colors">
-                          {titleCase(j.title) || "Role"}
-                        </p>
-                        <p className="text-[10px] text-gray-500 truncate">
-                          {j.companyName} · {relativeTime(j.sourceUpdatedTs)}
-                        </p>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </motion.div>
-            )}
             {isEmpty && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
@@ -405,13 +385,13 @@ export default function HeroOverlays({ user, userMeta, bubblePositions = {} }) {
           >
             <span className="text-emerald-600">●</span> Right now monitoring{" "}
             <span className="text-gray-900 font-bold">
-              <Ticker value={650} />
+              <Ticker value={live.companies} />
             </span>{" "}
-            companies ·{" "}
+            companies with open roles ·{" "}
             <span className="text-gray-900 font-bold">
-              <Ticker value={33127} />
+              <Ticker value={live.jobs} />
             </span>{" "}
-            active jobs
+            open postings
           </motion.div>
         </div>
       </div>

@@ -110,3 +110,24 @@ test("only users who need sponsorship are affected", () => {
   assert.equal(needsSponsorship({ requiresSponsorship: "No" }), false);
   assert.equal(needsSponsorship({}), false);
 });
+
+test("clearance stated as a bare requirement line or 'on day one' is caught", () => {
+  for (const s of [
+    "TS/SCI clearance on day one",
+    "Active TS/SCI with CI polygraph",
+    "Secret clearance at time of hire",
+    "Must have TS/SCI",
+    "Top Secret clearance required prior to start",
+  ]) assert.deepEqual(flagsOf(s), ["clearance"], s);
+  for (const s of [
+    "Ability to obtain a TS/SCI clearance",
+    "TS/SCI clearance preferred",
+    "Candidates must be eligible to obtain a Secret clearance",
+  ]) assert.deepEqual(flagsOf(s), [], s);
+});
+
+test("a citizenship tag in a title is a requirement", () => {
+  assert.deepEqual(flagsOf("Software Engineer - Reliability (US Citizen)"), ["citizen"]);
+  assert.deepEqual(flagsOf("Systems Administrator (U.S. Citizenship Required)"), ["citizen"]);
+  assert.deepEqual(flagsOf("Software Engineer (US)"), []);
+});

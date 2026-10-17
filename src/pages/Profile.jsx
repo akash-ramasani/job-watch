@@ -359,13 +359,14 @@ export default function Profile({ user, userMeta }) {
     }
   }
 
-  function downloadResume(profile, format) {
+  async function downloadResume(profile, format) {
     const contact = contactFromUser(user, userMeta);
     const resume = profileToResume(profile);
     const base = `${profile.header?.name || contact.name || "My"} - Resume`;
+    let renderer = "tex";
     if (format === "tex") downloadResumeTex(resume, contact, base);
-    else downloadResumePdf(resume, contact, base);
-    track("resume_downloaded", { format });
+    else renderer = await downloadResumePdf(resume, contact, base);
+    track("resume_downloaded", { format, renderer });
   }
 
   return (

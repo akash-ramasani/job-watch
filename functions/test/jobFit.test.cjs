@@ -81,14 +81,44 @@ test("software titles are never a different field; adjacent titles are never bel
 test("level comes from the title and years, not the model", () => {
   const all = [{ r: "Python", n: "must", c: "yes", e: "Python, TypeScript, Java" }];
   const ctx = (jobTitle, extra = {}) => scoreAssessment({ roleFit: "same", requirements: all, ...extra }, PROFILE, { jobTitle, candidateYears: 5.7 });
-  assert.equal(ctx("Software Engineering Intern").score, 20);
-  assert.equal(ctx("New Grad Software Engineer (2026)").score, 20);
-  assert.equal(ctx("Principal Software Engineer").score, 35);
+  for (const t of ["Software Engineering Intern", "Summer 2027 Intern - Solution Engineer", "Software Developer Co-op (Fall 2026)", "Engineering Apprentice"]) {
+    assert.equal(ctx(t).score, 0, t); // internships for someone with 5.7 years: screened, not capped
+    assert.equal(ctx(t).screened, true, t);
+    assert.equal(ctx(t).seniorityFit, "too_junior", t);
+  }
+  // New-grad and rotational programs are kept and scored normally (user's choice).
+  for (const t of ["New Grad Software Engineer (2026)", "Civil/Geo Applications Engineer - Rotational Development Program (July 2027)", "Graduate Software Engineer", "Software Engineer, Developer Programs"]) {
+    assert.equal(ctx(t).score, 100, t);
+    assert.equal(ctx(t).seniorityFit, "ok", t);
+  }
+  const principal = ctx("Principal Software Engineer");
+  assert.equal(principal.score, 0); // too senior: screened out, not capped
+  assert.equal(principal.screened, true);
+  assert.equal(principal.seniorityFit, "too_senior");
+  assert.equal(principal.reason, "More senior than your experience");
   assert.equal(ctx("Senior Software Development Engineer", { seniorityFit: "too_junior" }).score, 100); // the model's old field is ignored
   assert.equal(ctx("Engineer III, Cloud Native", { minYears: 5 }).score, 100);
-  const tooMany = ctx("Staff Software Engineer", { minYears: 10 });
-  assert.equal(tooMany.score, 35);
+  const tooMany = ctx("Senior Software Engineer", { minYears: 10 });
+  assert.equal(tooMany.score, 0);
+  assert.equal(tooMany.screened, true);
   assert.equal(tooMany.capNote, "Asks for 10+ years; your resume shows about 5");
+  assert.equal(ctx("Senior Software Engineer", { minYears: 7 }).score, 100); // within two years: fine
+  assert.equal(ctx("Staff Software Engineer").screened, true); // staff with no stated years: an 8+ year role
+  assert.equal(ctx("Staff Software Engineer").seniorityFit, "too_senior");
+  assert.equal(ctx("Staff Software Engineer", { minYears: 7 }).score, 100); // the posting says 7+: within reach
+  assert.equal(ctx("Staff Software Engineer", { minYears: 10 }).screened, true);
+  assert.equal(ctx("Principal Engineer", { minYears: 6 }).screened, true); // principal is above whatever the years say
+  for (const t of ["Senior Manager, Solutions Engineering", "Engineering Manager, Platform", "Manager, Software Engineering", "Software Development Manager"]) {
+    assert.equal(ctx(t).screened, true, t); // management is above an IC with 5.7 years
+  }
+  assert.equal(Boolean(ctx("Technical Lead Manager, AI Platform").screened), false); // TLM is a hands-on lead
+  // "Member of Technical Staff" is an AI-lab engineer title, not a staff rank.
+  for (const t of ["Member of Technical Staff", "Member of Technical Staff - Multi-Modal, Audio", "Sr. Member of Technical Staff - Platform", "Senior Member of Technical Staff", "Member of Data Staff (Analytics Engineer)", "Member of Tehnical Staff (Senior QA Web)", "Member of Staff"]) {
+    assert.equal(ctx(t).score, 100, t);
+    assert.equal(ctx(t).seniorityFit, "ok", t);
+  }
+  assert.equal(ctx("Principal Member of Technical Staff").screened, true);
+  assert.equal(ctx("Staff+ Software Engineer, AI").screened, true);
 });
 
 test("title rules follow the candidate, not a software-engineer default", () => {
@@ -99,10 +129,13 @@ test("title rules follow the candidate, not a software-engineer default", () => 
   assert.equal(analyst("Software Engineer", { roleFit: "different" }).roleFit, "different");
   // Entry-level roles fit someone early in their career.
   assert.equal(analyst("Data Analyst, New Grad").score, 100);
-  assert.equal(analyst("Data Analyst Intern", {}, 3).score, 20);
+  assert.equal(analyst("Data Analyst Intern", {}, 1).score, 100); // an intern role fits someone with a year
+  assert.equal(analyst("Data Analyst Intern", {}, 3).score, 0);
+  assert.equal(analyst("Data Analyst Intern", {}, 3).screened, true);
   // Director titles are fine for someone with 8+ years.
   assert.equal(analyst("Director of Analytics", {}, 9).score, 100);
-  assert.equal(analyst("Director of Analytics", {}, 4).score, 35);
+  assert.equal(analyst("Director of Analytics", {}, 4).score, 0);
+  assert.equal(analyst("Director of Analytics", {}, 4).screened, true);
 });
 
 test("data and analytics titles are at least related for an analyst", () => {

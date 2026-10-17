@@ -91,8 +91,21 @@ function candidateYearsOf(profile, now = new Date()) {
 }
 
 // Titles decide the clear cases; the model only supplies the job's minimum years.
-const ENTRY_TITLE_RE = /\b(intern|internship|co-?op|new grad|new college grad|university grad|recent grad|graduate program|early career|apprentice|entry[- ]level|campus)\b/i;
-const ABOVE_TITLE_RE = /\b(principal|distinguished|fellow|director|vp|vice president|head of|chief|cto)\b/i;
+// Internships and co-ops are screened for anyone with experience. New-grad,
+// rotational and early-career programs are kept (the user's choice): they are
+// scored like any other job.
+const ENTRY_TITLE_RE = /\b(intern|interns|internship|co-?op|apprentice|apprenticeship|(?:summer|fall|spring|winter) 20\d\d intern\w*)\b/i;
+// Titles that are above the candidate whatever the posting says about years.
+// Management titles are above an individual contributor with under 8 years too.
+const ABOVE_TITLE_RE = /\b(principal|distinguished|fellow|director|vp|vice president|head of|chief|cto|(?<!lead )(?:senior|sr\.?|engineering|software|solutions|platform|infrastructure|data|security|development) manager|(?<!lead )manager,? (?:software|engineering|solutions|platform|infrastructure|data|security|development|site reliability|devops|machine learning|ml|ai))\b/i;
+// "Staff" is used loosely (a 7-year "Staff Engineer" at a startup is common),
+// so a staff title is above the candidate only when the posting states no
+// reachable number of years.
+const STAFF_TITLE_RE = /\b(?:sr\.?|senior )?staff\b/i;
+// "Member of Technical Staff" (also "Member of Data Staff", "Member of
+// Staff") is the plain engineer title at AI labs and research companies, not
+// a staff-level rank; it must not read as "staff".
+const MTS_RE = /\b(?:(?:sr\.?|senior|principal|distinguished|lead) )?member of (?:\w+ )?staff\b/gi;
 const SOFTWARE_TITLE_RE = /\b(software (engineer|developer|development engineer)|sde|swe|back-?end (engineer|developer)|full[- ]?stack|forward[- ]deployed|platform engineer|web developer|front-?end (engineer|developer)|mobile (engineer|developer)|ios (engineer|developer)|android (engineer|developer))\b/i;
 const ADJACENT_TITLE_RE = /\b(data engineer|devops|site reliability|sre|(ml|machine learning|ai) engineer|solutions? architect|cloud engineer|infrastructure engineer|security engineer|qa automation|test automation|sdet|data scientist|analytics engineer)\b/i;
 
@@ -185,17 +198,27 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   // Entry-level titles are only "too junior" for someone with 2+ years, and
   // principal/director titles only "too senior" for someone with under 8.
   let level = "fits";
+  const titleForLevel = String(jobTitle || "").replace(MTS_RE, (m) => (/principal|distinguished/i.test(m) ? "principal" : "engineer"));
+  const yearsOut = minYears != null && candidateYears != null && minYears > candidateYears + 2;
+  const yearsStatedWithinReach = minYears != null && candidateYears != null && !yearsOut;
   if (ENTRY_TITLE_RE.test(jobTitle)) { if (candidateYears != null && candidateYears >= 2) level = "entry"; }
-  else if (ABOVE_TITLE_RE.test(jobTitle) && (candidateYears == null || candidateYears < 8)) level = "above";
-  else if (minYears != null && candidateYears != null && minYears > candidateYears + 2) level = "above";
+  else if (ABOVE_TITLE_RE.test(titleForLevel) && (candidateYears == null || candidateYears < 8)) level = "above";
+  else if (STAFF_TITLE_RE.test(titleForLevel) && (candidateYears == null || candidateYears < 8) && !yearsStatedWithinReach) level = "above";
+  else if (yearsOut) level = "above";
 
   let score = coverage;
   let capNote = null;
   if (roleFit === "different" && score > 15) { score = 15; capNote = raw?.roleNote || "Different kind of role from yours"; }
   else if (roleFit === "adjacent" && score > 60) { score = 60; capNote = raw?.roleNote || "Related role, not quite yours"; }
-  if (level === "entry" && score > 20) { score = 20; capNote = "Internship or entry-level role"; }
-  if (level === "above" && score > 35) {
-    score = 35;
+  // Wrong level is not a cap but a screen: an internship or new-grad program
+  // for someone with years of experience, or a job asking for 15 years or a
+  // principal/director title, is not one the candidate qualifies for, so it
+  // scores 0, is hidden from the list and never costs a model call.
+  let screened = false;
+  if (level === "entry") { score = 0; screened = true; capNote = "Internship or co-op"; }
+  if (level === "above") {
+    score = 0;
+    screened = true;
     capNote = minYears != null && candidateYears != null && minYears > candidateYears + 2
       ? `Asks for ${minYears}+ years; your resume shows about ${Math.floor(candidateYears)}`
       : "More senior than your experience";
@@ -204,6 +227,7 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
 
   return {
     version: FIT_VERSION,
+    ...(screened ? { screened: true, families: [], why: "seniority" } : {}),
     score,
     coverage,
     roleFit,
@@ -213,7 +237,7 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
     capNote,
     requirements: reqs,
     downgraded,
-    reason: reasonFor({ score, requirements: reqs, capNote }),
+    reason: screened ? capNote : reasonFor({ score, requirements: reqs, capNote }),
   };
 }
 
@@ -275,33 +299,76 @@ Return ONLY JSON:
  * Ask the model and score its answer.
  * @param {{ client, model, profileText, jobTitle, jobDescription, timeoutMs? }} args
  */
-async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, softwareCandidate = true, candidateTitles = [], timeoutMs = 45000 }) {
-  const titles = (candidateTitles || []).filter(Boolean).slice(0, 3).join("; ");
+/** True for an Anthropic SDK client (Messages API); false for an OpenAI one. */
+const isClaudeClient = (client) => Boolean(client?.messages?.create) && !client?.chat;
+
+// Effort for the Claude scorer. The task is rubric extraction against a short
+// profile, so "low" (the cheapest level, thinking off) is enough; raise to
+// "medium" if audits show missed requirements.
+const CLAUDE_SCORER_EFFORT = process.env.CLAUDE_SCORER_EFFORT || "low";
+
+/**
+ * One model call: the system prompt, the candidate (titles + profile) and the
+ * job. The candidate part is the same on every call for a user, so with Claude
+ * it is marked as a prompt-cache prefix (system + profile ≈ 2.5k tokens, well
+ * over the 512-token minimum); only the job text is billed at full price.
+ */
+async function requestAssessment({ client, model, system, candidate, job, maxTokens, timeoutMs }) {
+  if (isClaudeClient(client)) {
+    // Claude 5 models reject non-default temperature/top_p and assistant
+    // prefill, so neither is sent; the prompt's "Return ONLY JSON" plus the
+    // fence-stripping below is what keeps the output parseable.
+    const res = await client.messages.create(
+      {
+        model,
+        max_tokens: maxTokens,
+        system: [{ type: "text", text: system }],
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: candidate, cache_control: { type: "ephemeral" } },
+            { type: "text", text: job },
+          ],
+        }],
+        thinking: { type: "disabled" },
+        output_config: { effort: CLAUDE_SCORER_EFFORT },
+      },
+      { timeout: timeoutMs }
+    );
+    const text = (res?.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+    return { text, usage: res?.usage || null };
+  }
   const completion = await client.chat.completions.create(
     {
       model,
       temperature: 0,
-      max_tokens: 900,
+      max_tokens: maxTokens,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `${titles ? `## CANDIDATE'S RECENT TITLES: ${titles}\n\n` : ""}## PROFILE${candidateYears != null ? ` (total professional experience: about ${candidateYears} years)` : ""}\n${profileText}\n\n## JOB: ${jobTitle || ""}\n${String(jobDescription || "").slice(0, 6000)}` },
+        { role: "system", content: system },
+        { role: "user", content: candidate + job },
       ],
     },
     { timeout: timeoutMs }
   );
-  const text = completion.choices?.[0]?.message?.content || "";
+  return { text: completion.choices?.[0]?.message?.content || "", usage: completion.usage || null };
+}
+
+async function assessJobFit({ client, model, profileText, jobTitle, jobDescription, candidateYears = null, softwareCandidate = true, candidateTitles = [], timeoutMs = 45000 }) {
+  const titles = (candidateTitles || []).filter(Boolean).slice(0, 3).join("; ");
+  const candidate = `${titles ? `## CANDIDATE'S RECENT TITLES: ${titles}\n\n` : ""}## PROFILE${candidateYears != null ? ` (total professional experience: about ${candidateYears} years)` : ""}\n${profileText}\n\n`;
+  const job = `## JOB: ${jobTitle || ""}\n${String(jobDescription || "").slice(0, 6000)}`;
+  const { text } = await requestAssessment({ client, model, system: SYSTEM_PROMPT, candidate, job, maxTokens: 900, timeoutMs });
   let raw;
   try {
-    raw = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, ""));
+    raw = JSON.parse(text.replace(/^[\s\S]*?(?=\{)/, "").replace(/\}[^}]*$/, "}"));
   } catch {
     return null;
   }
   if (!Array.isArray(raw?.requirements) || raw.requirements.length === 0) return null;
   const fit = scoreAssessment(raw, profileText, { jobTitle, candidateYears, softwareCandidate, analystCandidate: isAnalystCandidate(candidateTitles, softwareCandidate) });
-  return fit && { ...fit, prompt: PROMPT_VERSION };
+  return fit && { ...fit, prompt: PROMPT_VERSION, model };
 }
-
 /** The candidate's most recent job titles, newest first (the AI judges roleFit against them). */
 function recentTitlesOf(profile) {
   return (profile?.roles || []).map((r) => String(r.title || "").trim()).filter(Boolean).slice(0, 3);
@@ -312,15 +379,16 @@ function recentTitlesOf(profile) {
  * not an assessment, just why it wasn't scored. The Resume popup still runs
  * a full assessment on it if asked.
  */
-function screenedFit({ families = [], why = "type" } = {}) {
+function screenedFit({ families = [], why = "type", note = "" } = {}) {
   const { familyLabel } = require("./jobFamilies.cjs");
-  const reason = why === "eligibility" ? "Not eligible (visa, citizenship or clearance)" : why === "type" && families.length
+  const reason = why === "eligibility" ? "Not eligible (visa, citizenship or clearance)" : why === "seniority" ? (note || "More senior than your experience") : why === "type" && families.length
     ? `Not one of your job types (${familyLabel(families[0])})`
     : "Doesn't look like your field";
   return {
     version: FIT_VERSION,
     screened: true,
     families,
+    why,
     score: 0,
     coverage: null,
     roleFit: "different",
@@ -339,6 +407,7 @@ module.exports = {
   recentTitlesOf,
   isAnalystCandidate,
   assessJobFit,
+  isClaudeClient,
   screenedFit,
   isSoftwareCandidate,
   scoreAssessment,
