@@ -91,7 +91,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   // Companies the person hid on the Jobs page (settings/preferences.excludedCompanies).
   const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
-  for (const d of feedsSnap.docs) { const s = feedSlug(d.data()?.url); if (s) feedSlugs.set(d.id, s); }
+  const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
+  for (const d of feedsSnap.docs) { const s = feedSlug(d.data()?.url); if (s) feedSlugs.set(d.id, s); if (d.data()?.archivedAt) archivedFeeds.add(d.id); }
 
   // Already applied: by job id, by form, and by company + title.
   const applied = { ids: new Set(), forms: new Set(), roles: new Set() };
@@ -113,6 +114,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     const src = String(j.source || "").toLowerCase();
     if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
+    if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
     if (applied.ids.has(j.id)) continue;
