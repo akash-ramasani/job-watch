@@ -4,7 +4,7 @@
 // and returns fill instructions the content script can apply to the rendered
 // form (option LABELS for comboboxes so the script can pick them by text).
 
-const { buildProfileForJob } = require("./ashby.cjs");
+const { buildProfileForJob, parsePlace, REMOTE_LOCATION_DEFAULT } = require("./ashby.cjs");
 const { aiContext, answerFreeText, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
 
 const GH_BASE = "https://boards-api.greenhouse.io/v1/boards";
@@ -110,15 +110,14 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   // 5b. Candidate location typeahead — always the job's posted location.
   const locQ = (form.location_questions || []).find((q) => (q.fields || []).some((f) => f.name === "location"));
   const locName = ((form.location && form.location.name) || "").trim();
-  if (locQ && locName) {
-    const [city, st] = locName.split(",").map((s) => s.trim());
-    const stateFull = US_STATES[(st || "").toUpperCase()] || st || "";
-    fills.push({
-      label: "Location",
-      kind: "location",
-      value: city || locName,
-      match: stateFull ? `${city}, ${stateFull}` : (city || locName),
-    });
+  // A remote posting (or one with no real city) gets the person's city for
+  // remote roles, users/{uid}.remoteLocation, default San Francisco, CA.
+  if (locQ) {
+    const place = parsePlace(locName) || parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
+    if (place) {
+      const stateFull = place.state || US_STATES[(place.abbr || "").toUpperCase()] || "";
+      fills.push({ label: "Location", kind: "location", value: place.city, match: stateFull ? `${place.city}, ${stateFull}` : place.city });
+    }
   }
 
   // 5c. Education (School / Degree / Discipline / End date year) from the resume.

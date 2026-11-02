@@ -90,8 +90,11 @@ test("location: job city when posted, applicant city for remote, state spelled o
   assert.deepEqual(parsePlace("San Francisco, CA"), { city: "San Francisco", state: "California", abbr: "CA" });
   assert.equal(parsePlace("Remote - US"), null);
   assert.equal(locationFill("_systemfield_location", "New York", p).match, "New York, New York");
-  assert.equal(locationFill("_systemfield_location", "Remote - US", p).match, "Hayward, California");
-  assert.equal(locationFill("_systemfield_location", "", p).value, "Hayward");
+  // Remote postings: San Francisco, CA unless the person set users/{uid}.remoteLocation.
+  assert.equal(locationFill("_systemfield_location", "Remote - US", p).match, "San Francisco, California");
+  assert.equal(locationFill("_systemfield_location", "", p).value, "San Francisco");
+  assert.equal(locationFill("_systemfield_location", "Remote", { ...p, remoteLocation: "Austin, TX" }).match, "Austin, Texas");
+  assert.equal(locationFill("_systemfield_location", "New York, NY; Remote", p).match, "New York, New York");
   const own = buildProfileForJob({ ...USER, locationStrategy: "profile" }, RESUME, job(), { now: NOW });
   assert.equal(locationFill("_systemfield_location", "New York", own).match, "Hayward, California");
   assert.ok(metroTerms("Hayward").includes("San Francisco"));
@@ -167,7 +170,7 @@ test("required fields from the 2026-10-12 Virta form and the live-form sweep are
   assert.equal(pf.value, "415-555-0100");
   assert.equal(pf.smsConsent, "Yes");
   // Location typeahead fallbacks when the bare city finds nothing.
-  const lf = locationFill("_systemfield_location", "Remote - US", p);
+  const lf = locationFill("_systemfield_location", "Hayward, CA", p);
   assert.equal(lf.value, "Hayward");
   assert.ok(lf.alternates.includes("Hayward, CA") && lf.alternates.includes("Hayward, California") && lf.alternates.includes("California"), JSON.stringify(lf.alternates));
   // AI-tools experience level: the highest tier the resume supports.

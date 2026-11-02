@@ -165,8 +165,12 @@ function metroTerms(city) {
 
 /** Parse "San Francisco, CA" / "New York City" / "Remote - US" into parts. */
 function parsePlace(locationName) {
+  // "New York, NY; Remote" / "SF | NYC": the first segment that is a real place.
+  const segs = String(locationName || "").split(/\s*(?:;|\||\bor\b|\/)\s*/).filter(Boolean);
+  if (segs.length > 1) { for (const seg of segs) { const p = parsePlace(seg); if (p) return p; } return null; }
   const raw = String(locationName || "").replace(/\s*[-–]\s*US$/i, "").trim();
-  if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide/i.test(raw)) return null;
+  if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
+  if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
   const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
   const city = parts[0];
   let state = parts[1] || "";
@@ -191,11 +195,15 @@ function salaryRangeIn(text) {
   return lo >= 20000 && hi >= lo && hi < 2000000 ? { lo, hi } : null;
 }
 
+const REMOTE_LOCATION_DEFAULT = "San Francisco, CA";
 function locationFill(path, jobLocationName, profile) {
   const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
+  // Remote postings (or no city on the posting): the person's chosen city for
+  // remote roles, users/{uid}.remoteLocation, default San Francisco, CA.
+  const remote = parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
   // users/{uid}.locationStrategy = "profile" switches the widget to the
   // applicant's own city on every form (the engine's text answers already are).
-  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName)) : (parsePlace(jobLocationName) || own);
+  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName) || remote) : (parsePlace(jobLocationName) || remote || own);
   if (!place) return null;
   // Queries to try when the typeahead finds nothing for the bare city
   // (Virta's widget had "No results" for "Hayward"): city + state code, city +
@@ -434,6 +442,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
 }
 
 module.exports = {
+  REMOTE_LOCATION_DEFAULT,
   prepareAshbyApplication,
   // exported for tests
   answerFreeText, ashbyToQuestions, domFieldsToSections, buildProfileForJob, locationFill, parsePlace, metroTerms, fillsFrom, fetchAshbyPosting, aiContext,
