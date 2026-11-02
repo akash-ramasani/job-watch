@@ -624,7 +624,7 @@ async function gmailToken(interactive = false) {
   const g = await gmailState();
   if (g.token && g.exp > Date.now() + 60000) return g.token;
   if (!g.clientId) throw new Error("Gmail is not connected (no OAuth client ID).");
-  const params = new URLSearchParams({ client_id: g.clientId, response_type: "token", redirect_uri: chrome.identity.getRedirectURL("gmail"), scope: GMAIL_SCOPE, include_granted_scopes: "true", prompt: interactive ? "consent" : "none" });
+  const params = new URLSearchParams({ client_id: g.clientId, response_type: "token", redirect_uri: chrome.identity.getRedirectURL("gmail"), scope: GMAIL_SCOPE, include_granted_scopes: "true", prompt: interactive ? "select_account consent" : "none" });
   if (g.email) params.set("login_hint", g.email);
   const back = await chrome.identity.launchWebAuthFlow({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`, interactive });
   const frag = new URLSearchParams(String(back || "").split("#")[1] || "");
@@ -702,7 +702,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "GMAIL_STATUS") {
         const g = await gmailState();
-        sendResponse({ ok: true, clientId: g.clientId || "", email: g.email || "", connected: !!(g.clientId && g.email), redirectUrl: chrome.identity.getRedirectURL("gmail") });
+        // The address Greenhouse emails the code to is the one on the form: the profile's.
+        const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
+        sendResponse({ ok: true, clientId: g.clientId || "", email: g.email || "", profileEmail: jwCachedUserDoc?.email || "", connected: !!(g.clientId && g.email), redirectUrl: chrome.identity.getRedirectURL("gmail") });
         return;
       }
       if (message.type === "GMAIL_CONNECT") {

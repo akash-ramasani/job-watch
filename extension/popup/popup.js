@@ -216,7 +216,11 @@ function refreshGmail() {
     if (res.clientId && !$("gmail-client").value) $("gmail-client").value = res.clientId;
     $("gmail-pill").textContent = res.connected ? "Connected" : "Not connected";
     $("gmail-pill").className = `auto-pill${res.connected ? " on" : ""}`;
-    $("gmail-status").textContent = res.connected ? `Reading security codes from ${res.email}.` : "";
+    const mismatch = res.connected && res.profileEmail && res.profileEmail.toLowerCase() !== res.email.toLowerCase();
+    $("gmail-status").style.color = mismatch ? "#b45309" : "";
+    $("gmail-status").textContent = !res.connected ? "Choose the Gmail account that receives job emails."
+      : mismatch ? `Connected to ${res.email}, but applications use ${res.profileEmail}. Reconnect with ${res.profileEmail}, or change the email on your Profile page.`
+      : `Reading security codes from ${res.email}.`;
     $("btn-gmail").textContent = res.connected ? "Reconnect Gmail" : "Connect Gmail";
   });
 }
