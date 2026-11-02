@@ -1426,8 +1426,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 .find((g) => (want === "cover" ? isCover(g.textContent || "") : isResume(g.textContent || "")) && !g.querySelector("input[type=file]"));
               const shown = group?.querySelector("[class*='filename'], [class*='file-name'], [class*='fileName']")?.textContent?.trim()
                 || ((group?.textContent || "").match(/\S+\.(pdf|docx?|txt|rtf)\b/i) || [])[0];
-              if (shown) return { ok: true, already: true, actual: shown };
-              return { ok: false, error: `${want} file input not found` };
+              if (shown && (!name || shown === name)) return { ok: true, already: true, actual: shown };
+              if (shown) {
+                // Another file is attached (Greenhouse's own autofill puts the saved
+                // resume there): remove it so the tailored one goes in instead.
+                const x = group.querySelector("button[aria-label*='remove' i], button[aria-label*='delete' i], button[class*='remove' i], [class*='remove' i] button, button[class*='close' i]")
+                  || [...group.querySelectorAll("button")].find((bt) => !/attach|dropbox|google drive|enter manually/i.test(bt.textContent || ""));
+                if (x) {
+                  x.click();
+                  for (let k = 0; k < 30 && !node; k++) {
+                    await new Promise((r) => setTimeout(r, 100));
+                    node = [...document.querySelectorAll("input[type=file]")].find((i) => kindOf(i) === want) || null;
+                  }
+                }
+                if (!node) return { ok: true, already: true, actual: shown, note: "could not replace the attached file" };
+              } else return { ok: false, error: `${want} file input not found` };
             }
           } else if (!entry && kindOf(node) && kindOf(node) !== want) {
             return { ok: false, error: `file input #${node.id || "?"} belongs to the ${kindOf(node)} section, not ${want}` };

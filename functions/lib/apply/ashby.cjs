@@ -169,7 +169,12 @@ function parsePlace(locationName) {
   // "New York, NY; Remote" / "SF | NYC": the first segment that is a real place.
   const segs = String(locationName || "").split(/\s*(?:;|\||\bor\b|\/)\s*/).filter(Boolean);
   if (segs.length > 1) { for (const seg of segs) { const p = parsePlace(seg); if (p) return p; } return null; }
-  const raw = String(locationName || "").replace(/\s*[-–]\s*US$/i, "").trim();
+  // "Hybrid - San Francisco", "San Francisco (Hybrid)", "On-site: Austin, TX": the place without the work mode.
+  const MODE = "(?:hybrid|on[- ]?site|in[- ]office|office[- ]based|in[- ]person)";
+  const raw = String(locationName || "").replace(/\s*[-–]\s*US$/i, "")
+    .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-–:|]|\\bin\\b)\\s*`, "i"), "")
+    .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
+    .trim();
   if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
   if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
   const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);

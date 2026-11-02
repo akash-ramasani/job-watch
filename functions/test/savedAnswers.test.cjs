@@ -88,3 +88,14 @@ test("email tracker: matches by company, Claude sorts, the record keeps the stro
   assert.equal(sets[1][1].outcome, undefined); // an interview is not downgraded to a confirmation
   assert.equal(sets[1][1].confirmationAt, "2026-10-05T00:00:00.000Z");
 });
+
+test("job locations: the work mode is not part of the city", () => {
+  const { parsePlace } = require("../lib/apply/ashby.cjs");
+  const city = (s) => parsePlace(s)?.city ?? null;
+  assert.equal(city("Hybrid - San Francisco"), "San Francisco");
+  assert.equal(city("San Francisco (Hybrid)"), "San Francisco");
+  assert.equal(city("On-site: Austin, TX"), "Austin");
+  assert.equal(city("New York, NY - Hybrid"), "New York");
+  assert.equal(city("Hybrid"), null);
+  assert.equal(city("Remote - US"), null);
+});
