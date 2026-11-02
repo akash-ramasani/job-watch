@@ -1304,6 +1304,44 @@
     return missing;
   }
 
+  // ─── Unattended auto-apply (background.js runs the queue) ──────────────────
+  let AUTO = null;
+  try { AUTO = (await sendMsg({ type: "AUTO_JOB" })).job || null; } catch { AUTO = null; }
+  async function autoReport(status, note) { try { await sendMsg({ type: "AUTO_RESULT", status, note }); } catch { /* the runner times out instead */ } }
+  function captchaVisible() {
+    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")]
+      .some((f) => f.offsetParent !== null && f.getBoundingClientRect().height > 60);
+  }
+  /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
+  async function autoSubmitAshby(manual, pendingJob, answersLog) {
+    if (manual.size) {
+      showOverlay(`⚠️ Auto-apply: ${manual.size} field${manual.size === 1 ? "" : "s"} need you. Left open for you; the queue moves on.`, "warning");
+      return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
+    }
+    const btn = ashbySubmitButton();
+    if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
+    showOverlay("⏳ Auto-apply: submitting…");
+    btn.scrollIntoView({ block: "center" });
+    await sleep(600);
+    btn.click();
+    for (let i = 0; i < 45; i++) {
+      await sleep(2000);
+      let done = false;
+      try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
+      if (done) {
+        await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+        showOverlay("✅ Auto-apply: submitted and recorded.", "success");
+        return autoReport("submitted", "");
+      }
+      if (captchaVisible()) {
+        showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
+        return autoReport("needs_attention", "CAPTCHA challenge");
+      }
+    }
+    showOverlay("⚠️ Auto-apply: Ashby did not accept the submission. Check the form and press Submit.", "warning");
+    return autoReport("needs_attention", "Ashby did not accept the submission (a CAPTCHA or a field it flagged)");
+  }
+
   // ─── Overlay UI: the shared JobWatch card (content/notify.js) ─────────────
   function showOverlay(text, type = "info", { action = null } = {}) {
     // The "Complete manually: a, b" messages list the fields as items.
@@ -1446,6 +1484,7 @@
     const pkg = res.data;
     if (pkg.alreadyApplied) {
       showOverlay(`🛑 JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`, "warning");
+      if (AUTO) autoReport("skipped", "already applied");
       return true;
     }
     const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };
@@ -1547,8 +1586,10 @@
       flow: "engine", schemaSource: pkg.schemaSource || "", reasons: pkg.reasons || [],
     }).then((r) => { if (!r?.ok) console.warn("[JobWatch] ledger(filled) failed:", r?.error); });
 
-    // NEVER auto-submit. Watch for the person's own submission (30 min) so the
-    // job is logged as applied and the queue advances.
+    // Unattended auto-apply submits when nothing is left for the person.
+    if (AUTO) { await autoSubmitAshby(manual, pendingJob, answersLog); return true; }
+    // Otherwise never auto-submit. Watch for the person's own submission (30
+    // min) so the job is logged as applied and the queue advances.
     const watchStart = Date.now();
     const watch = setInterval(async () => {
       let done = false;
@@ -1662,9 +1703,11 @@
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN — computed application first, legacy mapper as the fallback
   // ─────────────────────────────────────────────────────────────────────────
-  // Nothing fills on page load: the card offers Autofill and the person presses it.
-  try { await waitForForm(15000); } catch { return; }
-  window.__jwNotify.launcher({ onClick: () => { autofill(); } });
+  // Nothing fills on page load: the card offers Autofill and the person presses
+  // it. A tab opened by the unattended auto-apply starts on its own.
+  try { await waitForForm(15000); } catch { if (AUTO) autoReport("error", "the Ashby form never appeared"); return; }
+  if (AUTO) { showOverlay("🤖 Auto-apply: filling this application…"); autofill(); }
+  else window.__jwNotify.launcher({ onClick: () => { autofill(); } });
 
   async function autofill() {
   try {
@@ -1676,16 +1719,20 @@
     const started = await ledger("start");
     if (started?.duplicate) {
       showOverlay(`🛑 JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`, "warning");
+      if (AUTO) autoReport("skipped", "already applied");
       return;
     }
     if (!started?.ok) console.warn("[JobWatch] ledger(start) failed:", started?.error);
     let done = false;
     try { done = await engineMain(); } catch (e) { console.warn("[JobWatch] engine flow failed, using legacy fill:", e.message); }
+    // Auto-apply never submits from the older label mapper: it reports instead.
+    if (!done && AUTO) { showOverlay("❌ Auto-apply: could not compute this application.", "error"); autoReport("error", "the answer engine could not compute this form"); return; }
     if (!done) await legacyMain(form);
   } catch (err) {
     console.error("[JobWatch Extension]", err);
     showOverlay(`❌ ${err.message}`, "error");
     ledger("error", { error: err.message });
+    if (AUTO) autoReport("error", err.message);
   }
   }
 

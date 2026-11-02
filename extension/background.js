@@ -471,11 +471,265 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   autoAddFeed(tab.url, tab.title);
 });
 
+// ─── Unattended auto-apply (Ashby + Greenhouse) ──────────────────────────────
+// Works through getAutoApplyQueue one job at a time in a background tab: the
+// tailored resume is made first (tailoredResumeFile), the page's content
+// script fills the form, submits when nothing is left for the person, enters
+// Greenhouse's emailed security code from Gmail, and reports back
+// (AUTO_RESULT). Anything it cannot finish stays open in its tab and is
+// listed in the popup. State lives in chrome.storage.local so a restarted
+// service worker carries on; a one-minute alarm keeps the loop alive.
+
+const AUTO_KEY = "jwAuto";
+const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const AUTO_GAP_MS = [20000, 45000]; // pause between applications, like a person moving on
+let autoBusy = false;
+let autoQueue = { at: 0, list: [] };
+
+async function autoState() {
+  const { [AUTO_KEY]: st } = await chrome.storage.local.get(AUTO_KEY);
+  return st || { on: false, current: null, results: {}, startedAt: null };
+}
+async function saveAuto(st) { await chrome.storage.local.set({ [AUTO_KEY]: st }); }
+
+async function callFunction(name, data) {
+  const { idToken } = await getFreshToken();
+  const res = await fetch(`${FUNCTIONS_BASE}/${name}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({ data: data || {} }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.error) throw new Error(json.error?.message || `${name} ${res.status}`);
+  return json.result;
+}
+
+function notify(title, message) {
+  try { chrome.notifications.create({ type: "basic", iconUrl: "icons/icon128.png", title, message: String(message).slice(0, 250) }); } catch (_) { /* notifications are a nicety */ }
+}
+
+/** The tailored resume PDF for a job ({ jobId } or { source, externalId }), cached for the session. */
+async function tailoredResumeFor(ref) {
+  const key = `tr:${ref.jobId || `${ref.source}|${ref.externalId}`}`;
+  const { [key]: hit } = await chrome.storage.session.get(key);
+  if (hit?.pdfBase64) return hit;
+  if (hit?.failedAt && Date.now() - hit.failedAt < 10 * 60 * 1000) return null;
+  try {
+    const r = await callFunction("tailoredResumeFile", ref);
+    await chrome.storage.session.set({ [key]: { fileName: r.fileName, pdfBase64: r.pdfBase64, jobId: r.jobId } });
+    return r;
+  } catch (err) {
+    console.warn("[JobWatch] tailored resume unavailable, using the saved resume:", err.message);
+    await chrome.storage.session.set({ [key]: { failedAt: Date.now(), error: err.message } });
+    return null;
+  }
+}
+/** The auto-apply job this tab is working on, or null. */
+async function autoJobForTab(tabId) {
+  const st = await autoState();
+  return st.on && st.current && st.current.tabId === tabId ? st.current : null;
+}
+/** Start making the job's tailored resume (runs alongside the answers). */
+async function startTailored(sender, ref) {
+  const job = await autoJobForTab(sender?.tab?.id);
+  return tailoredResumeFor(job ? { jobId: job.jobId } : ref);
+}
+/** Swap the saved resume for the job's tailored one in a computed application. */
+async function withTailoredResume(data, tailoredP) {
+  if (!data || data.alreadyApplied) return data;
+  const t = await tailoredP.catch(() => null);
+  if (t?.pdfBase64) return { ...data, resumeB64: t.pdfBase64, resumeName: t.fileName, resumeTailored: true };
+  return data;
+}
+
+async function autoNextJob(st) {
+  if (Date.now() - autoQueue.at > 15 * 60 * 1000 || !autoQueue.list.length) {
+    const r = await callFunction("getAutoApplyQueue", {});
+    autoQueue = { at: Date.now(), list: r.queue || [] };
+  }
+  return autoQueue.list.find((j) => !st.results[j.jobId]) || null;
+}
+
+async function autoFinish(result) {
+  const st = await autoState();
+  const cur = st.current;
+  if (!cur) return;
+  st.results[cur.jobId] = { status: result.status, note: String(result.note || "").slice(0, 300), title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now() };
+  st.current = null;
+  st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
+  await saveAuto(st);
+  // Submitted, skipped or failed: close the tab. Needs you: leave it open to finish.
+  if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
+  if (result.status === "needs_attention") notify(`Needs you: ${cur.companyName}`, `${cur.title}. ${result.note || ""} The tab is left open.`);
+  console.log(`[JobWatch] auto-apply ${result.status}: ${cur.companyName} | ${cur.title} ${result.note || ""}`);
+  chrome.alarms.create("jwAutoKick", { when: st.nextAt });
+}
+
+async function autoTick() {
+  if (autoBusy) return;
+  autoBusy = true;
+  try {
+    const st = await autoState();
+    if (!st.on) return;
+    if (st.current) {
+      const alive = st.current.tabId ? await chrome.tabs.get(st.current.tabId).then(() => true).catch(() => false) : true;
+      if (st.current.tabId && !alive) { autoBusy = false; return autoFinish({ status: "error", note: "the tab was closed" }); }
+      if (Date.now() - st.current.startedAt > AUTO_JOB_TIMEOUT_MS) { autoBusy = false; return autoFinish({ status: "error", note: "timed out after 15 minutes" }); }
+      return;
+    }
+    if (st.nextAt && Date.now() < st.nextAt) return;
+    const job = await autoNextJob(st);
+    if (!job) {
+      st.on = false;
+      await saveAuto(st);
+      const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
+      notify("Auto-apply finished", `No more Ashby or Greenhouse jobs to apply to. ${n} submitted.`);
+      return;
+    }
+    st.current = { ...job, tabId: null, startedAt: Date.now() };
+    await saveAuto(st);
+    await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
+    const tab = await chrome.tabs.create({ url: job.applyUrl, active: false });
+    const st2 = await autoState();
+    if (st2.current?.jobId === job.jobId) { st2.current.tabId = tab.id; await saveAuto(st2); }
+  } catch (err) {
+    console.warn("[JobWatch] auto-apply tick failed:", err.message);
+    const st = await autoState();
+    if (st.current && !st.current.tabId) { st.current = null; st.nextAt = Date.now() + 60000; await saveAuto(st); }
+  } finally {
+    autoBusy = false;
+  }
+}
+
+chrome.alarms.create("jwAutoTick", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick(); });
+
+async function autoStatus() {
+  const st = await autoState();
+  const results = Object.entries(st.results || {}).map(([jobId, r]) => ({ jobId, ...r })).sort((a, b) => b.at - a.at);
+  const count = (s) => results.filter((r) => r.status === s).length;
+  const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
+  return { on: !!st.on, current: st.current, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+}
+
+// ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
+// Read-only Gmail access through Google's OAuth (chrome.identity), used for one
+// thing: the 8-character code Greenhouse emails after Submit. The OAuth client
+// ID is the person's own (Google Cloud Console, Web application client whose
+// redirect URI is chrome.identity.getRedirectURL("gmail")), saved from the popup.
+
+const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+async function gmailState() { const { jwGmail } = await chrome.storage.local.get("jwGmail"); return jwGmail || {}; }
+async function gmailToken(interactive = false) {
+  const g = await gmailState();
+  if (g.token && g.exp > Date.now() + 60000) return g.token;
+  if (!g.clientId) throw new Error("Gmail is not connected (no OAuth client ID).");
+  const params = new URLSearchParams({ client_id: g.clientId, response_type: "token", redirect_uri: chrome.identity.getRedirectURL("gmail"), scope: GMAIL_SCOPE, include_granted_scopes: "true", prompt: interactive ? "consent" : "none" });
+  if (g.email) params.set("login_hint", g.email);
+  const back = await chrome.identity.launchWebAuthFlow({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`, interactive });
+  const frag = new URLSearchParams(String(back || "").split("#")[1] || "");
+  const token = frag.get("access_token");
+  if (!token) throw new Error(frag.get("error") || "Google did not return a Gmail token.");
+  const next = { ...g, token, exp: Date.now() + Number(frag.get("expires_in") || 3600) * 1000 };
+  if (!next.email) {
+    const prof = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json()).catch(() => ({}));
+    next.email = prof.emailAddress || "";
+  }
+  await chrome.storage.local.set({ jwGmail: next });
+  return token;
+}
+function b64urlText(data) {
+  try { return decodeURIComponent(escape(atob(String(data || "").replace(/-/g, "+").replace(/_/g, "/")))); } catch { return ""; }
+}
+function mailText(payload) {
+  let out = "";
+  const walk = (p) => { if (!p) return; if (p.body?.data && /text\/(plain|html)/.test(p.mimeType || "")) out += " " + b64urlText(p.body.data); (p.parts || []).forEach(walk); };
+  walk(payload);
+  return out.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+}
+/** The code from the newest Greenhouse security-code email received after `sinceMs`, or "". */
+async function greenhouseCode(sinceMs) {
+  const token = await gmailToken(false);
+  const auth = { headers: { Authorization: `Bearer ${token}` } };
+  const q = encodeURIComponent('from:greenhouse newer_than:1d (security code OR verification code)');
+  const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=5`, auth).then((r) => r.json());
+  for (const m of list.messages || []) {
+    const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, auth).then((r) => r.json());
+    if (Number(msg.internalDate) < sinceMs - 120000) continue;
+    const text = `${msg.snippet || ""} ${mailText(msg.payload)}`;
+    const hit = text.match(/(?:security|verification) code(?: field)?[^A-Za-z0-9]{0,80}?(?:application|below|is)?[:\s]+([A-Za-z0-9]{6,10})\b/i)
+      || text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])([A-Za-z0-9]{8})\b/);
+    if (hit) return hit[1];
+  }
+  return "";
+}
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     try {
+      // ── Unattended auto-apply ───────────────────────────────────────────
+      if (message.type === "AUTO_JOB") {
+        sendResponse({ ok: true, job: await autoJobForTab(sender?.tab?.id) });
+        return;
+      }
+      if (message.type === "AUTO_RESULT") {
+        const job = await autoJobForTab(sender?.tab?.id);
+        if (job) await autoFinish({ status: message.status, note: message.note });
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "AUTO_START") {
+        const st = await autoState();
+        st.on = true; st.nextAt = 0; st.startedAt = st.startedAt || Date.now();
+        await saveAuto(st);
+        autoQueue = { at: 0, list: [] };
+        autoTick();
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "AUTO_STOP") {
+        const st = await autoState();
+        st.on = false; st.current = null;
+        await saveAuto(st);
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "AUTO_STATUS") {
+        sendResponse({ ok: true, status: await autoStatus() });
+        return;
+      }
+      if (message.type === "GMAIL_STATUS") {
+        const g = await gmailState();
+        sendResponse({ ok: true, clientId: g.clientId || "", email: g.email || "", connected: !!(g.clientId && g.email), redirectUrl: chrome.identity.getRedirectURL("gmail") });
+        return;
+      }
+      if (message.type === "GMAIL_CONNECT") {
+        try {
+          const g = await gmailState();
+          const clientId = String(message.clientId || g.clientId || "").trim();
+          if (!/\.apps\.googleusercontent\.com$/.test(clientId)) throw new Error("Paste the OAuth client ID (it ends in .apps.googleusercontent.com).");
+          await chrome.storage.local.set({ jwGmail: { clientId } });
+          await gmailToken(true);
+          sendResponse({ ok: true, email: (await gmailState()).email });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
+        return;
+      }
+      if (message.type === "GET_GH_CODE") {
+        // Poll Gmail for up to three minutes for the code Greenhouse just sent.
+        try {
+          const t0 = Date.now();
+          let code = "";
+          while (!code && Date.now() - t0 < 3 * 60 * 1000) {
+            code = await greenhouseCode(Number(message.since) || t0);
+            if (!code) await new Promise((r) => setTimeout(r, 10000));
+          }
+          sendResponse(code ? { ok: true, code } : { ok: false, error: "no security code email arrived in 3 minutes" });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
+        return;
+      }
+
       // ── 1. JobWatch bridge triggers auto apply ──────────────────────────
       if (message.type === "AUTO_APPLY") {
         const job = message.job;
@@ -645,6 +899,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Replaces GET_FILL_DATA for Ashby; that path stays as the fallback.
       if (message.type === "GET_ASHBY_FILL_DATA") {
         try {
+          const tailoredP = startTailored(sender, { source: "ashby", externalId: message.id });
           const { idToken } = await getFreshToken();
           const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
           const job = pendingJob && jobMatchesExternalId(pendingJob, message.id) ? pendingJob : null;
@@ -658,7 +913,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           const json = await res.json();
           if (!res.ok || json.error) throw new Error(json.error?.message || `prepareAshbyApplication ${res.status}`);
-          sendResponse({ ok: true, data: json.result, pendingJob: job });
+          sendResponse({ ok: true, data: await withTailoredResume(json.result, tailoredP), pendingJob: job });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -807,9 +1062,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Greenhouse: compute the full application for the content script ──
       if (message.type === "GET_GH_FILL_DATA") {
         try {
+          const tailoredP = startTailored(sender, { source: "greenhouse", externalId: message.id });
           const { idToken } = await getFreshToken();
           const data = await callPrepareGreenhouse(message.token, message.id, idToken);
-          sendResponse({ ok: true, data });
+          sendResponse({ ok: true, data: await withTailoredResume(data, tailoredP) });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
@@ -1273,6 +1529,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: el.checked === true };
         };
 
+        // Greenhouse's emailed security code: one box per character, or one box.
+        const ghCode = async (code) => {
+          const vis = (el) => el && el.offsetParent !== null;
+          const hint = (i) => `${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
+          const boxes = [...document.querySelectorAll("input")].filter((i) => vis(i) && !["hidden", "checkbox", "radio", "file"].includes(i.type)
+            && /security|verification|one-time-code|\bcode\b/i.test(hint(i)) && !/zip|postal|phone|country|promo/i.test(hint(i)));
+          if (!boxes.length) return { ok: false, error: "no security code input found" };
+          const set = (node, v) => {
+            const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+            const old = node.value;
+            node.focus();
+            if (setter) setter.call(node, v); else node.value = v;
+            if (node._valueTracker) node._valueTracker.setValue(old);
+            node.dispatchEvent(new Event("input", { bubbles: true }));
+            node.dispatchEvent(new Event("change", { bubbles: true }));
+          };
+          if (boxes.length > 1 && boxes.length >= code.length) code.split("").forEach((ch, i) => set(boxes[i], ch));
+          else set(boxes[0], code);
+          await new Promise((r) => setTimeout(r, 300));
+          return { ok: true, boxes: boxes.length };
+        };
+
         let funcToRun = setReactFile;
         let argsToRun = [id, b64Data, fileName, which];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
@@ -1284,6 +1562,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "ghLocation") { funcToRun = ghLocationPick; argsToRun = [id, value, match]; }
         if (action === "ghCoverText") { funcToRun = ghCoverText; argsToRun = [id, value]; }
         if (action === "ghCheck") { funcToRun = ghCheck; argsToRun = [id]; }
+        if (action === "ghCode") { funcToRun = ghCode; argsToRun = [value]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({

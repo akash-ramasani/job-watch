@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.8.2",
-  "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse, Lever, Workday and every other job board. You review and submit.",
+  "version": "1.9.0",
+  "description": "Apply to jobs from JobWatch: auto-apply on Ashby and Greenhouse with a tailored resume, and Autofill on Lever, Workday and every other job board.",
   "permissions": [
     "storage",
     "tabs",
     "activeTab",
     "scripting",
-    "identity"
+    "identity",
+    "alarms",
+    "notifications"
   ],
   "host_permissions": [
     "*://*/*",
@@ -17,7 +19,9 @@
     "https://identitytoolkit.googleapis.com/*",
     "https://securetoken.googleapis.com/*",
     "https://us-central1-greenhouse-jobs-scrapper.cloudfunctions.net/*",
-    "https://*.chromiumapp.org/*"
+    "https://*.chromiumapp.org/*",
+    "https://gmail.googleapis.com/*",
+    "https://accounts.google.com/*"
   ],
   "background": {
     "service_worker": "background.js"

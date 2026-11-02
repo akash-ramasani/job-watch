@@ -248,7 +248,7 @@ test("live-form sweep (2026-10-12, 800 Ashby + Greenhouse forms): required field
   assert.deepEqual(answer(F("Please indicate any languages in which you are fluent.", "MultiValueSelect", { options: ["English", "French", "Spanish"] })), ["English"]);
   assert.equal(answer(F("Please select the month you will be able to start your internship.", "ValueSelect", { options: ["October", "November", "December", "January"] })), "October"); // next Monday after 2026-10-08
   assert.equal(answer(F("How did you learn about this job?", "ValueSelect", { options: ["LinkedIn", "Indeed", "Referral", "Other"] })), "LinkedIn");
-  assert.match(answer(F("I confirm that my application materials and interview responses reflect my own work.", "ValueSelect", YN)), /^PARKED/);
+  assert.equal(answer(F("I confirm that my application materials and interview responses reflect my own work.", "ValueSelect", YN)), "Yes"); // the person's standing answer
   assert.equal(answer(F("Middle Name", "String")), "N/A");
   // Gates with gerunds, "personally", short language names, and alternatives.
   assert.equal(answer(F("Do you have professional Python development experience, including designing and maintaining production services?", "Boolean")), "Yes");
@@ -278,7 +278,8 @@ test("live-form sweep (2026-10-12, 800 Ashby + Greenhouse forms): required field
   assert.equal(answer(F("Does the offered compensation meet your expectations?", "ValueSelect", YN)), "Yes");
   assert.equal(answer(F("Are you subject to a non-competition agreement or any other agreement which would preclude you from working here?", "ValueSelect", YN), { profile: { ...p, employmentAgreements: "No" } }), "No");
   assert.equal(answer(F("How many years of client-facing analytics, consulting, or stakeholder management experience do you have?", "ValueSelect", { options: ["0-1 years", "2-4 years", "5+ years"] })), "0-1 years");
-  assert.match(answer(F("AI Policy for Application", "ValueSelect", { options: ["I agree", "I do not agree"] })), /^PARKED/);
+  assert.equal(answer(F("AI Policy for Application", "ValueSelect", { options: ["I agree", "I do not agree"] })), "I agree"); // standing answer
+  assert.match(answer(F("AI Policy for Application", "ValueSelect", { options: ["I agree", "I do not agree"] }), { profile: { ...p, ownWorkStatement: "No" } }), /^PARKED/);
 });
 
 test("experience gates: years from the resume, technologies only when the resume shows them", () => {

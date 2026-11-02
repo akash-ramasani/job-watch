@@ -1369,7 +1369,20 @@ export function answerQuestion(q, profile, ai, ctx = {}) {
     const citizen = /citizen/.test(norm(profile.citizenshipStatus || "")) && !/non|not/.test(norm(profile.citizenshipStatus || ""));
     return pickYesNo(citizen ? "Yes" : "No", citizen ? "US citizen" : "not a US citizen", SOURCE.PROFILE, 1);
   }
-  if (key === "ownWorkStatement") return unanswered("statement that the answers are your own work: confirm it yourself");
+  // "My answers reflect my own work" / AI-usage policy acknowledgements: the
+  // person's standing answer is to confirm (profile.ownWorkStatement = "No"
+  // turns it off and parks the question again).
+  if (key === "ownWorkStatement") {
+    if (/^n/i.test(String(profile.ownWorkStatement || ""))) return unanswered("statement that the answers are your own work: confirm it yourself");
+    if (isSelect) {
+      const m = matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/, /^i (confirm|agree|acknowledge|certify|understand)\b/, /^(confirm|agree|acknowledged?|accept|certif)/, /\b(agree|confirm|acknowledge|certify)\b(?!.*\bnot\b)/]);
+      if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 0.9, "standing answer: confirm");
+      const opts = primary.values || primary.options || [];
+      if (opts.length === 1) return out([{ name, value: opts[0].value }], SOURCE.PROFILE, 0.9, "standing answer: confirm");
+      return unanswered("no confirming option for the own-work statement");
+    }
+    return out([{ name, value: "Yes" }], SOURCE.PROFILE, 0.9, "standing answer: confirm");
+  }
   // Deemed-export rule: it applies to anyone who is not a U.S. person.
   if (key === "deemedExport") {
     const us = norm(profile.usPersonExportControl);

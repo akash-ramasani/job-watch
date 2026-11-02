@@ -110,6 +110,7 @@ const ledger = require("./lib/apply/ledger.cjs");
 const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
+const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
@@ -4796,6 +4797,64 @@ exports.prepareGenericApplication = onCall(
     logger.info(`prepareGenericApplication: uid=${uid} source=${source} fields=${out.total} filled=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareGenericApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };
+  }
+);
+
+// ── Unattended auto-apply (extension) ───────────────────────────────────────
+// The queue: every Ashby and Greenhouse job on this person's Jobs page not yet
+// applied to, newest first (functions/lib/apply/autoApply.cjs).
+exports.getAutoApplyQueue = onCall(
+  { region: REGION, maxInstances: 5, memory: "512MiB", timeoutSeconds: 60 },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const queue = await buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID });
+    logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length}`);
+    return { queue, count: queue.length };
+  }
+);
+
+// The resume uploaded with an auto-applied (or Autofilled) application: the
+// tailored resume for that job (generateTailoredResume, called as this user,
+// cached per job and resume version), typeset in the person's LaTeX template
+// and named "First_Last_Resume_Job_Title.pdf". Input { jobId } or
+// { source, externalId } for a page opened outside the queue.
+exports.tailoredResumeFile = onCall(
+  { region: REGION, maxInstances: 5, memory: "1GiB", timeoutSeconds: 300 },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    let { jobId = "", source = "", externalId = "" } = request.data || {};
+    const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
+    if (!jobId && externalId) {
+      const want = source === "ashby" ? ["ashby", "ashbyhq"] : source ? [String(source).toLowerCase()] : null;
+      const snap = await jobsCol.where("externalId", "==", String(externalId)).limit(5).get();
+      const hit = snap.docs.find((d) => !want || want.includes(String(d.data()?.source || "").toLowerCase()));
+      if (hit) jobId = hit.id;
+    }
+    if (!jobId) throw new HttpsError("not-found", "This job is not in JobWatch, so it has no tailored resume.");
+    const projectId = admin.app().options.projectId || process.env.GCLOUD_PROJECT || "greenhouse-jobs-scrapper";
+    const res = await fetch(`https://${REGION}-${projectId}.cloudfunctions.net/generateTailoredResume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: request.rawRequest?.headers?.authorization || "" },
+      body: JSON.stringify({ data: { jobId: String(jobId) } }),
+    });
+    const json = await res.json().catch(() => ({}));
+    const resume = json?.result?.resume;
+    if (!res.ok || json.error || !resume) throw new HttpsError("internal", `Tailored resume failed: ${json?.error?.message || res.status}`);
+    const [userSnap, jobSnap] = await Promise.all([db.collection("users").doc(uid).get(), jobsCol.doc(String(jobId)).get()]);
+    const u = userSnap.exists ? userSnap.data() : {};
+    const job = jobSnap.exists ? jobSnap.data() : {};
+    // Same contact block as the web app's downloads (src/lib/resumeDownloads.js contactFromUser).
+    const contact = { name: u.fullName || `${u.firstName || ""} ${u.lastName || ""}`.trim(), location: u.city || "", phone: u.phone || "", email: u.email || "", github: u.github || "", linkedin: u.linkedin || "" };
+    const { buildResumeLatex } = await import("./lib/resumeLatex.mjs");
+    const tex = buildResumeLatex(resume, contact);
+    try { validateResumeTex(tex); } catch (err) { throw new HttpsError("internal", err.message); }
+    if (!(await tectonicAvailable())) throw new HttpsError("unavailable", "The LaTeX compiler is not available on the server.");
+    const { pdf } = await compileResumeTex(tex);
+    const fileName = autoResumeFileName(resume.header?.name || contact.name, job.title || "");
+    logger.info(`tailoredResumeFile: uid=${uid} job=${jobId} ${fileName} ${pdf.length} bytes cached=${!!json.result.cached}`);
+    return { jobId: String(jobId), fileName, pdfBase64: pdf.toString("base64"), bytes: pdf.length };
   }
 );
 

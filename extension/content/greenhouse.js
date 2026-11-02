@@ -234,14 +234,14 @@
 
     // Every form visit is an attempt; a form already submitted is left alone.
     const started = await ledger("start");
-    if (started?.duplicate) { banner(`JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
+    if (started?.duplicate) { if (AUTO) autoReport("skipped", "already applied"); banner(`JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
     if (!started?.ok) warn("ledger(start) failed:", started?.error);
 
     banner("JobWatch is working out your answers…");
     const pkg = await sendMsg({ type: "GET_GH_FILL_DATA", token: ids.token, id: ids.id });
-    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); banner(`JobWatch could not compute this application: ${pkg?.error || "no answer from the extension"}`, { action: { label: "Try again", onClick: () => run().catch(() => {}) } }); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
+    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); if (AUTO) autoReport("error", `could not compute: ${pkg?.error || "no answer"}`); banner(`JobWatch could not compute this application: ${pkg?.error || "no answer from the extension"}`, { action: { label: "Try again", onClick: () => run().catch(() => {}) } }); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
     const data = pkg.data;
-    if (data.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(data.submittedAt)}. Not filling it again.`); return; }
+    if (data.alreadyApplied) { if (AUTO) autoReport("skipped", "already applied"); banner(`JobWatch: you already applied to this job on ${fmtDay(data.submittedAt)}. Not filling it again.`); return; }
     log(`computed: ready=${data.ready}, ${data.fills.length} fields, resume=${data.resumeB64 ? "yes" : "no"}`);
     banner(`JobWatch is filling ${data.fills.length} fields, top to bottom…`);
     if (!data.ready) warn("gate parked this job:", data.reasons);
@@ -396,7 +396,77 @@
     ];
     ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.totalFields || data.fills.length + needsAttention.length, requiredTotal: data.requiredTotal || 0, flow: "engine", schemaSource: "greenhouse-api", reasons: data.reasons || [], jobTitle: data.jobTitle || "", companyName: data.companyName || "" })
       .then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
+    if (AUTO) return autoSubmitGreenhouse(needs, answersLog, data);
     watchForSubmit(answersLog);
+  }
+
+  // ── Unattended auto-apply (background.js runs the queue) ─────────────────
+  let AUTO = null;
+  const autoReport = (status, note) => sendMsg({ type: "AUTO_RESULT", status, note }).catch(() => {});
+  const visible = (el) => !!el && el.offsetParent !== null;
+  function codeInputs() {
+    const hint = (i) => `${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
+    return [...document.querySelectorAll("input")].filter((i) => visible(i) && !["hidden", "checkbox", "radio", "file"].includes(i.type) && /security|verification|one-time-code|\bcode\b/i.test(hint(i)) && !/zip|postal|phone|country|promo/i.test(hint(i)));
+  }
+  function confirmed() {
+    const text = (document.body?.innerText || "").slice(0, 5000);
+    return /confirmation|thank/i.test(location.href) || /thank you for applying|thanks for applying|application (has been |was )?(successfully )?(submitted|received)|we('ve| have) received your application/i.test(text);
+  }
+  function captchaVisible() {
+    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")]
+      .some((f) => visible(f) && f.getBoundingClientRect().height > 60);
+  }
+  /** Submit when nothing is left for the person; enter the emailed security
+   *  code from Gmail when Greenhouse asks; wait for the confirmation; report. */
+  async function autoSubmitGreenhouse(needs, answersLog) {
+    if (needs.length) {
+      banner(`Auto-apply: ${needs.length} field${needs.length === 1 ? "" : "s"} need you. Left open for you; the queue moves on.`, { items: needs });
+      return autoReport("needs_attention", `Needs you: ${needs.slice(0, 4).join("; ")}`);
+    }
+    const btn = ghSubmitButton();
+    if (!btn) return autoReport("needs_attention", "could not find Greenhouse's Submit button");
+    banner("Auto-apply: submitting…");
+    btn.scrollIntoView({ block: "center" });
+    await sleep(600);
+    const clickedAt = Date.now();
+    btn.click();
+    let codeEntered = false;
+    for (let i = 0; i < 120; i++) {
+      await sleep(2000);
+      if (confirmed() && !codeInputs().length) {
+        await ledger("submitted", { answersLog });
+        banner("Auto-apply: submitted and recorded.");
+        return autoReport("submitted", "");
+      }
+      if (codeInputs().length && !codeEntered) {
+        banner("Auto-apply: Greenhouse emailed a security code. Reading it from Gmail…");
+        const r = await sendMsg({ type: "GET_GH_CODE", since: clickedAt });
+        if (!r?.ok || !r.code) {
+          banner(`Auto-apply: could not get the security code (${r?.error || "no email"}). Enter it and submit.`);
+          return autoReport("needs_attention", `security code: ${r?.error || "no email"}`);
+        }
+        const put = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCode", value: r.code });
+        if (!put?.result?.ok) return autoReport("needs_attention", `security code: ${put?.result?.error || "could not enter it"}`);
+        codeEntered = true;
+        await sleep(800);
+        const again = ghSubmitButton();
+        if (again) { again.scrollIntoView({ block: "center" }); again.click(); }
+        banner("Auto-apply: security code entered, submitting…");
+        continue;
+      }
+      if (captchaVisible()) {
+        banner("Auto-apply: Greenhouse is showing a CAPTCHA. Solve it and press Submit; the queue moves on.");
+        return autoReport("needs_attention", "CAPTCHA challenge");
+      }
+      // The board flagged a field: nothing more to do unattended.
+      if (i >= 15 && !codeInputs().length && ghProblems().length) {
+        const p = ghProblems().map((x) => x.label).filter(Boolean);
+        banner("Auto-apply: Greenhouse did not accept the submission. These need you:", { items: p });
+        return autoReport("needs_attention", `Greenhouse flagged: ${p.slice(0, 4).join("; ") || "the form"}`);
+      }
+    }
+    banner("Auto-apply: no confirmation from Greenhouse after 4 minutes. Check the form.");
+    return autoReport("needs_attention", "no confirmation after 4 minutes (CAPTCHA or a field the form rejected)");
   }
 
   // Required fields that are still empty, plus every error message the board
@@ -469,6 +539,13 @@
       await sleep(500);
     }
     if (!found) return; // a posting page without the form (or a frame without it)
+    AUTO = (await sendMsg({ type: "AUTO_JOB" }))?.job || null;
+    if (AUTO) {
+      banner("Auto-apply: filling this application…");
+      await sleep(800);
+      run().catch((e) => { warn("run failed:", e.message); banner(`JobWatch failed: ${e.message}`); ledger("error", { error: e.message }); autoReport("error", e.message); });
+      return;
+    }
     window.__jwNotify.launcher({
       onClick: async () => {
         banner("JobWatch is reading the form…");

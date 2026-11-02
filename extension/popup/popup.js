@@ -173,3 +173,59 @@ $("btn-fill-page").addEventListener("click", () => {
     status.textContent = "JobWatch is filling the form. Watch the banner at the top of the page.";
   });
 });
+
+// ── Auto-apply: start / stop and live status ─────────────────────────────────
+const STATUS_LABEL = { submitted: "Submitted", needs_attention: "Needs you", error: "Error", skipped: "Skipped" };
+function renderAuto(st) {
+  if (!st) return;
+  const pill = $("auto-pill");
+  pill.textContent = st.on ? (st.current ? "Applying" : "On") : "Off";
+  pill.className = `auto-pill${st.on ? " on" : ""}`;
+  const btn = $("btn-auto");
+  btn.textContent = st.on ? "Stop auto-apply" : "Start auto-apply";
+  btn.classList.toggle("btn-stop", !!st.on);
+  $("auto-line").textContent = st.current
+    ? `Now: ${st.current.companyName} · ${st.current.title}`
+    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby and Greenhouse job on your Jobs page with a resume tailored to each role. Keep Chrome open.";
+  $("auto-stats").innerHTML = [["Submitted", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
+    .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
+  const list = $("auto-recent");
+  list.innerHTML = "";
+  for (const r of st.recent || []) {
+    const li = document.createElement("li");
+    li.innerHTML = '<span class="auto-name"></span><span class="auto-meta"></span>';
+    li.querySelector(".auto-name").textContent = `${r.companyName} · ${r.title}`;
+    li.querySelector(".auto-meta").textContent = STATUS_LABEL[r.status] || r.status;
+    li.title = r.note || "";
+    list.appendChild(li);
+  }
+}
+function refreshAuto() { chrome.runtime.sendMessage({ type: "AUTO_STATUS" }, (res) => renderAuto(res?.status)); }
+$("btn-auto").addEventListener("click", () => {
+  const on = $("btn-auto").textContent.startsWith("Stop");
+  chrome.runtime.sendMessage({ type: on ? "AUTO_STOP" : "AUTO_START" }, () => setTimeout(refreshAuto, 400));
+});
+refreshAuto();
+setInterval(refreshAuto, 3000);
+
+// ── Gmail: connect once for Greenhouse security codes ────────────────────────
+function refreshGmail() {
+  chrome.runtime.sendMessage({ type: "GMAIL_STATUS" }, (res) => {
+    if (!res?.ok) return;
+    $("gmail-redirect").textContent = res.redirectUrl;
+    if (res.clientId && !$("gmail-client").value) $("gmail-client").value = res.clientId;
+    $("gmail-pill").textContent = res.connected ? "Connected" : "Not connected";
+    $("gmail-pill").className = `auto-pill${res.connected ? " on" : ""}`;
+    $("gmail-status").textContent = res.connected ? `Reading security codes from ${res.email}.` : "";
+    $("btn-gmail").textContent = res.connected ? "Reconnect Gmail" : "Connect Gmail";
+  });
+}
+$("btn-gmail").addEventListener("click", () => {
+  $("gmail-status").textContent = "Opening Google sign-in…";
+  chrome.runtime.sendMessage({ type: "GMAIL_CONNECT", clientId: $("gmail-client").value }, (res) => {
+    if (chrome.runtime.lastError || !res?.ok) { $("gmail-status").style.color = "#dc2626"; $("gmail-status").textContent = chrome.runtime.lastError?.message || res?.error || "Could not connect Gmail."; return; }
+    $("gmail-status").style.color = "";
+    refreshGmail();
+  });
+});
+refreshGmail();

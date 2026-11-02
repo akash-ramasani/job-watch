@@ -51,6 +51,20 @@
     .status-pill.active { background: #ecfdf5; color: #065f46; border-color: #a7f3d0; }
     .status-pill.active .dot { background: #10b981; box-shadow: 0 0 5px #10b981; }
 
+    /* ── Auto-apply / Gmail ── */
+    .auto-box { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .auto-head { display: flex; align-items: center; justify-content: space-between; }
+    .auto-pill { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: #f3f4f6; color: #6b7280; }
+    .auto-pill.on { background: #ecfdf5; color: #065f46; }
+    .auto-pill.warn { background: #fffbeb; color: #b45309; }
+    .auto-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+    .auto-stats div { text-align: center; border-radius: 8px; background: #f9fafb; padding: 6px 2px; }
+    .auto-stats b { display: block; font-size: 14px; color: #111827; }
+    .auto-stats span { font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #9ca3af; }
+    .auto-input { width: 100%; padding: 8px 10px; border: 1px solid #e5e7eb; border-radius: 8px; font: 11px inherit; font-family: inherit; }
+    .auto-code { font-size: 9.5px; word-break: break-all; background: #f3f4f6; padding: 1px 4px; border-radius: 4px; user-select: all; }
+    .btn-stop { background: #dc2626 !important; box-shadow: none !important; }
+
     /* ── Auto-added feeds ── */
     .section-label { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #9ca3af; margin-bottom: 4px; }
     .section-hint { font-size: 11px; color: #6b7280; line-height: 1.5; margin-bottom: 8px; }
@@ -274,6 +288,25 @@
 
   <!-- Profile screen -->
   <div class="body" id="screen-profile">
+
+    <div class="auto-box anim-slide">
+      <div class="auto-head"><span class="section-label" style="margin:0;">Auto-apply</span><span id="auto-pill" class="auto-pill">Off</span></div>
+      <p id="auto-line" class="section-hint" style="margin:6px 0 8px;">Applies to every Ashby and Greenhouse job on your Jobs page with a resume tailored to each role. Keep Chrome open.</p>
+      <div id="auto-stats" class="auto-stats"></div>
+      <button class="btn btn-primary" id="btn-auto">Start auto-apply</button>
+      <ul id="auto-recent" class="auto-feeds" style="margin-top:8px;"></ul>
+    </div>
+
+    <div class="auto-box anim-slide">
+      <div class="auto-head"><span class="section-label" style="margin:0;">Gmail</span><span id="gmail-pill" class="auto-pill">Not connected</span></div>
+      <p class="section-hint" style="margin:6px 0 8px;">Reads only Greenhouse's security-code emails, so auto-apply can finish those applications.</p>
+      <div id="gmail-setup">
+        <input id="gmail-client" class="auto-input" placeholder="OAuth client ID (….apps.googleusercontent.com)" autocomplete="off" spellcheck="false" />
+        <p class="section-hint" style="margin:6px 0;">Redirect URI for the client: <code id="gmail-redirect" class="auto-code"></code></p>
+      </div>
+      <button class="btn btn-primary" id="btn-gmail">Connect Gmail</button>
+      <p id="gmail-status" class="section-hint" style="margin-top:6px;"></p>
+    </div>
 
     <button class="btn btn-primary" id="btn-fill-page" style="margin-bottom: 6px;">Fill this page</button>
     <p id="fill-status" style="font-size: 10px; color: #9ca3af; text-align: center; line-height: 1.5; margin-bottom: 14px;">
