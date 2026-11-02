@@ -128,6 +128,8 @@ const ledger = require("./lib/apply/ledger.cjs");
 const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
+const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
+const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-opus-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
@@ -4927,6 +4929,31 @@ exports.tailoredResumeFile = onCall(
     const fileName = autoResumeFileName(resume.header?.name || contact.name, job.title || "");
     logger.info(`tailoredResumeFile: uid=${uid} job=${jobId} ${fileName} ${pdf.length} bytes cached=${!!json.result.cached}`);
     return { jobId: String(jobId), fileName, pdfBase64: pdf.toString("base64"), bytes: pdf.length };
+  }
+);
+
+// A required field the fill could not finish: the extension sends its HTML
+// (controls tagged data-jw-ref) and Claude returns the steps to complete it
+// from the person's profile, or says what is missing (lib/apply/rescue.cjs).
+exports.rescueField = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 90, secrets: [ANTHROPIC_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const d = request.data || {};
+    if (!d.question || !d.html) throw new HttpsError("invalid-argument", "question and html are required.");
+    const key = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
+    if (!/^sk-ant-/.test(key)) throw new HttpsError("failed-precondition", "The Anthropic key is not configured.");
+    if (!Anthropic) Anthropic = require("@anthropic-ai/sdk");
+    const [userSnap, resumeSnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("users").doc(uid).collection("resume").doc("profile").get(),
+    ]);
+    const t0 = Date.now();
+    const plan = await rescueFieldPlan({ anthropic: new Anthropic({ apiKey: key, maxRetries: 2 }), model: RESCUE_MODEL }, d,
+      userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
+    logger.info(`rescueField: uid=${uid} round=${d.round || 1} q="${String(d.question).slice(0, 80)}" steps=${plan.steps.length} done=${plan.done} cannot="${plan.cannot}" ms=${Date.now() - t0}`);
+    return plan;
   }
 );
 

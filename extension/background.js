@@ -1000,6 +1000,31 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── AI rescue of a stuck field: the page side, then Claude's plan ─────
+      if (message.type === "EXEC_RESCUE") {
+        const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/rescue-dom.js"] })
+          .then(() => chrome.scripting.executeScript({
+            target, world: "MAIN",
+            func: (action, args) => window.__jwRescueDom[action](...(args || [])),
+            args: [message.action, message.args || []],
+          }))
+          .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
+          .catch((err) => sendResponse({ ok: false, error: err.message }));
+        return true;
+      }
+      if (message.type === "RESCUE_FIELD") {
+        try {
+          const job = await autoJobForTab(sender?.tab?.id);
+          const plan = await callFunction("rescueField", {
+            question: message.question, html: message.html, required: !!message.required, round: message.round || 1, history: message.history || [],
+            jobTitle: message.jobTitle || job?.title || "", companyName: message.companyName || job?.companyName || "",
+          });
+          sendResponse({ ok: true, plan });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
+        return;
+      }
+
       // ── Any other board: run a lib/generic-dom.js helper in the MAIN world ─
       if (message.type === "EXEC_GENERIC") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
@@ -1021,7 +1046,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (!tab?.id || !/^https?:/i.test(tab.url || "")) throw new Error("Open a job application page first.");
           const target = { tabId: tab.id, allFrames: true };
           await chrome.scripting.executeScript({ target, func: () => { window.__jwManualStart = true; } });
-          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/notify.js", "content/universal.js"] });
+          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/notify.js", "content/rescue.js", "content/universal.js"] });
           sendResponse({ ok: true });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
@@ -1440,7 +1465,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const control = el.closest("[class*='select__control'], [class*='control']") || el.parentElement || el;
           const collect = () => [...document.querySelectorAll('[role=option], ul[role=listbox] li, [id$="-listbox"] li, [class*="option"]')].filter(o => o.offsetParent !== null);
 
+          // Auto-apply runs in a background tab, which never sends focus events
+          // on its own; react-select only opens its menu once it hears them.
           el.focus();
+          el.dispatchEvent(new FocusEvent("focus"));
+          el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
           for (const target of [el, control]) {
             target.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
             target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -1487,7 +1516,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
           const el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "location input not found: " + fieldId };
+          // Background tabs send no focus events; the typeahead needs them to search.
+          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
           el.focus();
+          el.dispatchEvent(new FocusEvent("focus"));
+          el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
           el.click();
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
           if (setter) setter.call(el, city); else el.value = city;

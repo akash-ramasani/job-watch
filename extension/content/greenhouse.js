@@ -73,7 +73,8 @@
       let box = h.closest("fieldset") || h.parentElement;
       for (let k = 0; box && k < 4 && box.tagName !== "FORM"; k++, box = box.parentElement) {
         const inputs = [...box.querySelectorAll("input[type=checkbox], input[type=radio]")];
-        if (inputs.length >= 2) return inputs;
+        // One box is a group too: "Please review the points below" -> "I acknowledge ...".
+        if (inputs.length >= 1) return inputs;
         if (box.querySelector("input:not([type=checkbox]):not([type=radio]):not([type=hidden]), textarea, select, [role=combobox]")) break;
       }
     }
@@ -335,7 +336,12 @@
             log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value);
             answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
           }
-          else {
+          else if (res.error === "no field for label" && pass === MAX_PASSES) {
+            // The form has no such field (e.g. no "Discipline" in its education
+            // section): nothing to fill, nothing for the person to do.
+            f.absent = true;
+            stillFailing.push(f);
+          } else {
             stillFailing.push(f);
             warn(`fill failed (pass ${pass}):`, f.label, "—", res.error || "unknown", res.seen ? "| options seen: " + JSON.stringify(res.seen) : "");
           }
@@ -347,6 +353,22 @@
     hl.hide();
 
     if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
+
+    // The phone's Country picker: the number goes in without +1, so the country is set here.
+    try {
+      const lab = [...document.querySelectorAll("label")].find((l) => /^country\s*\*?$/i.test((l.textContent || "").trim()));
+      const ctl = lab && (document.getElementById(lab.htmlFor) || lab.parentElement?.querySelector("[role=combobox], select"));
+      const box = ctl && (ctl.closest("[class*='select__control'], [class*='-control']") || ctl.parentElement);
+      const empty = ctl && !(ctl.tagName === "SELECT" ? ctl.value : box?.querySelector("[class*='single-value'], [class*='singleValue']"));
+      if (empty && /^(us|usa|united states)/i.test(String(data.country || "United States"))) {
+        const r = await fillCombobox(ctl, "United States");
+        log("phone country:", r);
+      }
+    } catch (e) { warn("phone country:", e.message); }
+
+    // Mandatory consent / acknowledgement boxes the form adds outside its questions.
+    const consents = await tickRequiredConsents();
+    if (consents.length) { log("ticked required consents:", consents); consents.forEach((c) => (answersLog[`consent:${c}`] = { label: c, answer: "checked", type: "checkbox", source: "rule" })); }
 
     // Verify four times, top to bottom: what is still empty and required, and
     // what the board itself is complaining about. Fix what has a fill; the
@@ -384,9 +406,32 @@
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
     // An optional field that would not fill (a cover letter the form doesn't
     // require, a voluntary survey) never holds the application back.
-    const blocking = pending.filter((f) => f.required !== false);
-    if (pending.length > blocking.length) log("optional fields left empty:", pending.filter((f) => f.required === false).map((f) => f.label));
-    const needs = [...new Set([...blocking.map((f) => f.label), ...(data.review || []).map((r) => r.label), ...boardNotes.keys()])].filter(Boolean);
+    const optionalLeft = pending.filter((f) => f.required === false || f.absent);
+    if (optionalLeft.length) log("optional fields left empty:", optionalLeft.map((f) => f.label));
+    // AI rescue: every mandatory field ("*") still empty or flagged goes to
+    // Claude with its HTML; it says what to click, type or pick from the profile.
+    const rescued = new Set();
+    const rescueNotes = new Map();
+    const stuck = [...new Set([...pending.filter((f) => f.required !== false && !f.absent).map((f) => f.label), ...(data.review || []).map((r) => r.label), ...ghProblems().map((p) => p.label)])].filter(Boolean);
+    for (const label of stuck.slice(0, 8)) {
+      if (!window.__jwRescue) break;
+      banner(`JobWatch is asking AI how to finish: ${label}`);
+      const r = await window.__jwRescue(label, { jobTitle: data.jobTitle || "", companyName: data.companyName || "" });
+      log("rescue:", label, r);
+      if (r?.ok) { rescued.add(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      else if (r?.why) rescueNotes.set(label, r.why);
+    }
+    // What is still wrong after the rescue, by the page's own "*" and errors.
+    const still = new Map(ghProblems().map((p) => [p.label, p]));
+    const blocking = pending.filter((f) => f.required !== false && !f.absent && !rescued.has(f.label));
+    const needs = [...new Set([
+      ...blocking.map((f) => f.label),
+      ...(data.review || []).map((r) => r.label).filter((l) => !rescued.has(l)),
+      ...[...still.keys()],
+    ])].filter((l) => l && (still.has(l) || !rescued.has(l)) && !optionalLeft.some((f) => f.label === l && !still.has(l)))
+      // The location fill is named "Location"; the page calls it "Location (City)": list it once.
+      .filter((l, _i, all) => !(l === "Location" && all.some((x) => x !== l && x.startsWith("Location"))));
+    for (const l of rescueNotes.keys()) if (needs.includes(l)) boardNotes.set(l, `${boardNotes.get(l) ? boardNotes.get(l) + ". " : ""}AI: ${rescueNotes.get(l)}`);
     const doneMsg = needs.length
       ? `JobWatch filled ${ok} of ${data.fills.length}. These still need you, then press Submit:`
       : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then press Submit.`;
@@ -395,7 +440,7 @@
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [
       ...blocking.map((f) => ({ path: f.name || "", label: f.label, note: boardNotes.has(f.label) ? `could not be filled. The form says: ${boardNotes.get(f.label)}` : "could not be filled on the page" })),
-      ...(Array.isArray(data.review) ? data.review.map((r) => ({ path: r.path || "", label: r.label || "", note: r.note || "needs you" })) : []),
+      ...(Array.isArray(data.review) ? data.review.filter((r) => !rescued.has(r.label)).map((r) => ({ path: r.path || "", label: r.label || "", note: rescueNotes.has(r.label) ? `${r.note || "needs you"}. AI: ${rescueNotes.get(r.label)}` : r.note || "needs you" })) : []),
       ...[...boardNotes.entries()].filter(([label]) => !pending.some((f) => f.label === label) && !(data.review || []).some((r) => r.label === label)).map(([label, text]) => ({ path: "", label, note: `The form says: ${text}` })),
     ];
     ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.totalFields || data.fills.length + needsAttention.length, requiredTotal: data.requiredTotal || 0, flow: "engine", schemaSource: "greenhouse-api", reasons: data.reasons || [], jobTitle: data.jobTitle || "", companyName: data.companyName || "" })
@@ -481,6 +526,27 @@
     return autoReport("needs_attention", "no confirmation after 4 minutes (CAPTCHA or a field the form rejected)");
   }
 
+  /** Tick every mandatory consent or acknowledgement box ("I acknowledge receipt
+   *  of the Privacy Notice", "By checking this box, I consent ..."). Marketing,
+   *  SMS and talent-community opt-ins are never ticked. */
+  async function tickRequiredConsents() {
+    const ticked = [];
+    for (const box of document.querySelectorAll("input[type=checkbox]")) {
+      if (box.checked || box.offsetParent === null && !box.closest("label")) continue;
+      const lab = (box.id && document.querySelector(`label[for="${CSS.escape(box.id)}"]`)) || box.closest("label");
+      const block = box.closest("fieldset, div.field, div[class*='field'], div") || box.parentElement;
+      const text = `${lab?.textContent || ""} ${(block?.textContent || "").slice(0, 400)}`.replace(/\s+/g, " ");
+      const required = box.required || box.getAttribute("aria-required") === "true" || /\*/.test(text);
+      if (!required) continue;
+      if (!/\b(consent|acknowledge|agree|certify|confirm|i have read|i understand|attest)\b/i.test(text)) continue;
+      if (/marketing|newsletter|promotional|text messages?|\bsms\b|whatsapp|future (job )?opportunit|talent (community|network|pool)|job alerts?/i.test(text)) continue;
+      if (box.id) await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCheck", id: box.id }); else box.click();
+      await sleep(150);
+      if (box.checked) ticked.push((lab?.textContent || text).trim().slice(0, 80));
+    }
+    return ticked;
+  }
+
   // Required fields that are still empty, plus every error message the board
   // shows, each tied to its field label.
   function ghProblems() {
@@ -489,10 +555,17 @@
     const labelText = (lab) => (lab?.textContent || "").replace(/\*/g, "").replace(/\s+/g, " ").trim();
     const isEmpty = (el) => {
       if (!el) return false;
-      if (el.type === "checkbox" || el.type === "radio") { const group = el.closest("fieldset, div"); return !group?.querySelector("input:checked"); }
+      if (el.type === "checkbox" || el.type === "radio") {
+        // The whole group ("Australia, Belgium, ..., US"), not the one option's own box.
+        let group = el.closest("fieldset, [role=group], [role=radiogroup]");
+        for (let n = el.parentElement; !group && n && n.tagName !== "FORM"; n = n.parentElement) if (n.querySelectorAll(`input[type=${el.type}]`).length > 1) group = n;
+        return !(group || el.parentElement)?.querySelector("input:checked");
+      }
       if (el.type === "file") return !(el.files && el.files.length) && !el.closest("div")?.querySelector("[class*='file'] [class*='name'], .chosen, [data-testid*='file-name']");
       if (isCombobox(el)) {
-        const box = el.closest("[class*='select'], [class*='control']")?.parentElement || el.parentElement;
+        // The whole picker, not the input: on new boards the input's own class
+        // reads "select__input", so closest("[class*=select]") was the input.
+        const box = el.closest("[class*='select__control'], [class*='-control']") || el.parentElement?.parentElement?.parentElement;
         const chosen = box?.querySelector("[class*='single-value'], [class*='singleValue'], [class*='multi-value'], [class*='multiValue']");
         return !el.value && !chosen;
       }
@@ -504,8 +577,11 @@
       const forId = lab.getAttribute("for");
       const el = (forId && document.getElementById(forId)) || lab.closest("div")?.querySelector("input, textarea, select, [role=combobox]");
       if (!el) continue;
-      const required = /\*/.test(lab.textContent || "") || el.required || el.getAttribute("aria-required") === "true";
       const wrap = lab.closest("div.field, div[class*='field'], fieldset, div") || lab.parentElement;
+      // Mandatory = a "*" in the question or right after its <label>, or required markers.
+      const next = lab.nextElementSibling;
+      const required = /\*/.test(lab.textContent || "") || el.required || el.getAttribute("aria-required") === "true"
+        || (!!next && !next.matches("input, select, textarea, div") && /^\s*\*\s*$/.test(next.textContent || ""));
       const errEl = [...(wrap?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
       const error = errEl ? errEl.textContent.replace(/\s+/g, " ").trim().slice(0, 160) : (el.getAttribute("aria-invalid") === "true" ? "this field is not valid" : "");
       if ((required && isEmpty(el)) || error) {

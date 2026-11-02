@@ -267,6 +267,20 @@
     return after;
   }
 
+  /** AI rescue for what still needs the person: Claude reads each field's HTML
+   *  and says what to click, type or pick (optional fields, no "*", are skipped). */
+  async function rescueStuck() {
+    if (!window.__jwRescue) return;
+    for (const [label, v] of [...attention.entries()].slice(0, 8)) {
+      banner(`JobWatch is asking AI how to finish: ${label}`);
+      const r = await window.__jwRescue(label, { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
+      log("rescue:", label, r);
+      if (r?.ok) { attention.delete(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      else if (r?.why === "optional (no *)") attention.delete(label);
+      else if (r?.why) attention.set(label, { ...v, note: `${v.note}. AI: ${r.why}` });
+    }
+  }
+
   function report(stepLabel) {
     const filled = Object.keys(answersLog).length;
     const next = isWorkday ? "click Save and Continue" : "go on to the next step or submit";
@@ -397,6 +411,7 @@
         now.forEach((f) => done.add(f.id));
       }
       await verify(fills);
+      await rescueStuck();
       const review = await gen("onReviewStep").catch(() => false);
       if (review) banner("JobWatch: this is the review page. Check every answer, then click Submit yourself.");
       else report(step);

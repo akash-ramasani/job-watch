@@ -66,7 +66,8 @@
       // (Virta): a phone box first, consent second — never a radio group.
       type = "tel";
       options = [...radios].map((r) => ({ label: labelFor(r, wrap) }));
-      filled = !!tel.value?.trim() && !!wrap.querySelector("input[type=radio]:checked");
+      // Filled only when the number is in and every consent group is answered.
+      filled = !!tel.value?.trim() && [...new Set([...radios].map((r) => r.name))].every((n) => [...radios].some((r) => r.name === n && r.checked));
       return { id: path, label, description, required, type, options, filled, survey, consent: true };
     } else if (radios.length) {
       type = "radio";
@@ -251,14 +252,23 @@
     if (!tel) return { ok: false, error: "phone input not found" };
     const typed = await fillText(path, value);
     if (!typed.ok) return typed;
-    const radios = wrap.querySelectorAll("input[type=radio]");
+    const radios = [...wrap.querySelectorAll("input[type=radio]")];
     if (!radios.length) return typed;
+    // Every consent group under the phone (SMS, WhatsApp, ...), each answered.
     const want = /^n/i.test(String(consent || "")) ? "no" : "yes";
-    const labeled = [...radios].map((r) => ({ r, l: nrm(labelFor(r, wrap)) }));
-    const hit = labeled.find((x) => x.l.startsWith(want)) || labeled.find((x) => x.l.includes(want === "yes" ? "consent" : "do not"));
-    if (!hit) return { ok: true, picked: typed, consent: "no matching consent option", seen: labeled.map((x) => x.l) };
-    const ok = hit.r.checked || await clickOption(hit.r, wrap);
-    return { ok, consent: labelFor(hit.r, wrap) };
+    const picked = [];
+    for (const name of [...new Set(radios.map((r) => r.name))]) {
+      const group = radios.filter((r) => r.name === name);
+      const labeled = group.map((r) => ({ r, l: nrm(labelFor(r, wrap)), v: nrm(r.value) }));
+      const hit = want === "yes"
+        ? labeled.find((x) => x.l.startsWith("yes") || x.v === "given") || labeled.find((x) => /consent|agree|opt in/.test(x.l) && !/not|don't|do not/.test(x.l))
+        : labeled.find((x) => x.l.startsWith("no") || x.v === "notgiven") || labeled.find((x) => /do not|don't|not consent|opt out|decline/.test(x.l));
+      if (!hit) { picked.push(`${name}: no matching option`); continue; }
+      if (!hit.r.checked) await clickOption(hit.r, wrap);
+      picked.push(`${name}: ${labelFor(hit.r, wrap)}`);
+    }
+    const allAnswered = [...new Set(radios.map((r) => r.name))].every((n) => radios.some((r) => r.name === n && r.checked));
+    return { ok: allAnswered, consent: picked.join("; ") };
   }
 
   async function radio(path, wanted) {

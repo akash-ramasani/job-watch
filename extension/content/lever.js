@@ -192,6 +192,16 @@
       const prev = manual.get(label);
       manual.set(label, { path: e.path, note: prev ? `${prev.note}. The form says: ${e.text}` : `The form says: ${e.text}` });
     }
+    // AI rescue: Claude reads each stuck mandatory field's HTML and says what to do.
+    for (const [label, v] of [...manual.entries()].slice(0, 8)) {
+      if (!window.__jwRescue) break;
+      banner(`JobWatch is asking AI how to finish: ${label}`);
+      const r = await window.__jwRescue(label, { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
+      log("rescue:", label, r);
+      if (r?.ok) { manual.delete(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      else if (r?.why === "optional (no *)") manual.delete(label);
+      else if (r?.why) manual.set(label, { ...v, note: `${v.note}. AI: ${r.why}` });
+    }
     const needsAttention = [...manual.entries()].map(([label, v]) => ({ label, path: v.path, note: v.note }));
     const filled = Object.keys(answersLog).length;
     log(`DONE — filled ${filled}/${pkg.fills.length}. answersLog:`, answersLog);

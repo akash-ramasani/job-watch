@@ -261,6 +261,8 @@ function classify(label, kind = "") {
   if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b/.test(l)) return "currentTitle";
   if (text && /universit|college|school.{0,25}attend|alma mater/.test(l) && !/degree|graduat|relocat/.test(l)) return "university";
   if (/\b(us|u\.s\.|united states)\b.{0,15}(or equivalent )?time ?zone|time ?zone.{0,20}\b(us|u\.s\.)\b/.test(l)) return "usTimezone";
+  // "If located in the US, in what city and state do you reside?" asks for the place.
+  if (text && /\b(what|which) city\b|city and state|city\/state|city, state/.test(l)) return /\bstate\b/.test(l) ? "cityState" : "city";
   if (/(based|located|residing|reside|living|live) (in|within) the (us|u\.s\.?a?|united states)\b/.test(l) && !/authori|sponsor|work/.test(l)) return "inUS";
   if (/notice period/.test(l)) return "noticePeriod";
   if (/record(ing|ed)\b.{0,60}(consent|interview)|interview recording|notetak|ai note|transcri(be|bing|ption)/.test(l)) return "recordingConsent";
@@ -583,7 +585,28 @@ export function classifyQuestion(q) {
 
 /** `ctx.prev` is the previous question's result ({ key, label, answers }) so
  *  a follow-up like "If yes, where?" can see what was just answered. */
+/**
+ * One question's answer. A typed box never gets a bare "Yes"/"No" when the
+ * question asks what, which, where, how many or when: that answer came from a
+ * yes/no rule that misread the label, so the question goes to the free-text
+ * writer (or stays blank when optional).
+ */
 export function answerQuestion(q, profile, ai, ctx = {}) {
+  const a = answerQuestionCore(q, profile, ai, ctx);
+  const kinds = (q.fields || []).map(fieldKind);
+  const isSelect = kinds.some((k) => ["select", "multiselect", "boolean"].includes(k));
+  const label = q.label || q.fields?.[0]?.name || "";
+  const stem = norm(label).replace(/^if [^,?]*,\s*/, "");
+  if (!isSelect && a.answers.length === 1 && /^(yes|no)$/i.test(String(a.answers[0].value))
+    && /\b(what|which|where|how many|how much|how long|when|who)\b/.test(stem) && !/^(do|does|are|have|has|will|would|can|could|is|did|were|was|should|may)\b/.test(stem)) {
+    const cached = ai && typeof ai.get === "function" ? ai.get(label) : null;
+    if (cached) return { ...a, source: SOURCE.AI, confidence: 0.7, note: "AI free-text", answers: [{ name: a.answers[0].name, value: cached }] };
+    return { ...a, source: SOURCE.NONE, confidence: 0, answers: [], note: q.required ? "free-text needs AI/manual answer" : "optional free-text skipped" };
+  }
+  return a;
+}
+
+function answerQuestionCore(q, profile, ai, ctx = {}) {
   const fields = q.fields || [];
   const primary = fields[0] || {};
   const label = q.label || primary.name || "";

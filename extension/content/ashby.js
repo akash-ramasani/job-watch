@@ -1576,9 +1576,34 @@
       hl.hide();
     }
     hl.hide();
+    // AI rescue: every mandatory field still empty or flagged goes to Claude
+    // with its HTML; it says what to click, type or pick from the profile.
+    const rescued = new Set();
+    const rescueNotes = new Map();
+    const stuck = [...new Set([
+      ...after.filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label),
+      ...pkg.review.map((r) => r.label),
+      ...boardErrors.map((e) => after.find((x) => x.id === e.path)?.label || e.label),
+    ])].filter(Boolean);
+    for (const label of stuck.slice(0, 8)) {
+      if (!window.__jwRescue) break;
+      showOverlay(`🤖 JobWatch is asking AI how to finish: ${label}`);
+      const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "" });
+      console.log("[JobWatch] rescue:", label, r);
+      if (r?.ok) { rescued.add(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      else if (r?.why) rescueNotes.set(label, r.why);
+    }
+    if (stuck.length) {
+      await sleep(500);
+      after = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => after);
+      boardErrors = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => boardErrors);
+    }
     const stillEmpty = after.filter((d) => d.required && !d.filled && !d.survey);
     const manual = new Map(); // label -> { path, note }
-    for (const r of pkg.review) manual.set(r.label, { path: r.path || "", note: r.note || "needs you" });
+    for (const r of pkg.review) {
+      if (rescued.has(r.label) && !stillEmpty.some((d) => d.label === r.label)) continue;
+      manual.set(r.label, { path: r.path || "", note: rescueNotes.has(r.label) ? `${r.note || "needs you"}. AI: ${rescueNotes.get(r.label)}` : r.note || "needs you" });
+    }
     for (const d of stillEmpty) if (!manual.has(d.label)) manual.set(d.label, { path: d.id, note: failures.find((f) => f.path === d.id)?.error || "still empty after four checks" });
     for (const e of boardErrors) {
       if (!e.path) continue;
