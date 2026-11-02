@@ -14,7 +14,7 @@
 (function () {
   if (window.__jwRescueDom) return;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwMainWait ? window.__jwMainWait(ms) : window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const nrm = (s) => String(s || "").replace(/[*✱]/g, " ").replace(/\s+/g, " ").trim().toLowerCase().replace(/[:?]$/, "");
   const CONTROL = "input:not([type=hidden]), select, textarea, button, [role=combobox], [role=listbox], [role=option], [role=radio], [role=checkbox], [role=button], [contenteditable=true]";
   const PLACEHOLDER = /^[-–—\s]*(select( one| an option|\.\.\.|…)?|choose( one| an option)?|please (select|choose)( one)?|none selected|search)?[-–—\s]*$/i;

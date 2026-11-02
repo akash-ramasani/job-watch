@@ -26,7 +26,7 @@
 (function () {
   if (window.__jwGeneric) return;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwMainWait ? window.__jwMainWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const nrm = (s) => clean(s).toLowerCase().replace(/[*✱]/g, "").replace(/\s+/g, " ").trim();
   const PLACEHOLDER = /^[-–—\s]*(select( one| an option| an answer|\.\.\.|…)?|choose( one| an option)?|please (select|choose)( one)?|none selected|search)?[-–—\s]*$/i;

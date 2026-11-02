@@ -26,7 +26,7 @@
   const TAG = "[JobWatch/Universal]";
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const sendMsg = (msg) => new Promise((res) => { try { chrome.runtime.sendMessage(msg, res); } catch (e) { res({ ok: false, error: e.message }); } });
   async function gen(action, ...args) {
     const r = await sendMsg({ type: "EXEC_GENERIC", action, args });

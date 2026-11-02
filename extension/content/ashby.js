@@ -141,12 +141,12 @@
     // Clear any existing value first
     box.focus();
     box.click();
-    await new Promise(r => setTimeout(r, 200));
+    await window.__jwWait(200);
 
     // Select-all + delete to clear
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
-    await new Promise(r => setTimeout(r, 100));
+    await window.__jwWait(100);
 
     // Type character by character from the MAIN world to bypass CSP/Isolated World restrictions
     await sendMsg({
@@ -159,7 +159,7 @@
     // Poll for a suggestion dropdown (up to 4 seconds)
     let option = null;
     for (let i = 0; i < 40; i++) {
-      await new Promise(r => setTimeout(r, 100));
+      await window.__jwWait(100);
       const allOptions = [
         ...entry.querySelectorAll("[role='option']"),
         ...entry.querySelectorAll("[class*='_suggestion_']"),
@@ -179,7 +179,7 @@
     if (option) {
       console.log("[JobWatch] Location: clicking option:", option.textContent.trim());
       option.click();
-      await new Promise(r => setTimeout(r, 400));
+      await window.__jwWait(400);
 
       // Verify it accepted by checking the input has a non-empty value
       if (!box.value) {
@@ -187,14 +187,14 @@
         option.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         option.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
         option.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-        await new Promise(r => setTimeout(r, 300));
+        await window.__jwWait(300);
       }
     } else {
       // No dropdown appeared — press Enter as last resort
       console.warn("[JobWatch] Location: no dropdown found, pressing Enter for:", value);
       box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     }
-    await new Promise(r => setTimeout(r, 300));
+    await window.__jwWait(300);
   }
 
 
@@ -893,7 +893,7 @@
               || entry.querySelector("div[tabindex]");
             if (trigger) {
               trigger.click();
-              await new Promise(r => setTimeout(r, 300));
+              await window.__jwWait(300);
 
               // Find and click the matching option in the opened dropdown
               const allOptions = [
@@ -906,7 +906,7 @@
                 optEl.click();
                 answersLog[field.id] = { label: field.label, answer: bestOpt.label, type: "select" };
               }
-              await new Promise(r => setTimeout(r, 200));
+              await window.__jwWait(200);
             }
           }
         }
@@ -931,21 +931,21 @@
               (userPronoun.includes("he") && cbLabel.includes("he/him")) ||
               (userPronoun.includes("she") && cbLabel.includes("she/her")) ||
               (userPronoun.includes("they") && cbLabel.includes("they/them"));
-            if (shouldCheck && !cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (shouldCheck && !cb.checked) { cb.click(); await window.__jwWait(100); }
             if (cb.checked) checked.push(getInputLabel(cb, entry));
           }
         } else if (isHowDidYouHear) {
           for (const cb of checkboxes) {
             const cbLabel = getInputLabel(cb, entry).toLowerCase();
             if (cbLabel.includes("linkedin")) {
-              if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+              if (!cb.checked) { cb.click(); await window.__jwWait(100); }
               checked.push(getInputLabel(cb, entry));
               break;
             }
           }
         } else if (lbl.includes("consent") || lbl.includes("acknowledge") || lbl.includes("certify") || lbl.includes("privacy") || lbl.includes("agreement")) {
           for (const cb of checkboxes) {
-            if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (!cb.checked) { cb.click(); await window.__jwWait(100); }
             checked.push(getInputLabel(cb, entry) || "acknowledged");
           }
         } else {
@@ -976,7 +976,7 @@
               (userPronoun.includes("he") && cbLabel.includes("he/him")) ||
               (userPronoun.includes("she") && cbLabel.includes("she/her")) ||
               (userPronoun.includes("they") && cbLabel.includes("they/them"));
-            if (shouldCheck && !cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (shouldCheck && !cb.checked) { cb.click(); await window.__jwWait(100); }
             if (cb.checked) checked.push(getInputLabel(cb, entry));
           }
         } else if (isHowDidYouHear) {
@@ -984,7 +984,7 @@
           for (const cb of checkboxes) {
             const cbLabel = getInputLabel(cb, entry).toLowerCase();
             if (cbLabel.includes("linkedin")) {
-              if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+              if (!cb.checked) { cb.click(); await window.__jwWait(100); }
               checked.push(getInputLabel(cb, entry));
               break;
             }
@@ -992,7 +992,7 @@
         } else if (lbl.includes("consent") || lbl.includes("acknowledge") || lbl.includes("certify") || lbl.includes("privacy") || lbl.includes("agreement") || lbl.includes("arbitration") || lbl.includes("background") || lbl.includes("drug test")) {
           // Legal agreements / consent / explicitly recognized — check all
           for (const cb of checkboxes) {
-            if (!cb.checked) { cb.click(); await new Promise(r => setTimeout(r, 100)); }
+            if (!cb.checked) { cb.click(); await window.__jwWait(100); }
             checked.push(getInputLabel(cb, entry) || "acknowledged");
           }
         } else {
@@ -1028,7 +1028,7 @@
           }
         }
 
-        await new Promise(r => setTimeout(r, 250));
+        await window.__jwWait(250);
         continue;
       }
 
@@ -1116,7 +1116,7 @@
           const openBtn = entry.querySelector("button") || entry.querySelector("input");
           if (openBtn) {
             openBtn.click();
-            await new Promise(r => setTimeout(r, 400));
+            await window.__jwWait(400);
           }
 
           // Calendar should now be open somewhere on the page
@@ -1146,7 +1146,7 @@
                 const isAfter = (visibleYear > targetYear) || (visibleYear === targetYear && visibleMonth > targetMonth);
                 // Pick left (prev) or right (next) arrow
                 const arrowBtn = isAfter ? navBtns[0] : navBtns[navBtns.length - 1];
-                if (arrowBtn) { arrowBtn.click(); await new Promise(r => setTimeout(r, 250)); }
+                if (arrowBtn) { arrowBtn.click(); await window.__jwWait(250); }
                 else break;
               } else break;
             }
@@ -1159,7 +1159,7 @@
             });
             if (dayCell) {
               dayCell.click();
-              await new Promise(r => setTimeout(r, 300));
+              await window.__jwWait(300);
               answersLog[field.id] = { label: field.label, answer: targetDate.toDateString(), type: "date" };
             }
           };
@@ -1204,7 +1204,7 @@
             if (result?.ok) {
               answersLog[field.id] = { label: field.label, answer: getInputLabel(target, entry), type: "radio" };
             }
-            await new Promise(r => setTimeout(r, 200));
+            await window.__jwWait(200);
           }
         }
 
@@ -1265,7 +1265,7 @@
         radio.click();
         answersLog[path] = { label: path.replace(/_systemfield_eeoc_/, "EEO "), answer: getInputLabel(radio, el), type: "eeo" };
       }
-      await new Promise(r => setTimeout(r, 150));
+      await window.__jwWait(150);
     }
   }
 
@@ -1412,7 +1412,7 @@
 
 
   // ─── Header / stable-class helpers ─────────────────────────────────────────
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   async function execAshby(action, ...args) {
     const res = await sendMsg({ type: "EXEC_ASHBY", action, args });
     return res?.result || { ok: false, error: "no result from main world" };
@@ -1672,13 +1672,13 @@
     applyYesNoRules(fields, mappings, userDoc);
 
     showOverlay("✍️ JobWatch: Filling form…");
-    await new Promise(r => setTimeout(r, 600));
+    await window.__jwWait(600);
     await applyMappings(form, fields, mappings, userDoc, pendingJob, resumeBase64, answersLog);
     await fillEEOSurvey(userDoc, answersLog);
 
     // ── Pre-submit: fix any still-empty required fields ───────────────────
     showOverlay("🔍 JobWatch: Verifying required fields…");
-    await new Promise(r => setTimeout(r, 400));
+    await window.__jwWait(400);
     const preCheck = getUnfilledRequired(form, fields, answersLog);
 
     if (preCheck.length) {
@@ -1688,7 +1688,7 @@
         applyTextRules(preCheck, retry.mappings, userDoc, resumeDoc, jobLocation);
         applyYesNoRules(preCheck, retry.mappings, userDoc);
         await applyMappings(form, preCheck, retry.mappings, userDoc, pendingJob, resumeBase64, answersLog);
-        await new Promise(r => setTimeout(r, 400));
+        await window.__jwWait(400);
       } catch (e) { console.warn("[JobWatch] Pre-submit retry error:", e.message); }
 
       const stillEmpty = getUnfilledRequired(form, fields, answersLog);

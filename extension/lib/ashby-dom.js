@@ -18,7 +18,7 @@
 (function () {
   if (window.__jwAshby) return;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwMainWait ? window.__jwMainWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const nrm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
   const wrapperOf = (path) => document.querySelector(`[data-field-path="${CSS.escape(path)}"]`);
 

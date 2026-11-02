@@ -21,7 +21,7 @@
 (function () {
   if (window.__jwLever) return;
 
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwMainWait ? window.__jwMainWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const nrm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
   const form = () => document.getElementById("application-form") || document.querySelector("form.application-form, form");
   const byName = (name) => [...(form()?.querySelectorAll(`[name="${CSS.escape(name)}"]`) || [])].filter((el) => el.type !== "hidden" || el.name === "selectedLocation");

@@ -15,7 +15,7 @@
   const TAG = "[JobWatch/Lever]";
   const log = (...a) => console.log(TAG, ...a);
   const warn = (...a) => console.warn(TAG, ...a);
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const sendMsg = (msg) => new Promise((res) => chrome.runtime.sendMessage(msg, res));
   async function lever(action, ...args) {
     const r = await sendMsg({ type: "EXEC_LEVER", action, args });

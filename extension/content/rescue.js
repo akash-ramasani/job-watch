@@ -16,7 +16,7 @@
 (function () {
   "use strict";
   if (window.__jwRescue) return;
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const sleep = (ms) => (window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const send = (msg) => new Promise((res) => { try { chrome.runtime.sendMessage(msg, (r) => res(r || { ok: false, error: chrome.runtime.lastError?.message || "no answer" })); } catch (e) { res({ ok: false, error: e.message }); } });
   const dom = async (action, ...args) => { const r = await send({ type: "EXEC_RESCUE", action, args }); return r?.ok ? r.result : null; };
   // lib/rescue-dom.js is loaded in this world too: it reads values without a round trip.

@@ -846,6 +846,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true, retried: n });
         return;
       }
+      if (message.type === "JW_WAIT") {
+        // A pause for a hidden tab (content/wake.js): the worker's timers are not throttled.
+        await new Promise((r) => setTimeout(r, Math.min(Math.max(Number(message.ms) || 0, 0), 60000)));
+        sendResponse({ ok: true });
+        return;
+      }
       if (message.type === "LEARN_ANSWERS") {
         // The answer bank (functions/lib/apply/savedAnswers.cjs).
         try { sendResponse({ ok: true, result: await callFunction("learnAnswers", { saved: message.saved || [], missing: message.missing || [] }) }); }
@@ -1105,7 +1111,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Lever: run a lib/lever-dom.js helper in the page's MAIN world ─────
       if (message.type === "EXEC_LEVER") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/lever-dom.js"] })
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/lever-dom.js"] })
           .then(() => chrome.scripting.executeScript({
             target, world: "MAIN",
             func: (action, args) => window.__jwLever[action](...(args || [])),
@@ -1144,7 +1150,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── AI rescue of a stuck field: the page side, then Claude's plan ─────
       if (message.type === "EXEC_RESCUE") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/rescue-dom.js"] })
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/rescue-dom.js"] })
           .then(() => chrome.scripting.executeScript({
             target, world: "MAIN",
             func: (action, args) => window.__jwRescueDom[action](...(args || [])),
@@ -1169,7 +1175,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Any other board: run a lib/generic-dom.js helper in the MAIN world ─
       if (message.type === "EXEC_GENERIC") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/generic-dom.js"] })
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/generic-dom.js"] })
           .then(() => chrome.scripting.executeScript({
             target, world: "MAIN",
             func: (action, args) => window.__jwGeneric[action](...(args || [])),
@@ -1187,7 +1193,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (!tab?.id || !/^https?:/i.test(tab.url || "")) throw new Error("Open a job application page first.");
           const target = { tabId: tab.id, allFrames: true };
           await chrome.scripting.executeScript({ target, func: () => { window.__jwManualStart = true; } });
-          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/notify.js", "content/rescue.js", "content/universal.js"] });
+          await chrome.scripting.executeScript({ target, files: ["content/wake.js", "content/highlight.js", "content/notify.js", "lib/rescue-dom.js", "content/rescue.js", "content/universal.js"] });
           sendResponse({ ok: true });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
@@ -1198,7 +1204,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Ashby: run a lib/ashby-dom.js helper in the page's MAIN world ─────
       if (message.type === "EXEC_ASHBY") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/ashby-dom.js"] })
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/ashby-dom.js"] })
           .then(() => chrome.scripting.executeScript({
             target, world: "MAIN",
             func: (action, args) => window.__jwAshby[action](...(args || [])),
@@ -1272,7 +1278,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           if (!node) return { ok: false, actual: "", error: "input not found" };
 
-          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          const sleep = (ms) => window.__jwMainWait(ms);
 
           for (let attempt = 1; attempt <= 3; attempt++) {
             node.focus();
@@ -1323,7 +1329,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (byId && (byId.tagName === "INPUT" || byId.tagName === "TEXTAREA")) node = byId;
           }
           if (!node) return { ok: false, error: "input not found" };
-          const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+          const sleep = (ms) => window.__jwMainWait(ms);
           const text = String(val ?? "");
           const proto = node.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
           const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
@@ -1355,12 +1361,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
           node.focus();
           node.click();
-          await new Promise(r => setTimeout(r, 200));
+          await window.__jwMainWait(200);
 
           // Select-all + delete
           node.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
           node.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
-          await new Promise(r => setTimeout(r, 100));
+          await window.__jwMainWait(100);
 
           const typeStr = val.slice(0, 10);
           for (const ch of typeStr) {
@@ -1373,7 +1379,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
             node.dispatchEvent(new Event("input", { bubbles: true }));
             node.dispatchEvent(new KeyboardEvent("keyup", { key: ch, bubbles: true }));
-            await new Promise(r => setTimeout(r, 60));
+            await window.__jwMainWait(60);
           }
           return { ok: true, typed: typeStr };
         };
@@ -1435,7 +1441,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 if (x) {
                   x.click();
                   for (let k = 0; k < 30 && !node; k++) {
-                    await new Promise((r) => setTimeout(r, 100));
+                    await window.__jwMainWait(100);
                     node = [...document.querySelectorAll("input[type=file]")].find((i) => kindOf(i) === want) || null;
                   }
                 }
@@ -1481,7 +1487,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
 
           btn.click();
-          await new Promise(r => setTimeout(r, 250));
+          await window.__jwMainWait(250);
 
           const input = entry.querySelector("input[type='checkbox']");
           return {
@@ -1524,14 +1530,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             target.click();
           }
 
-          await new Promise(r => setTimeout(r, 250));
+          await window.__jwMainWait(250);
 
           // Fallback: if React did not accept the label click, try native input click
           if (!target.checked) {
             target.click();
             target.dispatchEvent(new Event("input", { bubbles: true }));
             target.dispatchEvent(new Event("change", { bubbles: true }));
-            await new Promise(r => setTimeout(r, 200));
+            await window.__jwMainWait(200);
           }
 
           return {
@@ -1593,7 +1599,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // on mousedown on the styled CONTROL wrapper (or ArrowDown), not on a
         // plain click of the inner input.
         const ghSelectCombobox = async (fieldId, value) => {
-          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const wait = (ms) => window.__jwMainWait(ms);
           const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
           let el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "combobox not found: " + fieldId };
@@ -1666,7 +1672,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // suggestions, pick the one matching "City, FullStateName". Clicking the
         // suggestion also fills the hidden latitude/longitude fields.
         const ghLocationPick = async (fieldId, city, matchPrefix) => {
-          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const wait = (ms) => window.__jwMainWait(ms);
           const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
           const el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "location input not found: " + fieldId };
@@ -1704,7 +1710,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // offers Attach / Dropbox / ... / "enter manually" — click the manual
         // toggle, then fill the revealed textarea.
         const ghCoverText = async (_id, text) => {
-          const wait = (ms) => new Promise(r => setTimeout(r, ms));
+          const wait = (ms) => window.__jwMainWait(ms);
           const heads = [...document.querySelectorAll("label, legend, h1, h2, h3, h4, strong, span")]
             .filter(n => /cover letter/i.test(n.textContent || "") && (n.textContent || "").trim().length < 40);
           if (!heads.length) return { ok: false, error: "cover letter section not found" };
@@ -1733,7 +1739,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const ghCheck = async (fieldId) => {
           const el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "checkbox not found: " + fieldId };
-          if (!el.checked) { el.click(); await new Promise(r => setTimeout(r, 150)); }
+          if (!el.checked) { el.click(); await window.__jwMainWait(150); }
           return { ok: el.checked === true };
         };
 
@@ -1755,7 +1761,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           };
           if (boxes.length > 1 && boxes.length >= code.length) code.split("").forEach((ch, i) => set(boxes[i], ch));
           else set(boxes[0], code);
-          await new Promise((r) => setTimeout(r, 300));
+          await window.__jwMainWait(300);
           return { ok: true, boxes: boxes.length };
         };
 
@@ -1773,14 +1779,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "ghCode") { funcToRun = ghCode; argsToRun = [value]; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
-        chrome.scripting.executeScript({
+        chrome.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] }, world: "MAIN", files: ["lib/wait-main.js"] }).then(() => chrome.scripting.executeScript({
           // Target the frame the request came from — Greenhouse forms are often
           // embedded in an iframe on the company's own careers page.
           target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] },
           world: "MAIN",
           func: funcToRun,
           args: argsToRun
-        })
+        }))
           .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
           .catch(err => sendResponse({ ok: false, error: err.message }));
 
