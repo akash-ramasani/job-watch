@@ -96,7 +96,7 @@ export default function Profile({ user, userMeta }) {
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    availability: "", hourlyRate: "", visaType: "H-1B",
+    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
@@ -184,6 +184,7 @@ export default function Profile({ user, userMeta }) {
         availability: userMeta.availability || "",
         hourlyRate: userMeta.hourlyRate || "",
         visaType: userMeta.visaType || "H-1B",
+        citizenshipCountry: userMeta.citizenshipCountry || "",
         workAuthorized: userMeta.workAuthorized || "Yes",
         requiresSponsorship: userMeta.requiresSponsorship || "No",
         smsConsent: userMeta.smsConsent || "No",
@@ -566,6 +567,10 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="visaType" className="caps-label block mb-2">Visa You Would Need</label>
                 <input id="visaType" name="visaType" type="text" value={formData.visaType} onChange={handleChange} className="input-standard" placeholder="H-1B" />
+              </div>
+              <div>
+                <label htmlFor="citizenshipCountry" className="caps-label block mb-2">Citizenship</label>
+                <input id="citizenshipCountry" name="citizenshipCountry" type="text" value={formData.citizenshipCountry} onChange={handleChange} className="input-standard" placeholder="India" />
               </div>
             </div>
 

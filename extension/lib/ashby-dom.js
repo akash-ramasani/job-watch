@@ -200,10 +200,11 @@
     node.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
     // Wait for Ashby to accept it (the file name appears); else drop it on the box.
     const shown = async (ms) => { for (let t = 0; t < ms; t += 250) { if (fileShown(wrap)) return true; await sleep(250); } return false; };
-    if (await shown(6000)) return { ok: true, actual: name };
+    // A background tab can take a while to upload and show the name.
+    if (await shown(15000)) return { ok: true, actual: name };
     const zone = wrap.querySelector("[class*=drop i]") || wrap.querySelector("[class*=upload i]") || node.parentElement || wrap;
     for (const type of ["dragenter", "dragover", "drop"]) zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
-    if (await shown(6000)) return { ok: true, actual: name, via: "drop" };
+    if (await shown(10000)) return { ok: true, actual: name, via: "drop" };
     return { ok: false, error: "Ashby did not accept the file", actual: node.files?.[0]?.name };
   }
 
@@ -440,7 +441,9 @@
   function submitted() {
     return !document.querySelector(".ashby-application-form-container")
       || /success|submitted|thank/i.test(location.href)
-      || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']");
+      || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']")
+      // The green banner some boards show in place of the form (Harvey, 2026-11-02).
+      || /your application (was|has been) (successfully )?submitted|application submitted successfully|thank(s| you) for (applying|your application)/i.test((document.body?.innerText || "").slice(0, 6000));
   }
 
   window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, errors, submitted, phone };

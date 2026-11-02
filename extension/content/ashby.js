@@ -1328,7 +1328,7 @@
       return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
     }
     // Last look before Submit: every required field filled (the resume included).
-    const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label);
+    const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => (d.required || d.id === "_systemfield_resume") && !d.filled && !d.survey).map((d) => d.label);
     let empty = await scanEmpty();
     if (empty.length && refill && await refill()) empty = await scanEmpty();
     if (empty.length) {
@@ -1355,6 +1355,12 @@
         showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
         return autoReport("needs_attention", "CAPTCHA challenge");
       }
+    }
+    // A success that showed up just after the last look is still a success.
+    if ((await execAshby("submitted").catch(() => false)) === true) {
+      await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+      showOverlay("✅ Auto-apply: submitted and recorded.", "success");
+      return autoReport("submitted", "");
     }
     // Refused once: refill what went missing (a dropped resume) and press Submit again.
     if (refill && !again) {
@@ -1646,7 +1652,8 @@
         const now = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
         const byPath = new Map(now.map((d) => [d.id, d]));
         let n = 0;
-        for (const d of now.filter((x) => x.required && !x.filled && !x.survey)) {
+        // The resume always goes in, also where the form calls it optional.
+        for (const d of now.filter((x) => (x.required || x.id === "_systemfield_resume") && !x.filled && !x.survey)) {
           const f = fillByPath.get(d.id);
           if (!f) continue;
           const r = await applyFill(f, pkg, byPath).catch(() => null);

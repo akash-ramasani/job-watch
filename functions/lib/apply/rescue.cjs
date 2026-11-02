@@ -6,7 +6,7 @@
 // asks for the next round (at most three).
 
 const PROFILE_KEYS = ["firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1",
-  "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "hourlyRate", "salaryExpectation",
+  "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
   "clearanceStatus", "clearanceLevel", "usPersonExportControl", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
 

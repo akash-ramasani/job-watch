@@ -164,6 +164,8 @@ function classify(label, kind = "") {
   const text = ["text", "longtext", "number", "date"].includes(kind);
   const choice = ["boolean", "select", "multiselect"].includes(kind);
 
+  // "Is your citizenship / residency / location in one of: Cuba, Iran, North Korea, Syria…?"
+  if (choice && SANCTIONED.test(l) && /\b(one of|any of|following|located|reside|residen|citizen)/.test(l)) return "sanctionedCountry";
   // ── Ashby corpus additions (2026-10-09) ────────────────────────────────────
   // Follow-ups that only apply when an earlier answer was Other/Yes: a blank
   // text box is the honest answer. Only text kinds take this exit, since a
@@ -1590,6 +1592,21 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       || (norm(profile.country || "united states") === "united states" ? findOnly(primary, [/^yes\b/]) : null);
     return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 0.9, m.label) : unanswered("no option matches the profile location");
   }
+  // Sanctioned-country checks: a residency or location question is answered
+  // from the profile country; a citizenship one from profile.citizenshipCountry.
+  if (key === "sanctionedCountry") {
+    const lc = norm(label);
+    const asksCitizen = /citizen|national/.test(lc);
+    const place = norm(asksCitizen ? profile.citizenshipCountry || "" : profile.country || "");
+    if (!place) return unanswered(asksCitizen ? "citizenship needs profile.citizenshipCountry (Profile page: Citizenship)" : "no country in profile");
+    const inList = SANCTIONED.test(place) || (/korea/.test(place) && /north|dprk|democratic/.test(place));
+    const yn = inList ? "Yes" : "No";
+    if (isSelect) {
+      const m = matchOption(primary, yn) || findOnly(primary, [new RegExp("^" + yn.toLowerCase() + "\\b")]);
+      return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `${asksCitizen ? "citizenship" : "country"}: ${place}`) : unanswered(`no "${yn}" option`);
+    }
+    return out([{ name, value: yn }], SOURCE.PROFILE, 1);
+  }
   // Prior government employment: the saved answer only (set profile.priorGovernmentEmployment).
   if (key === "priorGovernment") {
     let v = profile.priorGovernmentEmployment;
@@ -1719,6 +1736,7 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
 // A lone optional box that opts out ("I decline to answer the following
 // questions") is not an acknowledgement: ticking it would contradict the
 // survey answers given below it.
+const SANCTIONED = /\b(cuba|iran|north korea|dprk|syria|crimea|donetsk|luhansk|belarus)\b/;
 const OPT_OUT = /\b(decline|prefer not|do not wish|don't wish|choose not|opt out)\b/;
 
 /** Map an entire form. Returns { answers: [...], review: [...] }. */
