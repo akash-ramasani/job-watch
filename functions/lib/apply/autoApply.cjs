@@ -70,13 +70,15 @@ function resumeFileName(fullName, jobTitle) {
 async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   const ctx = createAssistantContext(db, uid, { adminUid });
   const aggs = db.collection("users").doc(adminUid).collection("aggregations");
-  const [allSnap, recentSnap, feedsSnap, appsSnap, scores, jobTypes, sponsorship] = await Promise.all([
+  const [allSnap, recentSnap, feedsSnap, appsSnap, scores, jobTypes, sponsorship, prefs] = await Promise.all([
     aggs.doc("allJobs").get(),
     aggs.doc("recentJobs").get(),
     db.collection("users").doc(adminUid).collection("feeds").get(),
     db.collection("users").doc(uid).collection("applications").get(),
-    ctx.scores(), ctx.jobTypes(), ctx.sponsorship(),
+    ctx.scores(), ctx.jobTypes(), ctx.sponsorship(), ctx.prefs(),
   ]);
+  // Companies the person hid on the Jobs page (settings/preferences.excludedCompanies).
+  const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
   for (const d of feedsSnap.docs) { const s = feedSlug(d.data()?.url); if (s) feedSlugs.set(d.id, s); }
 
@@ -99,6 +101,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     seen.add(j.id);
     const src = String(j.source || "").toLowerCase();
     if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src)) continue;
+    if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
     if (applied.ids.has(j.id)) continue;

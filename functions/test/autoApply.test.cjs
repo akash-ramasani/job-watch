@@ -37,12 +37,13 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
     { id: "j2", source: "ashbyhq", companyKey: "f2", externalId: "0a5ad123-7c5b-4d88-b498-5a0262beb331", title: "Backend Engineer", companyName: "Notion", jobUrl: "https://jobs.ashbyhq.com/notion/0a5ad123-7c5b-4d88-b498-5a0262beb331", sourceUpdatedTs: "2026-10-31T00:00:00Z", fam: ["software"] },
     { id: "j3", source: "greenhouse", companyKey: "f1", externalId: "222", title: "Account Executive", companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: "2026-10-31T00:00:00Z", fam: ["sales"] },
     { id: "j4", source: "greenhouse", companyKey: "f1", externalId: "333", title: "Data Engineer", companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: "2026-10-29T00:00:00Z", fam: ["software"] },
+    { id: "j7", source: "greenhouse", companyKey: "f1", externalId: "555", title: "Senior Software Engineer", companyName: "Roblox", jobUrl: "https://job-boards.greenhouse.io/roblox/jobs/555", sourceUpdatedTs: "2026-11-01T00:00:00Z", fam: ["software"] },
     { id: "j5", source: "workday", title: "Engineer", companyName: "NVIDIA", fam: ["software"] },
     { id: "j6", source: "greenhouse", companyKey: "f1", externalId: "444", title: "ML Engineer", companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: "2026-10-28T00:00:00Z", fam: ["software"], el: ["citizenship"] },
   ];
   const data = {
     "users/A/aggregations/allJobs": { jobs }, "users/A/aggregations/recentJobs": { jobs: [] },
-    "users/U/aggregations/myJobScores": { scores: {} }, "users/U/settings/preferences": { jobTypes: ["software"] },
+    "users/U/aggregations/myJobScores": { scores: {} }, "users/U/settings/preferences": { jobTypes: ["software"], excludedCompanies: ["Roblox"] },
     "users/U": { requiresSponsorship: "Yes" }, "users/U/resume/profile": {},
   };
   const coll = {
@@ -56,7 +57,7 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
   });
   const db = { collection: (c) => ref(c) };
   const q = await buildQueue(db, "U", { adminUid: "A" });
-  assert.deepEqual(q.map((j) => j.jobId), ["j2", "j1"]); // newest first; j3 unrelated, j4 applied, j5 not Ashby/GH, j6 not open to visa holders
+  assert.deepEqual(q.map((j) => j.jobId), ["j2", "j1"]); // newest first; j3 unrelated, j4 applied, j5 not Ashby/GH, j6 not open to visa holders, j7 a hidden company
   assert.equal(q[1].applyUrl, "https://job-boards.greenhouse.io/embed/job_app?for=stitchfix&token=111");
   assert.equal(q[0].source, "ashby");
 });

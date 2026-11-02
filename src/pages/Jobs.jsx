@@ -1,7 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { doc, onSnapshot } from "firebase/firestore";
+import { arrayRemove, arrayUnion, doc, onSnapshot, setDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
@@ -303,8 +303,24 @@ export default function Jobs({ user, userMeta, preferences }) {
     if (!term) return companies;
     return companies.filter((c) => (c.companyName || "").toLowerCase().includes(term));
   }, [companies, companySearch]);
+  // Companies the person hid (settings/preferences.excludedCompanies): gone
+  // from this page and from the extension's auto-apply queue.
+  const hiddenCompanies = useMemo(() => (Array.isArray(preferences?.excludedCompanies) ? preferences.excludedCompanies : []), [preferences?.excludedCompanies]);
+  const hideCompany = async (e, companyName) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    if (!companyName || !window.confirm(`Hide all ${companyName} jobs? They also leave auto-apply. You can unhide them at the top of this page.`)) return;
+    await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { excludedCompanies: arrayUnion(companyName) }, { merge: true });
+    showToast(`${companyName} jobs hidden.`, "success");
+    track("company_hidden", { company: companyName });
+  };
+  const unhideCompany = async (companyName) => {
+    await setDoc(doc(db, "users", user.uid, "settings", "preferences"), { excludedCompanies: arrayRemove(companyName) }, { merge: true });
+    showToast(`${companyName} jobs are back.`, "success");
+  };
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
+    const hidden = new Set(hiddenCompanies.map((c) => String(c).trim().toLowerCase()));
     const companyKeySet = selectedKeys.length > 0 ? new Set(selectedKeys) : null;
     const thresholdMs = (() => {
       if (timeframe === "all") return null;
@@ -314,6 +330,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     })();
 
     const filtered = jobs.filter((j) => {
+      if (hidden.has(String(j.companyName || "").trim().toLowerCase())) return false;
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
       if (companyKeySet && !companyKeySet.has(j.companyKey)) return false;
@@ -348,7 +365,7 @@ export default function Jobs({ user, userMeta, preferences }) {
       });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance]);
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance, hiddenCompanies]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
   // Wait for the user's job types too, so unrelated jobs never flash in.
@@ -429,6 +446,13 @@ export default function Jobs({ user, userMeta, preferences }) {
           </a>
 
           <div className="flex items-center gap-4 flex-shrink-0 z-10">
+            <button
+              onClick={(e) => hideCompany(e, job.companyName)}
+              className="px-2.5 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest text-gray-500 bg-white ring-1 ring-gray-200 hover:text-red-600 hover:ring-red-200 hover:bg-red-50 transition-colors"
+              title={`Hide all ${job.companyName || "this company's"} jobs, here and in auto-apply`}
+            >
+              Hide
+            </button>
             {preferences?.aiScoringEnabled && userMeta?.aiAccess !== false && (
               <>
                 <button
@@ -469,6 +493,21 @@ export default function Jobs({ user, userMeta, preferences }) {
           <p>
             {selectedKeys.length === 0 ? "Viewing all companies" : `Filtering ${selectedKeys.length} company(ies)`}
           </p>
+          {hiddenCompanies.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">Hidden</span>
+              {hiddenCompanies.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => unhideCompany(c)}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 ring-1 ring-gray-200 text-[11px] font-semibold text-gray-600 hover:bg-indigo-50 hover:text-indigo-700 hover:ring-indigo-200"
+                  title={`Show ${c} jobs again`}
+                >
+                  {c} <span aria-hidden="true">×</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="flex justify-center w-full md:w-auto overflow-hidden">
