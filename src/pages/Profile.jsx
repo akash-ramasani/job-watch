@@ -95,7 +95,7 @@ export default function Profile({ user, userMeta }) {
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    availability: "",
+    availability: "", hourlyRate: "", visaType: "H-1B",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
@@ -181,6 +181,8 @@ export default function Profile({ user, userMeta }) {
         github: toGithubSlug(userMeta.github || ""),
         portfolio: userMeta.portfolio || "",
         availability: userMeta.availability || "",
+        hourlyRate: userMeta.hourlyRate || "",
+        visaType: userMeta.visaType || "H-1B",
         workAuthorized: userMeta.workAuthorized || "Yes",
         requiresSponsorship: userMeta.requiresSponsorship || "No",
         smsConsent: userMeta.smsConsent || "No",
@@ -555,6 +557,14 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="availability" className="caps-label block mb-2">Availability / Start Date</label>
                 <input id="availability" name="availability" type="text" value={formData.availability} onChange={handleChange} className="input-standard" placeholder="Immediately / 2 weeks / 1 month…" />
+              </div>
+              <div>
+                <label htmlFor="hourlyRate" className="caps-label block mb-2">Hourly Rate</label>
+                <input id="hourlyRate" name="hourlyRate" type="text" value={formData.hourlyRate} onChange={handleChange} className="input-standard" placeholder="75 USD per hour" />
+              </div>
+              <div>
+                <label htmlFor="visaType" className="caps-label block mb-2">Visa You Would Need</label>
+                <input id="visaType" name="visaType" type="text" value={formData.visaType} onChange={handleChange} className="input-standard" placeholder="H-1B" />
               </div>
             </div>
 

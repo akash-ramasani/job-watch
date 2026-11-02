@@ -1308,15 +1308,31 @@
   let AUTO = null;
   try { AUTO = (await sendMsg({ type: "AUTO_JOB" })).job || null; } catch { AUTO = null; }
   async function autoReport(status, note) { try { await sendMsg({ type: "AUTO_RESULT", status, note }); } catch { /* the runner times out instead */ } }
+  // A challenge counts only when a person could see it: reCAPTCHA keeps its
+  // challenge frame on the page all the time, hidden or parked off screen.
+  function onScreen(el) {
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) return false;
+    }
+    const r = el.getBoundingClientRect();
+    return r.width > 100 && r.height > 100 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+  }
   function captchaVisible() {
-    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")]
-      .some((f) => f.offsetParent !== null && f.getBoundingClientRect().height > 60);
+    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
   }
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
   async function autoSubmitAshby(manual, pendingJob, answersLog) {
     if (manual.size) {
       showOverlay(`⚠️ Auto-apply: ${manual.size} field${manual.size === 1 ? "" : "s"} need you. Left open for you; the queue moves on.`, "warning");
       return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
+    }
+    // Last look before Submit: every required field filled (the resume included).
+    const final = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+    const empty = final.filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label);
+    if (empty.length) {
+      showOverlay(`⚠️ Auto-apply: ${empty.length} required field${empty.length === 1 ? "" : "s"} still empty: ${empty.slice(0, 3).join(", ")}. Left open for you.`, "warning");
+      return autoReport("needs_attention", `still empty: ${empty.slice(0, 4).join("; ")}`);
     }
     const btn = ashbySubmitButton();
     if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
@@ -1338,8 +1354,10 @@
         return autoReport("needs_attention", "CAPTCHA challenge");
       }
     }
-    showOverlay("⚠️ Auto-apply: Ashby did not accept the submission. Check the form and press Submit.", "warning");
-    return autoReport("needs_attention", "Ashby did not accept the submission (a CAPTCHA or a field it flagged)");
+    const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+    const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
+    showOverlay(`⚠️ Auto-apply: Ashby did not accept the submission${said ? `: ${said}` : ""}. Check the form and press Submit.`, "warning");
+    return autoReport("needs_attention", `Ashby did not accept the submission${said ? `: ${said}` : " (no message shown)"}`);
   }
 
   // ─── Overlay UI: the shared JobWatch card (content/notify.js) ─────────────

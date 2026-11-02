@@ -82,9 +82,12 @@
     } else if (dateIn) {
       type = "date";
       filled = !!dateIn.value?.trim();
-    } else if (file) {
+    } else if (file || (!ta && !input && fileShown(wrap))) {
+      // Uploaded means Ashby shows the file (its name), not just a file sitting
+      // in the hidden input: Ashby's own uploader can still reject it. Once a
+      // file is in, the box may no longer hold an input at all.
       type = "file";
-      filled = !!(file.files && file.files.length);
+      filled = fileShown(wrap);
     } else if (ta) {
       type = "textarea";
       filled = !!ta.value?.trim();
@@ -173,6 +176,13 @@
     return { ok: true, error: err ? err.text : "" };
   }
 
+  /** Does the field show an uploaded file ("Akash_Ramasani_Resume_X.pdf" with its remove button)? */
+  function fileShown(wrap) {
+    if (!wrap) return false;
+    const text = (wrap.innerText || "").replace(/\s+/g, " ");
+    return /[\w)\]-]\.(pdf|docx?|txt|rtf|odt)\b/i.test(text) && !/^\s*(upload file|or drag and drop here|\s)*$/i.test(text);
+  }
+
   async function setFile(path, b64, name) {
     const wrap = wrapperOf(path);
     const node = wrap && wrap.querySelector("input[type=file]");
@@ -187,8 +197,13 @@
     node.files = dt.files;
     node.dispatchEvent(new Event("input", { bubbles: true, cancelable: true }));
     node.dispatchEvent(new Event("change", { bubbles: true, cancelable: true }));
-    await sleep(300);
-    return { ok: !!(node.files && node.files.length), actual: node.files?.[0]?.name };
+    // Wait for Ashby to accept it (the file name appears); else drop it on the box.
+    const shown = async (ms) => { for (let t = 0; t < ms; t += 250) { if (fileShown(wrap)) return true; await sleep(250); } return false; };
+    if (await shown(6000)) return { ok: true, actual: name };
+    const zone = wrap.querySelector("[class*=drop i]") || wrap.querySelector("[class*=upload i]") || node.parentElement || wrap;
+    for (const type of ["dragenter", "dragover", "drop"]) zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
+    if (await shown(6000)) return { ok: true, actual: name, via: "drop" };
+    return { ok: false, error: "Ashby did not accept the file", actual: node.files?.[0]?.name };
   }
 
   async function yesNo(path, answer) {

@@ -412,9 +412,17 @@
     const text = (document.body?.innerText || "").slice(0, 5000);
     return /confirmation|thank/i.test(location.href) || /thank you for applying|thanks for applying|application (has been |was )?(successfully )?(submitted|received)|we('ve| have) received your application/i.test(text);
   }
+  // A challenge counts only when a person could see it (reCAPTCHA keeps a hidden frame on the page).
+  function onScreen(el) {
+    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) return false;
+    }
+    const r = el.getBoundingClientRect();
+    return r.width > 100 && r.height > 100 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+  }
   function captchaVisible() {
-    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")]
-      .some((f) => visible(f) && f.getBoundingClientRect().height > 60);
+    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
   }
   /** Submit when nothing is left for the person; enter the emailed security
    *  code from Gmail when Greenhouse asks; wait for the confirmation; report. */

@@ -184,6 +184,10 @@ function classify(label, kind = "") {
   if (text && /^e-?mail( address)?$/.test(l)) return "email";
   // Human-verification and anti-automation questions.
   if (/^are you (a )?(human|real person|person|robot|bot|an? ai)\b|confirm (that )?you('re| are) (a )?(human|real person|not a (bot|robot))|\bnot a robot\b|\bhuman verification\b|prove (that )?you('re| are) (a )?human/.test(l)) return "humanCheck";
+  // "Which Visa?" (H-1B / TN / J-1 ...): the visa the person would need.
+  if (/^(which|what) (type of |kind of )?(work )?visa\b|^visa (type|category|classification)\b|^type of (work )?visa\b/.test(l) && !/currently (hold|have)|current(ly)? on/.test(l)) return "visaType";
+  // "What is your required hourly or annual base rate?": the hourly rate when set.
+  if (/hourly (rate|pay|wage|compensation)|rate per hour|\bper hour\b|hourly or annual|annual or hourly|\bbase rate\b|\bbill(ing)? rate\b|(desired|required|expected|target) (hourly )?rate\b/.test(l)) return "hourlyRate";
   // ── Live-form sweep additions (2026-11-01, 60 Ashby + Greenhouse forms) ──
   if (/country (where|in which) you (currently )?(reside|live|are (based|located))|countr(y|ies) you (anticipate|expect|plan|intend) (on )?(working|to work)/.test(l)) return "country";
   // A pick list that follows up on an earlier answer ("If you selected a response other than none of the above, confirm ..."): not applicable.
@@ -1342,6 +1346,33 @@ export function answerQuestion(q, profile, ai, ctx = {}) {
   }
   // "This is an Individual Contributor role, are you comfortable with that?", take-home assessments: Yes.
   if (key === "comfortableYes") return pickYesNo("Yes", "comfortable with the stated condition");
+  if (key === "visaType") {
+    const needs = /^y/i.test(String(profile.requiresSponsorship || ""));
+    const want = needs ? String(profile.visaType || "H-1B") : "";
+    const squash = (x) => norm(x).replace(/[^a-z0-9]/g, "");
+    if (isSelect) {
+      const opts = primary.values || primary.options || [];
+      const m = want
+        ? opts.find((o) => squash(o.label) === squash(want)) || opts.find((o) => squash(o.label).startsWith(squash(want)))
+        : findOnly(primary, [/not applicable|n\/a|^none\b|do not (need|require)|citizen|green card|permanent resident/]);
+      if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 1, want ? `needs ${want}` : "no visa needed");
+      return q.required ? unanswered(want ? `no "${want}" option` : "no option for not needing a visa") : out([], SOURCE.NONE, 0, "no matching visa option");
+    }
+    return want ? out([{ name, value: want }], SOURCE.PROFILE, 1) : (q.required ? out([{ name, value: "N/A" }], SOURCE.PROFILE, 0.9) : out([], SOURCE.NONE, 0, "no visa needed"));
+  }
+  // Hourly rate from the profile (users/{uid}.hourlyRate); without one, the salary answer.
+  if (key === "hourlyRate") {
+    const rate = String(profile.hourlyRate || "").trim();
+    if (rate) {
+      if (kinds[0] === "number") { const d = rate.match(/\d+(\.\d+)?/); if (d) return out([{ name, value: d[0] }], SOURCE.PROFILE, 1); }
+      if (!isSelect) return out([{ name, value: rate }], SOURCE.PROFILE, 1, "hourly rate");
+      const n = Number((rate.match(/\d+(\.\d+)?/) || [])[0]);
+      const range = (o) => { const xs = (norm(o.label).match(/\d+(\.\d+)?/g) || []).map(Number); return xs.length ? [xs[0], xs.length > 1 ? xs[1] : (/\+|or more|above/.test(norm(o.label)) ? Infinity : xs[0])] : null; };
+      const hit = (primary.values || []).find((o) => { const r = range(o); return r && n >= r[0] && n <= r[1]; });
+      if (hit) return out([{ name, value: hit.value }], SOURCE.PROFILE, 1, "hourly rate");
+    }
+    key = "salaryExpectation";
+  }
   // WhatsApp / text-message opt-ins with no saved choice: not opted in.
   if (key === "smsConsent" && !profile.smsConsent && isSelect) return pickYesNo("No", "no messaging opt-in on file");
   // "Choose your proficiency level in AutoCAD": from the resume, never "Expert".
