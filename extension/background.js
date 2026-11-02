@@ -470,7 +470,30 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !/^https:/.test(tab.url || "")) return;
   autoAddFeed(tab.url, tab.title);
   autoLeverThanks(tabId, tab.url).catch(() => {});
+  autoThanksPage(tabId, tab.url).catch(() => {});
 });
+
+/** After the form pressed Submit (AUTO_SUBMITTING), a new page in the job's
+ *  tab that thanks the applicant is the submission. Greenhouse (and some
+ *  Ashby boards) leave the form for a confirmation page, which ends the
+ *  content script that was waiting for it, so the runner records it here. */
+async function autoThanksPage(tabId, url) {
+  const job = await autoJobForTab(tabId);
+  if (!job?.submittingAt || Date.now() - job.submittingAt > 10 * 60 * 1000) return;
+  // Every frame: a Greenhouse form embedded on a careers page confirms inside its iframe.
+  const frames = await chrome.scripting.executeScript({
+    target: { tabId, allFrames: true },
+    func: () => {
+      const text = (document.body?.innerText || "").slice(0, 6000);
+      const form = !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name, .ashby-application-form-container");
+      return { form, thanks: /confirmation|thank/i.test(location.href) || /thank you for (applying|your (application|interest))|thanks for applying|application (has been |was )?(successfully )?(submitted|received)|we('ve| have) received your application|successfully submitted/i.test(text) };
+    },
+  }).catch(() => []);
+  const seen = frames.map((f) => f?.result).filter(Boolean);
+  if (!seen.some((r) => r.thanks) || seen.some((r) => r.form)) return;
+  await callFunction("recordApplication", { event: "submitted", applyUrl: job.applyUrl, jobId: job.jobId, jobTitle: job.title, companyName: job.companyName }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
+  await autoFinish({ status: "submitted", note: "" });
+}
 
 /** Lever leaves the form for a separate /thanks page after Submit: that is the submission. */
 async function autoLeverThanks(tabId, url) {
@@ -808,6 +831,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Unattended auto-apply ───────────────────────────────────────────
       if (message.type === "AUTO_JOB") {
         sendResponse({ ok: true, job: await autoJobForTab(sender?.tab?.id) });
+        return;
+      }
+      if (message.type === "AUTO_SUBMITTING") {
+        const st = await autoState();
+        if (st.on && st.current && st.current.tabId === sender?.tab?.id) { st.current.submittingAt = Date.now(); await saveAuto(st); }
+        sendResponse({ ok: true });
         return;
       }
       if (message.type === "AUTO_RESULT") {

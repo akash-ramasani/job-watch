@@ -1324,14 +1324,14 @@
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
   async function autoSubmitAshby(manual, pendingJob, answersLog) {
     if (manual.size) {
-      showOverlay(`⚠️ Auto-apply: ${manual.size} field${manual.size === 1 ? "" : "s"} need you. Left open for you; the queue moves on.`, "warning");
+      window.__jwNotify.show(`Auto-apply: ${manual.size === 1 ? "1 field needs" : `${manual.size} fields need`} you. Left open for you; the queue moves on.`, "warning", { items: [...manual.keys()] });
       return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
     }
     // Last look before Submit: every required field filled (the resume included).
     const final = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const empty = final.filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label);
     if (empty.length) {
-      showOverlay(`⚠️ Auto-apply: ${empty.length} required field${empty.length === 1 ? "" : "s"} still empty: ${empty.slice(0, 3).join(", ")}. Left open for you.`, "warning");
+      window.__jwNotify.show(`Auto-apply: ${empty.length === 1 ? "1 required field is" : `${empty.length} required fields are`} still empty. Left open for you; the queue moves on.`, "warning", { items: empty });
       return autoReport("needs_attention", `still empty: ${empty.slice(0, 4).join("; ")}`);
     }
     const btn = ashbySubmitButton();
@@ -1339,6 +1339,7 @@
     showOverlay("⏳ Auto-apply: submitting…");
     btn.scrollIntoView({ block: "center" });
     await sleep(600);
+    await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for a thank-you page
     btn.click();
     for (let i = 0; i < 45; i++) {
       await sleep(2000);

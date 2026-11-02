@@ -513,7 +513,7 @@
    *  code from Gmail when Greenhouse asks; wait for the confirmation; report. */
   async function autoSubmitGreenhouse(needs, answersLog) {
     if (needs.length) {
-      banner(`Auto-apply: ${needs.length} field${needs.length === 1 ? "" : "s"} need you. Left open for you; the queue moves on.`, { items: needs });
+      banner(`Auto-apply: ${needs.length === 1 ? "1 field needs" : `${needs.length} fields need`} you. Left open for you; the queue moves on.`, { items: needs });
       return autoReport("needs_attention", `Needs you: ${needs.slice(0, 4).join("; ")}`);
     }
     const btn = ghSubmitButton();
@@ -522,6 +522,7 @@
     btn.scrollIntoView({ block: "center" });
     await sleep(600);
     const clickedAt = Date.now();
+    await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
     btn.click();
     let codeEntered = false;
     for (let i = 0; i < 120; i++) {

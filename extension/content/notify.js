@@ -25,7 +25,7 @@
     .card {
       position: fixed; right: 24px; bottom: 24px; z-index: 2147483647; width: 352px; max-width: calc(100vw - 48px);
       box-sizing: border-box; font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      -webkit-font-smoothing: antialiased; background: #fff; color: #111827; border-radius: 16px;
+      -webkit-font-smoothing: antialiased; background: #fff; color: #111827; border-radius: 16px; line-height: 1.4; text-align: left; letter-spacing: normal;
       box-shadow: 0 0 0 1px #e5e7eb, 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
       transform: translateY(20px); opacity: 0; transition: transform .3s cubic-bezier(.22,1,.36,1), opacity .2s ease;
     }
@@ -35,7 +35,7 @@
     .logo { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
       background: #4f46e5; color: #fff; font-family: inherit; font-size: 14px; font-weight: 800; line-height: 1; }
     .title { flex: 1; font-size: 14px; font-weight: 700; color: #111827; }
-    .pill { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
+    .pill { display: inline-flex; align-items: center; font-size: 11px; line-height: 16px; font-weight: 600; padding: 2px 8px; border-radius: 6px;
       background: #eef2ff; color: #4338ca; box-shadow: inset 0 0 0 1px rgba(79,70,229,.2); white-space: nowrap; }
     .card.success .pill { background: #f0fdf4; color: #15803d; box-shadow: inset 0 0 0 1px rgba(22,163,74,.2); }
     .card.warning .pill { background: #fffbeb; color: #b45309; box-shadow: inset 0 0 0 1px rgba(217,119,6,.2); }
@@ -88,6 +88,10 @@
     if (card && host?.isConnected) return;
     host = document.createElement("div");
     host.id = "jw-notify";
+    // A board's own rules reach the host element (Ashby sets line-height: 0
+    // on it, which collapsed the pill) and win over :host; an inline
+    // !important reset does not lose to them.
+    host.setAttribute("style", "all: initial !important;");
     root = host.attachShadow({ mode: "open" });
     root.innerHTML = `<style>${CSS}</style><div class="card">
       <div class="head"><div class="logo">J</div><div class="title">JobWatch</div><span class="pill"></span><button class="x" title="Close" aria-label="Close">${X_ICON}</button></div>

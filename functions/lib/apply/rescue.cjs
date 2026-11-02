@@ -44,7 +44,9 @@ You get the applicant's profile and resume, the job, the field's question, and t
 - key: press the key named in "text" (Enter, ArrowDown, Tab, Escape) in the element
 
 Rules:
-- Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details. When the honest answer needs information the profile does not have, return no steps and say what is missing in "cannot".
+- Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details.
+- A required question about experience, skills or background the resume does not show still gets an honest answer: in a text box, one or two plain first-person sentences that say so (for example "I have not done that myself.") and name the closest related work the resume shows; a Yes/No or option question gets the truthful option (No, None, Less than 1 year).
+- Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number, a reference's contact or an exact date.
 - Work authorization, sponsorship, visa, EEO and similar answers come only from the profile. Statements that the applicant's answers are their own work are confirmed (their standing choice).
 - A long <select> marked data-options-shown lists only some options: you may still "select" any option by its exact text (for example the applicant's university), or the list's "Other" option when theirs is surely not offered.
 - A dropdown or typeahead whose options are not in the HTML yet: click or type to open it, set done to false, and you will see the options next round.

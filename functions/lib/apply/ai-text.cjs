@@ -40,6 +40,7 @@ async function chatWithRetry(openai, req, tries = 3) {
 }
 
 const OPINION_Q = /^(why|how|what|describe|tell|share|explain|which|in what|walk us|give us|is there|do you|would you|where do you see)\b/i;
+const EXPERIENCE_Q = /\b(experience|have you (ever )?(worked|led|built|used|done|taken|managed|shipped|designed|run)|familiar(ity)? with|background in|exposure to|worked (with|on)|describe (a|an|your|the|how|when|any)|tell us about|walk us through|examples? of)\b/i;
 const AI_TELL = /\b(as an ai|language model|i am an ai|i'm an ai|chatgpt|openai|prompt|instructions?)\b/i;
 
 /** Words a trap clause asks for ("recipe", "cookies", "poem") that must not
@@ -91,6 +92,11 @@ async function answerFreeText(q, ctx, { openai, model, sanitizeText, STYLE_PROMP
   if ((!raw || /NEEDS_REVIEW/i.test(raw)) && OPINION_Q.test(q.label)) {
     // The model treated a perspective question as a missing fact. Ask again.
     raw = await ask("This question asks for your own perspective, which you can give from the experience shown. Answer it in your own words. Do not reply NEEDS_REVIEW.", 0.6);
+  }
+  if ((!raw || /NEEDS_REVIEW/i.test(raw)) && EXPERIENCE_Q.test(`${q.label} ${q.description || ""}`)) {
+    // Asked about experience the resume does not show: the honest answer
+    // says so and names the closest real work, instead of leaving it blank.
+    raw = await ask("The resume may not show this exact experience. Then say so plainly in your first sentence (for example: I have not done that myself), and follow with the closest related work the resume does show and how it would carry over. Never claim experience, certifications or results that are not given. Do not reply NEEDS_REVIEW.", 0.4);
   }
   if (!raw || /NEEDS_REVIEW/i.test(raw)) return { answer: null, reason: "AI could not answer honestly from the profile; needs you" };
   if (looksTrapped(raw)) {
