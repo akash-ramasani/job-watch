@@ -34,6 +34,15 @@
     const heads = [...document.querySelectorAll("label, legend, span, div, p, h3, h4, h5")]
       .filter((e) => e.children.length <= 4 && e.textContent.length < want.length + 80)
       .filter((e) => { const t = nrm(e.textContent); return t === want || (want.length > 12 && (t.startsWith(want) || want.startsWith(t) && t.length > 12)); });
+    // An answer option that reads like the question ("LinkedIn" under "How
+    // did you hear about us?") is not the question: question labels first,
+    // exact text before partial, options only when nothing else matches.
+    const isOption = (e) => !!(e.querySelector?.("input[type=radio], input[type=checkbox]")
+      || (e.htmlFor && document.getElementById(e.htmlFor)?.matches?.("input[type=radio], input[type=checkbox]"))
+      || e.closest?.("label")?.querySelector("input[type=radio], input[type=checkbox]")
+      || e.closest?.("[role=option], [role=radio], [role=checkbox]"));
+    const rank = (e) => (isOption(e) ? 2 : 0) + (nrm(e.textContent) === want ? 0 : 1);
+    heads.sort((a, b) => rank(a) - rank(b));
     for (const h of heads) {
       let node = h;
       for (let k = 0; node && k < 6 && node !== document.body; k++, node = node.parentElement) {

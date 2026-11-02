@@ -1322,7 +1322,7 @@
     return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
   }
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
-  async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, again = false) {
+  async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, round = 0) {
     if (manual.size) {
       window.__jwNotify.show(`Auto-apply: ${manual.size === 1 ? "1 field needs" : `${manual.size} fields need`} you. Left open for you; the queue moves on.`, "warning", { items: [...manual.keys()] });
       return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
@@ -1355,6 +1355,12 @@
         showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
         return autoReport("needs_attention", "CAPTCHA challenge");
       }
+      // The board flagged fields and the form is still here: fix them now
+      // instead of waiting out the full minute and a half.
+      if (i >= 3 && refill && round < 3) {
+        const flagged = await execAshby("errors").then((x) => (Array.isArray(x) ? x.filter((e) => e.path) : [])).catch(() => []);
+        if (flagged.length) break;
+      }
     }
     // A success that showed up just after the last look is still a success.
     if ((await execAshby("submitted").catch(() => false)) === true) {
@@ -1362,10 +1368,11 @@
       showOverlay("✅ Auto-apply: submitted and recorded.", "success");
       return autoReport("submitted", "");
     }
-    // Refused once: refill what went missing (a dropped resume) and press Submit again.
-    if (refill && !again) {
+    // Refused: refill what went missing (a dropped resume), let the AI fix
+    // every field the board flags, and press Submit again. Three rounds.
+    if (refill && round < 3) {
       const n = await refill();
-      if (n) { showOverlay("⏳ Auto-apply: Ashby refused it; refilled the missing fields, submitting again…"); return autoSubmitAshby(manual, pendingJob, answersLog, refill, true); }
+      if (n) { showOverlay(`⏳ Auto-apply: Ashby refused it; fixed ${n} field${n === 1 ? "" : "s"}, submitting again (try ${round + 2} of 4)…`); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
     }
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
@@ -1598,10 +1605,13 @@
       ...pkg.review.map((r) => r.label),
       ...boardErrors.map((e) => after.find((x) => x.id === e.path)?.label || e.label),
     ])].filter(Boolean);
-    for (const label of stuck.slice(0, 8)) {
+    const errorOf = (label) => boardErrors.find((e) => (after.find((x) => x.id === e.path)?.label || e.label) === label)?.text || "";
+    for (const label of stuck.slice(0, 10)) {
       if (!window.__jwRescue) break;
       showOverlay(`🤖 JobWatch is asking AI how to finish: ${label}`);
-      const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "" });
+      const error = errorOf(label);
+      // A field the board flags is fixed even when optional: it blocks Submit all the same.
+      const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "", error, force: !!error });
       console.log("[JobWatch] rescue:", label, r);
       if (r?.ok) { rescued.add(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
       else if (r?.why) rescueNotes.set(label, r.why);
@@ -1648,8 +1658,11 @@
     if (AUTO) {
       // After a refused Submit: fill again whatever the form has lost (Ashby
       // can drop an uploaded resume), from the same computed answers.
+      // Then every field the board flags (or left empty) goes to the AI with
+      // its HTML and the board's own error text, which says what to change.
       const refill = async () => {
         const now = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+        const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
         const byPath = new Map(now.map((d) => [d.id, d]));
         let n = 0;
         // The resume always goes in, also where the form calls it optional.
@@ -1658,6 +1671,21 @@
           if (!f) continue;
           const r = await applyFill(f, pkg, byPath).catch(() => null);
           if (r?.ok) n++;
+        }
+        if (!window.__jwRescue) return n;
+        const after2 = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => now);
+        const targets = new Map(); // label -> error text
+        for (const e of errs) {
+          const d = after2.find((x) => x.id === e.path);
+          const label = d?.label || e.label;
+          if (label && !targets.has(label)) targets.set(label, e.text);
+        }
+        for (const d of after2.filter((x) => x.required && !x.filled && !x.survey)) if (!targets.has(d.label)) targets.set(d.label, "");
+        for (const [label, error] of [...targets].slice(0, 10)) {
+          showOverlay(`🤖 JobWatch is asking AI to fix: ${label}`);
+          const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "", error, force: !!error }).catch(() => null);
+          console.log("[JobWatch] repair:", label, error, r);
+          if (r?.ok) { n++; answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
         }
         return n;
       };

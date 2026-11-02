@@ -23,8 +23,10 @@
   const valueHere = (q) => { try { return window.__jwRescueDom?.valueOf(q) || ""; } catch { return ""; } };
   const learn = (saved, missing) => send({ type: "LEARN_ANSWERS", saved, missing }).then((r) => { if (!r?.ok) console.warn("[JobWatch/Rescue] learn failed:", r?.error); });
 
-  async function rescueOnce(question, { jobTitle = "", companyName = "", force = false } = {}) {
-    const history = [];
+  async function rescueOnce(question, { jobTitle = "", companyName = "", force = false, error = "" } = {}) {
+    // The board's own complaint ("Enter a valid URL") rides in history, which
+    // the background passes to rescueField untouched.
+    const history = error ? [{ round: 0, boardError: String(error).slice(0, 300) }] : [];
     let answer = "";
     let required = false;
     for (let round = 1; round <= 3; round++) {
@@ -45,7 +47,9 @@
       await sleep(700);
     }
     const last = await dom("snapshot", question);
-    return { ok: !!last?.filled, filled: !!last?.filled, answer, why: last?.filled ? "" : "still empty after three rounds", required };
+    // A field with a board error counts as done once the AI's last plan said so.
+    const fixed = error ? !!last?.filled && !!history[history.length - 1]?.done : !!last?.filled;
+    return { ok: fixed, filled: !!last?.filled, answer, why: fixed ? "" : error ? `the form still says: ${error}` : "still empty after three rounds", required };
   }
 
   window.__jwRescue = async function rescue(question, opts = {}) {

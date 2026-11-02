@@ -77,6 +77,12 @@ function cleanPlan(plan, html) {
  * deps = { anthropic, model }; input = { question, html, required, round,
  * history, jobTitle, companyName }; user/resume are the person's documents.
  */
+/** The board's error for the field: input.error, or the history entry rescue.js adds. */
+function boardError(input) {
+  const h = Array.isArray(input?.history) ? input.history.find((x) => x && x.boardError) : null;
+  return String(input?.error || h?.boardError || "").slice(0, 300);
+}
+
 async function rescueField(deps, input, user, resume) {
   const html = String(input.html || "").slice(0, 12000);
   const ctx = profileSummary(user || {}, resume || {});
@@ -85,9 +91,10 @@ async function rescueField(deps, input, user, resume) {
     `Applicant profile: ${JSON.stringify(ctx.profile)}`,
     `Resume: ${JSON.stringify(ctx.resume)}`,
     `Field question: ${String(input.question || "").slice(0, 600)}${input.required ? " (required)" : ""}`,
+    boardError(input) ? `The form shows this error on the field: "${boardError(input)}". Change the value so the error goes away (the format it asks for, a valid option, the length it allows), keeping the answer true.` : "",
     `Round ${Number(input.round) || 1} of 3.${Array.isArray(input.history) && input.history.length ? ` Earlier rounds: ${JSON.stringify(input.history).slice(0, 2000)}` : ""}`,
     `Field HTML:\n${html}`,
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
   const body = {
     model: deps.model,
     max_tokens: 4000,

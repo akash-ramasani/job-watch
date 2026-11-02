@@ -50,3 +50,12 @@ test("engine: a typed box never gets a bare Yes/No for a what/which/where questi
   assert.deepEqual(e.answerQuestion(q("If located in the US, in what city and state do you reside?"), P, null).answers.map((a) => a.value), ["San Francisco, California"]);
   assert.deepEqual(e.answerQuestion(q("Are you currently based in the US?"), P, null).answers.map((a) => a.value), ["Yes"]);
 });
+
+test("rescue: the board's error for the field reaches Claude (from history, as rescue.js sends it)", async () => {
+  const a = fake({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ steps: [{ op: "type", ref: "r1", text: "https://linkedin.com/in/ada" }], done: true, answer: "LinkedIn URL", cannot: "" }) }] });
+  await rescueField({ anthropic: a, model: "m" }, { question: "LinkedIn", html: HTML, required: false, round: 1, history: [{ round: 0, boardError: "Enter a valid URL" }] }, USER, RESUME);
+  assert.match(a.sent[0].messages[0].content, /The form shows this error on the field: "Enter a valid URL"/);
+  const b = fake({ stop_reason: "end_turn", content: [{ type: "text", text: JSON.stringify({ steps: [], done: false, answer: "", cannot: "x" }) }] });
+  await rescueField({ anthropic: b, model: "m" }, { question: "School", html: HTML }, USER, RESUME);
+  assert.doesNotMatch(b.sent[0].messages[0].content, /error on the field/);
+});
