@@ -104,7 +104,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
       const value = kind === "select" || kind === "multiselect" || kind === "boolean"
         ? (optLabelByValue[String(ans.value)] ?? ans.value)
         : ans.value;
-      fills.push({ label: a.label, name: ans.name, kind, value, required: !!q?.required });
+      fills.push({ label: a.label, name: ans.name, kind, value: ans.name === "phone" ? nationalPhone(value) : value, required: !!q?.required });
     }
   }
 
@@ -240,6 +240,15 @@ async function educationFills(token, form, resume) {
   return out;
 }
 
+/** Greenhouse's phone box sits next to its own country picker (+1 already
+ *  chosen), so a US number goes in without the country code: "5109356846". */
+function nationalPhone(v) {
+  const d = String(v || "").replace(/\D/g, "");
+  if (d.length === 11 && d[0] === "1") return d.slice(1);
+  if (d.length === 10) return d;
+  return String(v || "");
+}
+
 // ── Voluntary demographic survey ────────────────────────────────────────────
 
 function demoAnswer(label, profile) {
@@ -342,4 +351,4 @@ const US_STATES = {
   DC: "District of Columbia",
 };
 
-module.exports = { prepareGreenhouseApplication };
+module.exports = { prepareGreenhouseApplication, nationalPhone };

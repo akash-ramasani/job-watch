@@ -482,7 +482,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
-const AUTO_GAP_MS = [20000, 45000]; // pause between applications, like a person moving on
+const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
 let autoBusy = false;
 let autoQueue = { at: 0, list: [] };
 
@@ -562,7 +562,10 @@ async function autoFinish(result) {
   if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
   if (result.status === "needs_attention") notify(`Needs you: ${cur.companyName}`, `${cur.title}. ${result.note || ""} The tab is left open.`);
   console.log(`[JobWatch] auto-apply ${result.status}: ${cur.companyName} | ${cur.title} ${result.note || ""}`);
-  chrome.alarms.create("jwAutoKick", { when: st.nextAt });
+  // Chrome won't fire an alarm sooner than 30 s: start the next job directly,
+  // with the alarm as the backstop if the service worker sleeps first.
+  setTimeout(autoTick, Math.max(0, st.nextAt - Date.now()) + 50);
+  chrome.alarms.create("jwAutoKick", { when: Math.max(st.nextAt, Date.now() + 30000) });
 }
 
 async function autoTick() {
@@ -590,6 +593,9 @@ async function autoTick() {
     await saveAuto(st);
     await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
     const tab = await chrome.tabs.create({ url: job.applyUrl, active: false });
+    // Make the next job's tailored resume while this one fills, so it starts at once.
+    const upcoming = autoQueue.list.find((j) => !st.results[j.jobId] && j.jobId !== job.jobId);
+    if (upcoming) tailoredResumeFor({ jobId: upcoming.jobId }).catch(() => {});
     const st2 = await autoState();
     if (st2.current?.jobId === job.jobId) { st2.current.tabId = tab.id; await saveAuto(st2); }
   } catch (err) {
@@ -694,6 +700,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         st.on = false; st.current = null;
         await saveAuto(st);
         sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "AUTO_RETRY") {
+        // Jobs that needed the person or failed go back in the queue (after a fix).
+        const st = await autoState();
+        let n = 0;
+        for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") { delete st.results[id]; n++; }
+        await saveAuto(st);
+        autoQueue = { at: 0, list: [] };
+        sendResponse({ ok: true, retried: n });
         return;
       }
       if (message.type === "AUTO_STATUS") {
@@ -1119,7 +1135,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
             await sleep(300);
 
-            if (node.value === val) {
+            // Masked inputs reformat what was typed ("5109356846" -> "(510) 935-6846").
+            const alnum = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+            if (node.value === val || (alnum(val) && alnum(node.value) === alnum(val))) {
               return { ok: true, actual: node.value, attempt };
             }
           }
@@ -1160,7 +1178,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await sleep(120);
           node.dispatchEvent(new Event("blur", { bubbles: true }));
           await sleep(120);
-          return { ok: node.value === text, actual: node.value };
+          const alnum = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+          return { ok: node.value === text || (!!alnum(text) && alnum(node.value) === alnum(text)), actual: node.value };
         };
 
         const typeCharByChar = async (fieldId, val) => {
