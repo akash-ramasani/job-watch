@@ -366,3 +366,19 @@ $("btn-add-feed").addEventListener("click", submitFeed);
 $("feed-company").addEventListener("keydown", (e) => {
   if (e.key === "Enter") submitFeed();
 });
+
+// ── Fill this page: run the universal filler in the active tab ───────────────
+$("btn-fill-page").addEventListener("click", () => {
+  const status = $("fill-status");
+  status.style.color = "#6b7280";
+  status.textContent = "Starting…";
+  chrome.runtime.sendMessage({ type: "FILL_THIS_PAGE" }, (res) => {
+    if (chrome.runtime.lastError || !res?.ok) {
+      status.style.color = "#dc2626";
+      status.textContent = chrome.runtime.lastError?.message || res?.error || "Could not start on this page.";
+      return;
+    }
+    status.style.color = "#065f46";
+    status.textContent = "JobWatch is filling the form. Watch the banner at the top of the page.";
+  });
+});

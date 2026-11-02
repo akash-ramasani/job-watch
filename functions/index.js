@@ -109,6 +109,7 @@ const { prepareGreenhouseApplication } = require("./lib/apply/prepare.cjs");
 const ledger = require("./lib/apply/ledger.cjs");
 const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
+const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
@@ -4763,6 +4764,37 @@ exports.prepareLeverApplication = onCall(
     });
     logger.info(`prepareLeverApplication: uid=${uid} site=${site} fields=${out.total} filled=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareLeverApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
+    return { ...out, formKey };
+  }
+);
+
+// Every other board (Workday, iCIMS, SmartRecruiters, Workable, Taleo,
+// SuccessFactors, Oracle, a company's own careers site, ...): the fields come
+// scraped from the page by extension/lib/generic-dom.js, the posting from
+// Workday's public API or the job JobWatch already holds. Same engine. An
+// empty domFields still returns the resume and its history (Workday asks for
+// them on later steps).
+exports.prepareGenericApplication = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const { source = "web", applyUrl = "", formKey = "", externalId = "", domFields = [], jobTitle = "", companyName = "", jobLocationName = "", descriptionText = "" } = request.data || {};
+    if (!applyUrl) throw new HttpsError("invalid-argument", "applyUrl is required.");
+    if (!Array.isArray(domFields)) throw new HttpsError("invalid-argument", "domFields must be a list.");
+    if (formKey) {
+      const dup = await ledger.alreadyApplied(db, uid, String(formKey));
+      if (dup.alreadyApplied) { logger.info(`prepareGenericApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
+    }
+    let openai = null;
+    try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareGenericApplication: no OpenAI client, free text will park:", e.message); }
+    const t0 = Date.now();
+    const out = await prepareGenericApplication(uid, { db, openai, model: OPENAI_FAST_MODEL, sharedJobs: db.collection("users").doc(ADMIN_UID).collection("jobs") }, {
+      source: String(source).slice(0, 40), applyUrl: String(applyUrl).slice(0, 2000), externalId: String(externalId).slice(0, 200),
+      domFields: domFields.slice(0, 150), jobTitle, companyName, jobLocationName, descriptionText: String(descriptionText).slice(0, 20000),
+    });
+    logger.info(`prepareGenericApplication: uid=${uid} source=${source} fields=${out.total} filled=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
+    if (out.parked?.length) logger.info(`prepareGenericApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };
   }
 );

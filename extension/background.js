@@ -364,7 +364,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let applyUrl = (job.absolute_url || "").replace(/\/$/, "");
         if (/jobs\.(eu\.)?lever\.co\//i.test(applyUrl)) { if (!/\/apply$/.test(applyUrl)) applyUrl += "/apply"; }
         else if (/greenhouse\.io\//i.test(applyUrl)) { /* the posting page carries the form */ }
-        else if (!applyUrl.includes("/application")) applyUrl += "/application";
+        else if (/myworkdayjobs\.com\/|myworkdaysite\.com\//i.test(applyUrl)) { if (!/\/apply(\/|$)/.test(applyUrl)) applyUrl += "/apply"; }
+        else if (/jobs\.ashbyhq\.com\//i.test(applyUrl) && !applyUrl.includes("/application")) applyUrl += "/application";
+        // Every other board: the posting page itself; content/universal.js fills the form when it appears.
         console.log("[JobWatch] AUTO_APPLY → opening:", applyUrl, "| absolute_url was:", job.absolute_url);
         await chrome.tabs.create({ url: applyUrl });
         sendResponse({ ok: true });
@@ -579,6 +581,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
           .catch((err) => sendResponse({ ok: false, error: err.message }));
         return true;
+      }
+
+      // ── Any other board: the computed application from the scanned form ──
+      if (message.type === "GET_GENERIC_FILL_DATA") {
+        try {
+          const { idToken } = await getFreshToken();
+          const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
+          const job = pendingJob && message.externalId && jobMatchesExternalId(pendingJob, message.externalId) ? pendingJob : null;
+          const res = await fetch(`${FUNCTIONS_BASE}/prepareGenericApplication`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ data: {
+              source: message.source || "web", applyUrl: message.applyUrl || sender?.tab?.url || "", formKey: message.formKey || "",
+              externalId: message.externalId || "", domFields: message.domFields || [],
+              jobTitle: job?.title || message.jobTitle || "", companyName: job?.companyName || message.companyName || "",
+              jobLocationName: job?.locationName || message.locationName || "", descriptionText: message.descriptionText || "",
+            } }),
+          });
+          const json = await res.json();
+          if (!res.ok || json.error) throw new Error(json.error?.message || `prepareGenericApplication ${res.status}`);
+          sendResponse({ ok: true, data: json.result, pendingJob: job });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        return;
+      }
+
+      // ── Any other board: run a lib/generic-dom.js helper in the MAIN world ─
+      if (message.type === "EXEC_GENERIC") {
+        const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
+        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/generic-dom.js"] })
+          .then(() => chrome.scripting.executeScript({
+            target, world: "MAIN",
+            func: (action, args) => window.__jwGeneric[action](...(args || [])),
+            args: [message.action, message.args || []],
+          }))
+          .then((results) => sendResponse({ ok: true, result: results?.[0]?.result }))
+          .catch((err) => sendResponse({ ok: false, error: err.message }));
+        return true;
+      }
+
+      // ── Popup: fill the form in the active tab, whatever the site ────────
+      if (message.type === "FILL_THIS_PAGE") {
+        try {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.id || !/^https?:/i.test(tab.url || "")) throw new Error("Open a job application page first.");
+          const target = { tabId: tab.id, allFrames: true };
+          await chrome.scripting.executeScript({ target, func: () => { window.__jwManualStart = true; } });
+          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/universal.js"] });
+          sendResponse({ ok: true });
+        } catch (err) {
+          sendResponse({ ok: false, error: err.message });
+        }
+        return;
       }
 
       // ── Ashby: run a lib/ashby-dom.js helper in the page's MAIN world ─────

@@ -45,6 +45,10 @@ function formKeyFromUrl(url) {
   if (m) return { source: "greenhouse", org: m[1], postingId: m[2], formKey: formKeyOf("greenhouse", m[1], m[2]) };
   m = u.match(/jobs\.(?:eu\.)?lever\.co\/([^/?#]+)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
   if (m) return { source: "lever", org: decodeURIComponent(m[1]), postingId: m[2].toLowerCase(), formKey: formKeyOf("lever", decodeURIComponent(m[1]), m[2].toLowerCase()) };
+  // Workday: <tenant>.wdN.myworkdayjobs.com/<locale>/<site>/job/<loc>/<Title>_<ReqId>[/apply/...]
+  m = u.match(/\/\/([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com\/(?:[a-z]{2}-[A-Z]{2}\/)?[^/?#]+\/(?:job|details)\/(?:[^?#]*\/)?[^/?#]*_([A-Za-z0-9-]+)(?:[/?#]|$)/i)
+    || u.match(/\/\/[^/]*myworkdaysite\.com\/recruiting\/([^/?#]+)\/[^/?#]+\/(?:job|details)\/(?:[^?#]*\/)?[^/?#]*_([A-Za-z0-9-]+)(?:[/?#]|$)/i);
+  if (m) return { source: "workday", org: m[1].toLowerCase(), postingId: m[2], formKey: formKeyOf("workday", m[1], m[2]) };
   return null;
 }
 

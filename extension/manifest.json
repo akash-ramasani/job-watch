@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.6.2",
-  "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse and Lever. You review and submit.",
+  "version": "1.7.0",
+  "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse, Lever, Workday and every other job board. You review and submit.",
   "permissions": [
     "storage",
     "tabs",
@@ -80,6 +80,56 @@
       "js": [
         "content/highlight.js",
         "content/lever.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.myworkdayjobs.com/*",
+        "https://*.myworkdaysite.com/*",
+        "https://*.icims.com/*",
+        "https://*.taleo.net/*",
+        "https://*.successfactors.com/*",
+        "https://*.successfactors.eu/*",
+        "https://*.sapsf.com/*",
+        "https://*.smartrecruiters.com/*",
+        "https://*.workable.com/*",
+        "https://*.bamboohr.com/*",
+        "https://*.jobvite.com/*",
+        "https://*.oraclecloud.com/*",
+        "https://*.eightfold.ai/*",
+        "https://*.applytojob.com/*",
+        "https://*.breezy.hr/*",
+        "https://recruiting.paylocity.com/*",
+        "https://*.ultipro.com/*",
+        "https://*.ukg.net/*",
+        "https://workforcenow.adp.com/*",
+        "https://myjobs.adp.com/*",
+        "https://*.paycomonline.net/*",
+        "https://*.pageuppeople.com/*",
+        "https://*.csod.com/*",
+        "https://*.avature.net/*",
+        "https://*.brassring.com/*",
+        "https://jobs.silkroad.com/*",
+        "https://*.applicantpro.com/*",
+        "https://apply.interfolio.com/*",
+        "https://*.peopleadmin.com/*",
+        "https://www.governmentjobs.com/*",
+        "https://www.schooljobs.com/*",
+        "https://ats.rippling.com/*",
+        "https://*.recruitee.com/*",
+        "https://*.teamtailor.com/*",
+        "https://*.jobs.personio.com/*",
+        "https://*.jobs.personio.de/*",
+        "https://app.dover.com/*",
+        "https://*.pinpointhq.com/*",
+        "https://*.freshteam.com/*",
+        "https://*.zohorecruit.com/*"
+      ],
+      "all_frames": true,
+      "js": [
+        "content/highlight.js",
+        "content/universal.js"
       ],
       "run_at": "document_idle"
     }
