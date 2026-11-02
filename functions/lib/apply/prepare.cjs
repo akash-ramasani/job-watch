@@ -99,11 +99,12 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     const q = qByLabel.get(a.label);
     const kind = q ? fieldKind(q.fields[0]) : "text";
     for (const ans of a.answers) {
-      if (ans.isFile) { fills.push({ label: a.label, name: ans.name, kind: "file" }); continue; }
+      // `required` lets the page tell a missed optional field from a blocking one.
+      if (ans.isFile) { fills.push({ label: a.label, name: ans.name, kind: "file", required: !!q?.required }); continue; }
       const value = kind === "select" || kind === "multiselect" || kind === "boolean"
         ? (optLabelByValue[String(ans.value)] ?? ans.value)
         : ans.value;
-      fills.push({ label: a.label, name: ans.name, kind, value });
+      fills.push({ label: a.label, name: ans.name, kind, value, required: !!q?.required });
     }
   }
 
@@ -136,7 +137,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   // fill so the content script pastes the generated letter ("enter manually").
   const clQ = questions.find((q) => (q.fields || []).some((f) => f.name === "cover_letter"));
   if (coverText && clQ && (clQ.fields || []).some((f) => f.type === "textarea")) {
-    fills.push({ label: "Cover Letter", kind: "cover-text", value: coverText });
+    fills.push({ label: "Cover Letter", kind: "cover-text", value: coverText, required: !!clQ.required });
     // Written and pasted: a required cover letter no longer needs the person.
     for (let i = review.length - 1; i >= 0; i--) if (/cover letter/i.test(review[i].label)) review.splice(i, 1);
   }
@@ -277,7 +278,7 @@ function demographicFills(form, profile, answerQuestion = null) {
       if (v) pick = opts.find((o) => o.label === v) || null;
     }
     if (!pick) pick = opts.find((o) => o.decline_to_answer) || opts.find((o) => /prefer not|decline|do not wish|don't wish|choose not/i.test(o.label));
-    if (pick) out.push({ label: q.label, kind: "select", value: pick.label });
+    if (pick) out.push({ label: q.label, kind: "select", value: pick.label, required: false });
   }
   return out;
 }
@@ -321,7 +322,7 @@ function complianceFills(form, profile) {
         }
       }
       if (!pick) pick = decline;
-      if (pick) out.push({ label: q.label, kind: "select", value: pick.label, eeo });
+      if (pick) out.push({ label: q.label, kind: "select", value: pick.label, eeo, required: false });
     }
   }
   return out;

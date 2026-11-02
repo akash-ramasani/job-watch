@@ -382,7 +382,11 @@
     }
     hl.hide();
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
-    const needs = [...new Set([...pending.map((f) => f.label), ...(data.review || []).map((r) => r.label), ...boardNotes.keys()])].filter(Boolean);
+    // An optional field that would not fill (a cover letter the form doesn't
+    // require, a voluntary survey) never holds the application back.
+    const blocking = pending.filter((f) => f.required !== false);
+    if (pending.length > blocking.length) log("optional fields left empty:", pending.filter((f) => f.required === false).map((f) => f.label));
+    const needs = [...new Set([...blocking.map((f) => f.label), ...(data.review || []).map((r) => r.label), ...boardNotes.keys()])].filter(Boolean);
     const doneMsg = needs.length
       ? `JobWatch filled ${ok} of ${data.fills.length}. These still need you, then press Submit:`
       : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then press Submit.`;
@@ -390,7 +394,7 @@
     // Record the attempt: every answer, everything left for the person
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [
-      ...pending.map((f) => ({ path: f.name || "", label: f.label, note: boardNotes.has(f.label) ? `could not be filled. The form says: ${boardNotes.get(f.label)}` : "could not be filled on the page" })),
+      ...blocking.map((f) => ({ path: f.name || "", label: f.label, note: boardNotes.has(f.label) ? `could not be filled. The form says: ${boardNotes.get(f.label)}` : "could not be filled on the page" })),
       ...(Array.isArray(data.review) ? data.review.map((r) => ({ path: r.path || "", label: r.label || "", note: r.note || "needs you" })) : []),
       ...[...boardNotes.entries()].filter(([label]) => !pending.some((f) => f.label === label) && !(data.review || []).some((r) => r.label === label)).map(([label, text]) => ({ path: "", label, note: `The form says: ${text}` })),
     ];
