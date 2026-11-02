@@ -365,6 +365,36 @@
         log("phone country:", r);
       }
     } catch (e) { warn("phone country:", e.message); }
+    // The newer phone box carries its own flag picker; with no country chosen
+    // (a globe) Greenhouse can reject the number. US numbers get United States.
+    try {
+      const flag = document.querySelector(".iti__selected-country");
+      const title = flag?.getAttribute("title") || "";
+      if (flag && (!title || /select country/i.test(title))) {
+        if (/^(us|usa|united states)/i.test(String(data.country || "United States"))) {
+          flag.click();
+          await sleep(300);
+          const us = document.querySelector("li.iti__country[data-country-code='us']");
+          if (us) { us.click(); await sleep(200); log("phone flag:", flag.getAttribute("title")); }
+        }
+      }
+    } catch (e) { warn("phone flag:", e.message); }
+    // A second Education block the board added from a saved MyGreenhouse
+    // profile, with its School left empty, would hold the application back.
+    // JobWatch fills one education entry: remove the empty extras.
+    try {
+      const blocks = [...document.querySelectorAll(".education--form")];
+      for (const b of blocks.slice(1).reverse()) {
+        const school = b.querySelector("input[id^='school--']");
+        const box = school?.closest("[class*='select__control']");
+        const chosen = box?.querySelector("[class*='single-value'], [class*='singleValue']");
+        if (school && !school.value && !chosen) {
+          b.querySelector("button[aria-label='Remove education']")?.click();
+          await sleep(300);
+          log("removed an extra education block with no school");
+        }
+      }
+    } catch (e) { warn("education extras:", e.message); }
 
     // Mandatory consent / acknowledgement boxes the form adds outside its questions.
     const consents = await tickRequiredConsents();

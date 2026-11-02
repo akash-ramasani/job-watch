@@ -108,3 +108,14 @@ test("a lone optional opt-out box is left unticked; a lone acknowledgement is ti
   assert.equal(answerQuestion(q(true, "I decline to answer the following questions."), profile, null).answers.length, 1);
   assert.equal(answerQuestion({ label: "Privacy notice", required: false, fields: [{ name: "x", type: "multi_value_single_select", values: [{ label: "I acknowledge", value: 2 }] }] }, profile, null).answers.length, 1);
 });
+
+test("Stripe-style questions: current or previous title/employer, anticipated work location, abbreviated degrees", async () => {
+  const { answerQuestion } = await engine();
+  const profile = buildProfileForJob({}, { roles: [{ title: "Senior Software Engineer", company: "Runn Technologies", startDate: "Jan 2023", endDate: "Present" }], education: [{ degree: "Master of Science, Computer Science" }] }, { companyName: "Stripe", locationName: "New York, NY" });
+  const text = (label) => answerQuestion({ label, required: true, fields: [{ name: "q", type: "input_text" }] }, profile, null).answers[0]?.value;
+  assert.equal(text("What is your current or previous job title?"), "Senior Software Engineer");
+  assert.equal(text("Who is your current or previous employer?"), "Runn Technologies");
+  assert.equal(text("Please select the location you anticipate working in for the role in which you are applying."), "New York, NY");
+  const edu = answerQuestion({ label: "What is the highest level of education you have completed?", required: true, fields: [{ name: "e", type: "multi_value_single_select", values: [{ label: "B.A./ B.S.", value: 1 }, { label: "M.A./ M.S.", value: 2 }, { label: "Ph.D", value: 3 }] }] }, profile, null);
+  assert.deepEqual(edu.answers, [{ name: "e", value: 2 }]);
+});

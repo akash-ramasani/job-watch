@@ -258,7 +258,9 @@ function classify(label, kind = "") {
   if (/^(legal )?(first|given) name/.test(l)) return "legalFirstName";
   if (/^(legal )?(last name|surname|family name)/.test(l)) return "legalLastName";
   if (/^middle name/.test(l)) return "middleName";
-  if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b/.test(l)) return "currentTitle";
+  if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b|(current|most recent|present) or (previous|past|most recent|last) (job )?title\b/.test(l)) return "currentTitle";
+  // "Please select the location you anticipate working in for the role": the job's own place.
+  if (text && /\blocation (you )?(anticipate|plan|expect|intend|would like|want)( to)? (be )?work(ing)?\b|where (do )?you (anticipate|plan|expect|intend) (to )?work(ing)?\b/.test(l)) return "workLocation";
   if (text && /universit|college|school.{0,25}attend|alma mater/.test(l) && !/degree|graduat|relocat/.test(l)) return "university";
   if (/\b(us|u\.s\.|united states)\b.{0,15}(or equivalent )?time ?zone|time ?zone.{0,20}\b(us|u\.s\.)\b/.test(l)) return "usTimezone";
   // "If located in the US, in what city and state do you reside?" asks for the place.
@@ -325,7 +327,7 @@ function classify(label, kind = "") {
   if (/provide .{0,30}references|professional references/.test(l)) return "referencesWilling";
   // Word-bounded: "current ... company" as substrings misfires on labels like
   // "current employees of a publicly-traded company" (Robinhood COI).
-  if (/\b(current|most recent|present)\s+(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
+  if (/\b(current|most recent|present)\s+(or (previous|past|most recent|last)\s+)?(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
   if (/security clearance/.test(l)) return "securityClearance";
   // "Select a response that describes your level of experience with AI tools"
   // (Exploratory / Individual / Team / Cross-functional): picked from the resume.
@@ -1092,6 +1094,14 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return out([{ name, value: level || status }], SOURCE.PROFILE, 1);
   }
 
+  // Where the person would work in this role: the job's posted place; a remote
+  // posting or one with no place gets the person's remote city.
+  if (key === "workLocation" && !isSelect) {
+    const jl = String(profile.jobLocationName || "").trim();
+    const remote = !jl || /remote|anywhere/i.test(jl);
+    const v = remote ? String(profile.remoteLocation || "San Francisco, CA") : jl;
+    return out([{ name, value: v }], SOURCE.RULE, 0.9, remote ? "remote role: the person's remote city" : "the job's posted location");
+  }
   // Current location as a composite ("Hayward, California, United States").
   if (key === "location") {
     const composite = [profile.city, profile.region || profile.state, profile.country].filter(Boolean).join(", ");
@@ -1501,8 +1511,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   if (key === "educationLevel" && isSelect) {
     const edu = norm((profile.education || []).map((e) => e.degree || "").join(" | "));
     const pats = /ph\.?d|doctor/.test(edu) ? [/doctor|ph\.?d/, /master|graduate/]
-      : /master|m\.?s\.?\b|m\.?sc|mba|m\.?tech/.test(edu) ? [/master/, /graduate degree/, /bachelor/]
-      : /bachelor|b\.?s\.?\b|b\.?a\.?\b|b\.?tech|b\.?e\.?\b/.test(edu) ? [/bachelor|undergraduate|4.year|four.year/, /some college/] : null;
+      // Abbreviated options too: "B.A./ B.S.", "M.A./ M.S.", "Ph.D".
+      : /master|m\.?s\.?\b|m\.?sc|mba|m\.?tech/.test(edu) ? [/master/, /(^|[^a-z])m\.?\s?[as]\.?([^a-z]|$)|\bmba\b|m\.?b\.?a\b/, /graduate degree/, /bachelor/, /(^|[^a-z])b\.?\s?[as]\.?([^a-z]|$)/]
+      : /bachelor|b\.?s\.?\b|b\.?a\.?\b|b\.?tech|b\.?e\.?\b/.test(edu) ? [/bachelor|undergraduate|4.year|four.year/, /(^|[^a-z])b\.?\s?[as]\.?([^a-z]|$)/, /some college/] : null;
     if (!pats) return unanswered("education level needs the resume's education");
     const m = findOnly(primary, pats);
     return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.95, "highest degree on the resume") : unanswered("no option matches the highest degree");
