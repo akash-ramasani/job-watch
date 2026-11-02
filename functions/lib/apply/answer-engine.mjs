@@ -278,6 +278,8 @@ function classify(label, kind = "") {
   if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) (in|near|within) /.test(l) && (/:\s*\S/.test(l) || !/following|below|listed|these|one of/.test(l))) return "livesIn";
   // "Where are you located?" as a pick list (Montreal | Other).
   if (choice && /^where (are you|do you) (currently )?(located|based|live|reside)/.test(l)) return "whereLocated";
+  // Procurement / contract-award involvement for this company: a conflict-of-interest check.
+  if (choice && /procurement|contract award/.test(l)) return "conflictOfInterest";
   if (choice && /prior government employment|previously (worked|employed) (for|by|with|at) (a |the )?(federal |state |us |u\.s\. )?government|government employee|ever (worked|been employed) .{0,20}government/.test(l)) return "priorGovernment";
   if (/current job level|^what is your (current )?level\b|seniority level/.test(l)) return "jobLevel";
   if (/^are you (familiar with|open to|comfortable).{0,40}\bai\b/.test(l)) return "openToAiTools";
@@ -1590,8 +1592,14 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   }
   // Prior government employment: the saved answer only (set profile.priorGovernmentEmployment).
   if (key === "priorGovernment") {
-    const v = profile.priorGovernmentEmployment;
-    if (v == null || v === "") return unanswered("prior government employment needs profile.priorGovernmentEmployment");
+    let v = profile.priorGovernmentEmployment;
+    // Not saved: the resume says. No government employer among the roles -> No.
+    if (v == null || v === "") {
+      const roles = profile.roles || [];
+      const gov = roles.some((r) => /government|federal|\bstate of\b|\bcity of\b|\bcounty\b|department of|ministry|\bu\.?s\.? (army|navy|air force|marine)|public sector|municipal/i.test(`${r.company || r.employer || ""} ${r.title || ""}`));
+      if (!roles.length || gov) return unanswered("prior government employment needs profile.priorGovernmentEmployment");
+      v = "No";
+    }
     const ans = typeof v === "boolean" ? (v ? "Yes" : "No") : (/^y/i.test(String(v)) ? "Yes" : "No");
     if (isSelect) { const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + ans.toLowerCase() + "\\b")]); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
     return out([{ name, value: ans }], SOURCE.PROFILE, 1);

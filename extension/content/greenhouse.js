@@ -457,7 +457,18 @@
     // An optional question (Cover Letter, the voluntary EEO survey) never
     // holds the application back, even when the page marks it.
     const still = new Map(ghProblems().filter((p) => !isOptional(p.label)).map((p) => [p.label, p]));
-    const blocking = pending.filter((f) => f.required !== false && !f.absent && !rescued.has(f.label));
+    // A field filled after its own fill failed (the AI rescue worked on the
+    // page's label, "Location (City)" for the fill "Location") is done.
+    const filledNow = (f) => {
+      if (f.kind === "file" || f.kind === "cover-text") return false;
+      const el = elementFor(f);
+      if (!el) return false;
+      if (el.type === "checkbox" || el.type === "radio") return !!(el.closest("fieldset, [role=group], [role=radiogroup]") || el.parentElement)?.querySelector("input:checked");
+      const box = el.closest("[class*='select__control'], [class*='-control']");
+      if (box?.querySelector("[class*='single-value'], [class*='singleValue'], [class*='multi-value'], [class*='multiValue']")) return true;
+      return !box && !!String(el.value || "").trim();
+    };
+    const blocking = pending.filter((f) => f.required !== false && !f.absent && !rescued.has(f.label) && !filledNow(f));
     const needs = [...new Set([
       ...blocking.map((f) => f.label),
       ...(data.review || []).map((r) => r.label).filter((l) => !rescued.has(l)),

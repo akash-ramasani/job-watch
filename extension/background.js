@@ -526,6 +526,7 @@ const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab 
 const AUTO_IDLE_MS = 15 * 60 * 1000; // queue empty: look for new jobs this often
 const AUTO_RETRY_MS = [30 * 60 * 1000, 2 * 60 * 60 * 1000]; // after the 1st and 2nd failure
 const AUTO_MAX_TRIES = 3;
+const AUTO_MAX_OPEN = 3; // "needs you" tabs left open at once
 const CLOSED_POSTING = /not found|no longer (accepting|available|open)|position (has been )?(filled|closed)|job (is )?closed|posting (was )?(removed|expired|closed)|\b404\b/i;
 let autoBusy = false;
 let autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
@@ -630,9 +631,23 @@ async function autoFinish(result) {
   st.current = null;
   st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
   await saveAuto(st);
-  // Submitted, skipped or failed: close the tab. Needs you: leave it open to finish.
+  // Submitted, skipped or failed: close the tab. Needs you: leave it open to
+  // finish, but only the newest AUTO_MAX_OPEN; older ones close (the popup
+  // lists them with their links, and they retry once a missing answer is saved).
   if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
-  if (result.status === "needs_attention") notify(`Needs you: ${cur.companyName}`, `${cur.title}. ${result.note || ""} The tab is left open.`);
+  if (result.status === "needs_attention") {
+    const open = Object.entries(st.results).filter(([, r]) => r.status === "needs_attention" && r.tabId).sort((a, b) => b[1].at - a[1].at);
+    for (const [id, r] of open.slice(AUTO_MAX_OPEN)) {
+      chrome.tabs.remove(r.tabId).catch(() => {});
+      st.results[id].tabId = null;
+    }
+    await saveAuto(st);
+    // One notification that updates, not one per job.
+    const waiting = Object.values(st.results).filter((r) => r.status === "needs_attention").length;
+    try {
+      chrome.notifications.create("jwNeeds", { type: "basic", iconUrl: "icons/icon128.png", title: `JobWatch: ${waiting} application${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} you`, message: `Latest: ${cur.companyName}, ${cur.title}. ${result.note || ""}`.slice(0, 250), priority: 0 });
+    } catch (_) { /* a nicety */ }
+  }
   console.log(`[JobWatch] auto-apply ${result.status}: ${cur.companyName} | ${cur.title} ${result.note || ""}`);
   // Chrome won't fire an alarm sooner than 30 s: start the next job directly,
   // with the alarm as the backstop if the service worker sleeps first.

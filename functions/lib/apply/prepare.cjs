@@ -117,7 +117,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     const place = parsePlace(locName) || parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
     if (place) {
       const stateFull = place.state || US_STATES[(place.abbr || "").toUpperCase()] || "";
-      fills.push({ label: "Location", kind: "location", value: place.city, match: stateFull ? `${place.city}, ${stateFull}` : place.city });
+      fills.push({ label: "Location", kind: "location", value: place.city, match: stateFull ? `${place.city}, ${stateFull}` : place.city, required: !!locQ.required });
     }
   }
 
@@ -333,7 +333,14 @@ function complianceFills(form, profile) {
         }
       }
       if (!pick) pick = decline;
-      if (pick) out.push({ label: q.label, kind: "select", value: pick.label, eeo, required: false });
+      if (pick) out.push({ label: q.label, kind: "select", value: pick.label, eeo, required: !!q.required });
+      // Greenhouse's EEOC survey shows Race only after "Are you Hispanic/Latino?"
+      // (Yes / No / Decline To Self Identify), which the form JSON leaves out.
+      if (eeo === "race" && !(section.questions || []).some((x) => /hispanic|latino/i.test(x.label || ""))) {
+        const e = nrm(profile.eeoEthnicity);
+        const h = !e || /decline|prefer not|don't wish/.test(e) ? "Decline To Self Identify" : /hispanic|latino/.test(e) ? "Yes" : "No";
+        out.unshift({ label: "Are you Hispanic/Latino?", kind: "select", value: h, eeo: "hispanic", required: !!q.required });
+      }
     }
   }
   return out;

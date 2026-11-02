@@ -200,7 +200,9 @@ test("required fields from the 2026-10-12 Virta form and the live-form sweep are
   assert.equal(answer(F("Will you now or in the future require Reducto to commence or sponsor an immigration case in order to employ you?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you need Chai to sponsor your work authorization in the United States?", "ValueSelect", { options: ["Yes - I need Chai’s sponsorship for a visa transfer", "Yes - I need Chai’s sponsorship for a new visa", "No - I am authorized to work in the U.S. without employer sponsorship"] })), "Yes - I need Chai’s sponsorship for a new visa");
   assert.equal(answer(F("I authorize the RV Tech Talent Acquisition team to consider me for other job opportunities", "ValueSelect", { options: ["Yes", "No"] })), "Yes");
-  assert.match(answer(F("Prior Government Employment?", "Boolean")), /^PARKED/);
+  // Not saved: no government employer on the resume -> No; one there -> ask.
+  assert.equal(answer(F("Prior Government Employment?", "Boolean")), "No");
+  assert.match(answer(F("Prior Government Employment?", "Boolean"), { profile: { ...p, roles: [{ title: "Analyst", company: "Department of Energy" }] } }), /^PARKED/);
   assert.equal(answer(F("Prior Government Employment?", "Boolean"), { profile: { ...p, priorGovernmentEmployment: "No" } }), "No");
   // Salary as a number from the posting's own range; remote history from role locations.
   const paid = buildProfileForJob(USER, RESUME, job({ descriptionHtml: "<p>Salary Range $120,000 - $160,000 • Offers Equity</p>" }), { now: NOW });

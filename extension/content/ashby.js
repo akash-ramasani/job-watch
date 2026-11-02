@@ -1322,14 +1322,15 @@
     return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
   }
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
-  async function autoSubmitAshby(manual, pendingJob, answersLog) {
+  async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, again = false) {
     if (manual.size) {
       window.__jwNotify.show(`Auto-apply: ${manual.size === 1 ? "1 field needs" : `${manual.size} fields need`} you. Left open for you; the queue moves on.`, "warning", { items: [...manual.keys()] });
       return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
     }
     // Last look before Submit: every required field filled (the resume included).
-    const final = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
-    const empty = final.filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label);
+    const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => d.required && !d.filled && !d.survey).map((d) => d.label);
+    let empty = await scanEmpty();
+    if (empty.length && refill && await refill()) empty = await scanEmpty();
     if (empty.length) {
       window.__jwNotify.show(`Auto-apply: ${empty.length === 1 ? "1 required field is" : `${empty.length} required fields are`} still empty. Left open for you; the queue moves on.`, "warning", { items: empty });
       return autoReport("needs_attention", `still empty: ${empty.slice(0, 4).join("; ")}`);
@@ -1354,6 +1355,11 @@
         showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
         return autoReport("needs_attention", "CAPTCHA challenge");
       }
+    }
+    // Refused once: refill what went missing (a dropped resume) and press Submit again.
+    if (refill && !again) {
+      const n = await refill();
+      if (n) { showOverlay("⏳ Auto-apply: Ashby refused it; refilled the missing fields, submitting again…"); return autoSubmitAshby(manual, pendingJob, answersLog, refill, true); }
     }
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
@@ -1633,7 +1639,24 @@
     }).then((r) => { if (!r?.ok) console.warn("[JobWatch] ledger(filled) failed:", r?.error); });
 
     // Unattended auto-apply submits when nothing is left for the person.
-    if (AUTO) { await autoSubmitAshby(manual, pendingJob, answersLog); return true; }
+    if (AUTO) {
+      // After a refused Submit: fill again whatever the form has lost (Ashby
+      // can drop an uploaded resume), from the same computed answers.
+      const refill = async () => {
+        const now = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+        const byPath = new Map(now.map((d) => [d.id, d]));
+        let n = 0;
+        for (const d of now.filter((x) => x.required && !x.filled && !x.survey)) {
+          const f = fillByPath.get(d.id);
+          if (!f) continue;
+          const r = await applyFill(f, pkg, byPath).catch(() => null);
+          if (r?.ok) n++;
+        }
+        return n;
+      };
+      await autoSubmitAshby(manual, pendingJob, answersLog, refill);
+      return true;
+    }
     // Otherwise never auto-submit. Watch for the person's own submission (30
     // min) so the job is logged as applied and the queue advances.
     const watchStart = Date.now();
