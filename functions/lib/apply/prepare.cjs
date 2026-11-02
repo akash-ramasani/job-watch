@@ -165,6 +165,8 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     total: questions.length,
     totalFields: questions.length,
     requiredTotal: questions.filter((q) => q.required).length,
+    // Questions the form marks optional: never "needs you", whatever the page shows.
+    optionalLabels: questions.filter((q) => !q.required && q.label).map((q) => q.label),
     parked: review.map((r) => `${r.label.slice(0, 60)} -> ${r.note}`),
   };
 }

@@ -99,3 +99,12 @@ test("job locations: the work mode is not part of the city", () => {
   assert.equal(city("Hybrid"), null);
   assert.equal(city("Remote - US"), null);
 });
+
+test("a lone optional opt-out box is left unticked; a lone acknowledgement is ticked", async () => {
+  const { answerQuestion } = await engine();
+  const profile = buildProfileForJob({ eeoGender: "Male" }, {}, { companyName: "Airbnb" });
+  const q = (required, label) => ({ label: "U.S. Equal Opportunity Employment Information (Completion is voluntary)", required, fields: [{ name: "q[]", type: "multi_value_multi_select", values: [{ label, value: 1 }] }] });
+  assert.equal(answerQuestion(q(false, "I decline to answer the following questions."), profile, null).answers.length, 0);
+  assert.equal(answerQuestion(q(true, "I decline to answer the following questions."), profile, null).answers.length, 1);
+  assert.equal(answerQuestion({ label: "Privacy notice", required: false, fields: [{ name: "x", type: "multi_value_single_select", values: [{ label: "I acknowledge", value: 2 }] }] }, profile, null).answers.length, 1);
+});

@@ -407,12 +407,14 @@
     // An optional field that would not fill (a cover letter the form doesn't
     // require, a voluntary survey) never holds the application back.
     const optionalLeft = pending.filter((f) => f.required === false || f.absent);
+    const optionalSet = new Set([...(data.optionalLabels || []), ...data.fills.filter((f) => f.required === false).map((f) => f.label)].map(squash));
+    const isOptional = (l) => optionalSet.has(squash(l));
     if (optionalLeft.length) log("optional fields left empty:", optionalLeft.map((f) => f.label));
     // AI rescue: every mandatory field ("*") still empty or flagged goes to
     // Claude with its HTML; it says what to click, type or pick from the profile.
     const rescued = new Set();
     const rescueNotes = new Map();
-    const stuck = [...new Set([...pending.filter((f) => f.required !== false && !f.absent).map((f) => f.label), ...(data.review || []).map((r) => r.label), ...ghProblems().map((p) => p.label)])].filter(Boolean);
+    const stuck = [...new Set([...pending.filter((f) => f.required !== false && !f.absent).map((f) => f.label), ...(data.review || []).map((r) => r.label), ...ghProblems().map((p) => p.label)])].filter((l) => l && !isOptional(l));
     for (const label of stuck.slice(0, 8)) {
       if (!window.__jwRescue) break;
       banner(`JobWatch is asking AI how to finish: ${label}`);
@@ -422,13 +424,15 @@
       else if (r?.why) rescueNotes.set(label, r.why);
     }
     // What is still wrong after the rescue, by the page's own "*" and errors.
-    const still = new Map(ghProblems().map((p) => [p.label, p]));
+    // An optional question (Cover Letter, the voluntary EEO survey) never
+    // holds the application back, even when the page marks it.
+    const still = new Map(ghProblems().filter((p) => !isOptional(p.label)).map((p) => [p.label, p]));
     const blocking = pending.filter((f) => f.required !== false && !f.absent && !rescued.has(f.label));
     const needs = [...new Set([
       ...blocking.map((f) => f.label),
       ...(data.review || []).map((r) => r.label).filter((l) => !rescued.has(l)),
       ...[...still.keys()],
-    ])].filter((l) => l && (still.has(l) || !rescued.has(l)) && !optionalLeft.some((f) => f.label === l && !still.has(l)))
+    ])].filter((l) => l && !isOptional(l) && (still.has(l) || !rescued.has(l)) && !optionalLeft.some((f) => f.label === l && !still.has(l)))
       // The location fill is named "Location"; the page calls it "Location (City)": list it once.
       .filter((l, _i, all) => !(l === "Location" && all.some((x) => x !== l && x.startsWith("Location"))));
     for (const l of rescueNotes.keys()) if (needs.includes(l)) boardNotes.set(l, `${boardNotes.get(l) ? boardNotes.get(l) + ". " : ""}AI: ${rescueNotes.get(l)}`);

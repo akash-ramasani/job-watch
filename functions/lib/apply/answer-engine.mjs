@@ -1663,7 +1663,7 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 1);
       // A single-option select is a mandatory acknowledgement regardless of key.
       const allOpts = primary.values || primary.options || [];
-      if (allOpts.length === 1)
+      if (allOpts.length === 1 && !(!q.required && OPT_OUT.test(norm(allOpts[0].label)))) // see OPT_OUT
         return out([{ name, value: allOpts[0].value }], SOURCE.RULE, 0.9, "single-option acknowledgement");
       return unanswered(`"${desired}" is not an offered option for "${label}"`);
     }
@@ -1687,14 +1687,20 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // has only one valid answer, so selecting it is not a guess.
   if (isSelect) {
     const opts = primary.values || primary.options || [];
-    if (opts.length === 1) {
+    if (opts.length === 1 && !(!q.required && OPT_OUT.test(norm(opts[0].label)))) {
       return out([{ name, value: opts[0].value }], SOURCE.RULE, 0.9, "single-option acknowledgement");
     }
+    if (opts.length === 1) return out([], SOURCE.NONE, 0, "optional opt-out box left unticked");
   }
 
   // Unknown select we can't safely map → review.
   return unanswered(`unrecognized ${isSelect ? "select" : "field"}: "${label}"`);
 }
+
+// A lone optional box that opts out ("I decline to answer the following
+// questions") is not an acknowledgement: ticking it would contradict the
+// survey answers given below it.
+const OPT_OUT = /\b(decline|prefer not|do not wish|don't wish|choose not|opt out)\b/;
 
 /** Map an entire form. Returns { answers: [...], review: [...] }. */
 export function mapForm(questions, profile, ai) {

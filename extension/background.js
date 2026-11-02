@@ -1685,11 +1685,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
           if (setter) setter.call(el, city); else el.value = city;
           el.dispatchEvent(new Event("input", { bubbles: true }));
-          const collect = () => [...document.querySelectorAll("[role=option], ul[role=listbox] li, [class*='option']")].filter(o => o.offsetParent !== null);
+          // Only this picker's own list (the phone's country menu can be open too).
+          const collect = () => {
+            const lb = document.getElementById(el.getAttribute("aria-controls") || "") || document.getElementById(`react-select-${fieldId}-listbox`);
+            return [...(lb || document).querySelectorAll("[role=option], ul[role=listbox] li, [class*='option']")].filter(o => o.offsetParent !== null);
+          };
           const want = nrm(matchPrefix || city);
           let pick = null, opts = [];
-          for (let i = 0; i < 12 && !pick; i++) {
+          for (let i = 0; i < 16 && !pick; i++) {
             await wait(300);
+            // The search runs on the typed text, but the menu stays shut until a
+            // key opens it: ArrowDown, as a person would press.
+            if (el.getAttribute("aria-expanded") !== "true" && i % 3 === 2) {
+              for (const t of ["keydown", "keyup"]) el.dispatchEvent(new KeyboardEvent(t, { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true, cancelable: true }));
+            }
             opts = collect();
             pick = opts.find(o => nrm(o.textContent).startsWith(want))
               || opts.find(o => nrm(o.textContent).includes(want));
