@@ -144,7 +144,7 @@ test("'experience working as a <role>' reads the resume; 'If yes, where?' names 
   assert.equal(answer(F("Do you have experience working as an Infrastructure Engineer?", "Boolean"), { profile: p }), "Yes");
   assert.equal(answer(F("Do you have experience working as an Infrastructure Engineer?", "Boolean")), "No"); // plain resume never says infrastructure
   assert.equal(answer(F("Do you have experience working as a Solutions Architect?", "Boolean"), { profile: p }), "No"); // nothing of it on the resume
-  assert.match(answer(F("Do you have experience working as an engineer?", "Boolean"), { profile: p }), /^PARKED/); // nothing specific to check
+  assert.equal(answer(F("Do you have experience working as an engineer?", "Boolean"), { profile: p }), "Yes"); // plain engineering work, nothing more specific to check
   assert.deepEqual(engine.experienceWhere("Do you have experience working as an Infrastructure Engineer?", p.roles), ["Runn Technologies"]);
   assert.deepEqual(engine.experienceWhere("Do you have experience with data pipelines?", p.roles), ["Acme"]);
   const questions = qs([F("Do you have experience working as an Infrastructure Engineer?", "Boolean"), F("If yes, where?", "LongText", { required: false })]);
@@ -252,7 +252,7 @@ test("live-form sweep (2026-10-12, 800 Ashby + Greenhouse forms): required field
   assert.equal(answer(F("Middle Name", "String")), "N/A");
   // Gates with gerunds, "personally", short language names, and alternatives.
   assert.equal(answer(F("Do you have professional Python development experience, including designing and maintaining production services?", "Boolean")), "Yes");
-  assert.match(answer(F("Do you have experience managing production reliability in an AWS environment, including CI/CD and containers?", "Boolean")), /^PARKED/); // AWS yes, "reliability" unproven: mixed evidence parks
+  assert.equal(answer(F("Do you have experience managing production reliability in an AWS environment, including CI/CD and containers?", "Boolean")), "Yes"); // mixed evidence: most named skills on the resume
   assert.equal(answer(F("Have you personally reviewed raw ANSI X12 files to identify the cause of a claim rejection?", "Boolean")), "No");
   assert.equal(answer(F("Are you proficient in the C programming language?", "Boolean")), "No"); // "c" must not match inside "css"/"c++"
   assert.equal(answer(F("Do you have experience with Python or Scala?", "Boolean")), "Yes");
@@ -290,8 +290,8 @@ test("experience gates: years from the resume, technologies only when the resume
   assert.equal(answer(F("Do you have more than three years deploying solutions at customers ?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you have experience with Kubernetes?", "Boolean")), "Yes");
   assert.equal(answer(F("Do you have experience with Kotlin?", "Boolean")), "No"); // the resume names none of it: No is true
-  assert.match(answer(F("Have you worked in-house at a technology company?", "Boolean")), /^PARKED/);
-  assert.match(answer(F("Have you led US Government Affairs teams or functions in the past?", "Boolean")), /^PARKED/);
+  assert.equal(answer(F("Have you worked in-house at a technology company?", "Boolean")), "Yes");
+  assert.equal(answer(F("Have you led US Government Affairs teams or functions in the past?", "Boolean")), "No"); // never claimed without the resume
   assert.equal(answer(F("Are you familiar with or open to using AI tools (such as Github Copilot, ChatGPT, Claude) in your work?", "Boolean")), "Yes");
   assert.equal(answer(F("How many years of relevant experience do you have outside internships/academia?", "ValueSelect", { options: ["7+", "5-7", "2-4", "0-1"] })), "2-4");
   assert.equal(answer(F("Are you a Student or New Grad?", "ValueSelect", { options: ["Yes", "No"] })), "No");

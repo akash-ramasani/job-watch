@@ -60,6 +60,47 @@
     return null;
   }
 
+  // A question answered with a group of checkboxes or radios ("Have you
+  // previously been employed by Stitch Fix in any capacity?" -> four
+  // checkboxes): the inputs under the label, legend or heading that reads
+  // the question, or null.
+  function findChoiceGroup(label) {
+    const want = norm(label);
+    const wantSquashed = squash(label);
+    const heads = [...document.querySelectorAll("legend, label, p, span, h3, h4, div")]
+      .filter((e) => e.children.length <= 3 && e.textContent.length < 600 && (norm(e.textContent) === want || squash(e.textContent) === wantSquashed));
+    for (const h of heads) {
+      let box = h.closest("fieldset") || h.parentElement;
+      for (let k = 0; box && k < 4 && box.tagName !== "FORM"; k++, box = box.parentElement) {
+        const inputs = [...box.querySelectorAll("input[type=checkbox], input[type=radio]")];
+        if (inputs.length >= 2) return inputs;
+        if (box.querySelector("input:not([type=checkbox]):not([type=radio]):not([type=hidden]), textarea, select, [role=combobox]")) break;
+      }
+    }
+    return null;
+  }
+  function choiceLabel(input) {
+    const lab = (input.id && document.querySelector(`label[for="${CSS.escape(input.id)}"]`)) || input.closest("label");
+    return (lab?.textContent || input.nextElementSibling?.textContent || input.value || "").replace(/\s+/g, " ").trim();
+  }
+  /** Tick the options whose text matches the answers (exact, then prefix, then contains). */
+  async function fillChoices(inputs, values) {
+    const picked = [];
+    for (const v of values) {
+      const want = norm(v);
+      const opts = inputs.map((i) => ({ i, t: norm(choiceLabel(i)) }));
+      const hit = opts.find((o) => o.t === want) || opts.find((o) => o.t.startsWith(want) || want.startsWith(o.t)) || opts.find((o) => want.length >= 4 && o.t.includes(want));
+      if (!hit) continue;
+      if (!hit.i.checked) {
+        if (hit.i.id) await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCheck", id: hit.i.id });
+        else hit.i.click();
+        await sleep(150);
+      }
+      if (hit.i.checked) picked.push(choiceLabel(hit.i));
+    }
+    return picked.length ? { ok: true, picked } : { ok: false, error: "no option matched", seen: inputs.map(choiceLabel) };
+  }
+
   // Prefix variant — the location field renders as "Location (City)" while the
   // form JSON labels it "Location".
   function findFieldByLabelPrefix(prefix) {
@@ -210,6 +251,7 @@
     function elementFor(f) {
       if (f.kind === "file") return findFileInput(fileSlot(f));
       let el = findFieldByLabel(f.label);
+      if (!el && ["select", "multiselect", "boolean"].includes(f.kind)) el = findChoiceGroup(f.label)?.[0] || null;
       if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
       if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
       return el;
@@ -245,6 +287,11 @@
 
     // Attempt one fill; returns the MAIN-world result ({ ok, error?, seen? }).
     async function fillOne(f) {
+      // Choice questions rendered as checkboxes or radios: tick the options.
+      if (["select", "multiselect", "boolean"].includes(f.kind)) {
+        const group = findChoiceGroup(f.label);
+        if (group) return fillChoices(group, f.values?.length ? f.values : [f.value]);
+      }
       const el = elementFor(f);
       // File and cover-text fills locate their targets in the MAIN world.
       if (!el && f.kind !== "file" && f.kind !== "cover-text") return { ok: false, error: "no field for label" };

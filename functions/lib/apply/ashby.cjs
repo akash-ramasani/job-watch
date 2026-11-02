@@ -240,6 +240,8 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     yearsOfExperience: Number.isFinite(Number(user.yearsOfExperience)) ? Number(user.yearsOfExperience) : (years > 0 ? years : undefined),
     yearsOfExperienceNoInterns: yearsNoInterns > 0 ? yearsNoInterns : undefined,
     resumeText: buildProfileText(resume).toLowerCase(),
+    // The resume's skills as written (programming-language questions read them).
+    skills: Array.isArray(user.skills) && user.skills.length ? user.skills : [...(resume.skills || []), ...(resume.skillGroups || []).flatMap((g) => g.skills || [])],
     // Per-role text so "If yes, where?" can name the employers that show the experience.
     roles: roles.map((r) => ({ title: r.title || r.role || "", company: r.company || r.employer || "", description: r.description || "" })),
     // For degree, license and "have you worked here" gates.
@@ -261,6 +263,9 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     // set one.
     noticePeriod: user.noticePeriod || "1 week",
     noticePeriodExplicit: !!user.noticePeriod,
+    // Non-compete / non-solicitation questions: No unless the person saved
+    // otherwise (profile.employmentAgreements), so the form is never left half done.
+    employmentAgreements: user.employmentAgreements || "No",
     todayISO: localDayISO(now, user.timezone || "America/Los_Angeles"),
     appliedToCompanyBefore: appliedBefore,
   };

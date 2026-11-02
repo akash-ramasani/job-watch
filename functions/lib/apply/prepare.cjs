@@ -20,7 +20,7 @@ async function engine() {
     import("./verify.mjs"),
     import("./style.mjs"),
   ]);
-  _engine = { mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability };
+  _engine = { answerQuestion: ae.answerQuestion, mapForm: ae.mapForm, SOURCE: ae.SOURCE, aiTrapIn: ae.aiTrapIn, fieldKind: fk.fieldKind, verifyFourTimes: vf.verifyFourTimes, sanitizeText: st.sanitizeText, sanitizeBlock: st.sanitizeBlock, STYLE_PROMPT: st.STYLE_PROMPT, readability: st.readability };
   return _engine;
 }
 
@@ -28,7 +28,7 @@ async function engine() {
 async function prepareGreenhouseApplication(uid, token, id, deps) {
   const { db, openai, model } = deps;
   const fetchFn = deps.fetch || DEFAULT_FETCH;
-  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability } = await engine();
+  const { mapForm, aiTrapIn, fieldKind, verifyFourTimes, sanitizeText, sanitizeBlock, STYLE_PROMPT, readability, answerQuestion } = await engine();
 
   // 1. Form schema (public).
   const form = await fetchFn(`${GH_BASE}/${token}/jobs/${id}?questions=true`).then((r) => {
@@ -125,7 +125,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   fills.push(...await educationFills(token, form, resume));
 
   // 5d. Voluntary demographic questions from the profile (decline when unset).
-  fills.push(...demographicFills(form, profile));
+  fills.push(...demographicFills(form, profile, answerQuestion));
 
   // 5e. Standard EEOC compliance section (Gender / Race / Veteran / Disability).
   fills.push(...complianceFills(form, profile));
@@ -138,6 +138,8 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   const clQ = questions.find((q) => (q.fields || []).some((f) => f.name === "cover_letter"));
   if (coverText && clQ && (clQ.fields || []).some((f) => f.type === "textarea")) {
     fills.push({ label: "Cover Letter", kind: "cover-text", value: coverText });
+    // Written and pasted: a required cover letter no longer needs the person.
+    for (let i = review.length - 1; i >= 0; i--) if (/cover letter/i.test(review[i].label)) review.splice(i, 1);
   }
   let resumeB64 = null;
   const resumeUrl = profile.resumeUrl || resume.resumeUrl;
@@ -253,7 +255,7 @@ function demoAnswer(label, profile) {
   return null; // e.g. sexual orientation — falls through to the decline option
 }
 
-function demographicFills(form, profile) {
+function demographicFills(form, profile, answerQuestion = null) {
   const qs = (form.demographic_questions && form.demographic_questions.questions) || [];
   const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
   const out = [];
@@ -268,7 +270,14 @@ function demographicFills(form, profile) {
         || opts.find((o) => nrm(o.label).startsWith(w))
         || opts.find((o) => w.startsWith(nrm(o.label)));
     }
-    if (!pick) pick = opts.find((o) => o.decline_to_answer);
+    // Wording differs per board ("I am not a protected veteran" vs "I am not a
+    // veteran"): the engine's EEO matching, then the board's decline option.
+    if (!pick && answerQuestion) {
+      const a = answerQuestion({ label: q.label, required: false, fields: [{ name: "demo", type: q.type || "multi_value_single_select", values: opts.map((o) => ({ label: o.label, value: o.label })) }] }, profile, null);
+      const v = a.answers?.[0]?.value;
+      if (v) pick = opts.find((o) => o.label === v) || null;
+    }
+    if (!pick) pick = opts.find((o) => o.decline_to_answer) || opts.find((o) => /prefer not|decline|do not wish|don't wish|choose not/i.test(o.label));
     if (pick) out.push({ label: q.label, kind: "select", value: pick.label });
   }
   return out;
