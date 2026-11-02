@@ -1338,6 +1338,10 @@
     const btn = ashbySubmitButton();
     if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
     showOverlay("⏳ Auto-apply: submitting…");
+    try {
+      const res = (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((d) => d.id === "_systemfield_resume");
+      fileTrace.push(`before submit ${round + 1}: resume ${res ? (res.filled ? "shown" : "EMPTY") : "field absent"}`);
+    } catch (_) { /* trace only */ }
     btn.scrollIntoView({ block: "center" });
     await sleep(600);
     await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for a thank-you page
@@ -1376,6 +1380,7 @@
     }
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
+    ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: errs.slice(0, 8).map((e) => ({ label: e.label || e.path || "form", path: e.path || "", note: `after Submit: ${e.text}` })), reasons: traceNow() }).catch(() => {});
     showOverlay(`⚠️ Auto-apply: Ashby did not accept the submission${said ? `: ${said}` : ""}. Check the form and press Submit.`, "warning");
     return autoReport("needs_attention", `Ashby did not accept the submission${said ? `: ${said}` : " (no message shown)"}`);
   }
@@ -1469,6 +1474,9 @@
   const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
   const blockOf = (path) => document.querySelector(`[data-field-path="${CSS.escape(path)}"]`);
 
+  // What happened to the resume and cover letter uploads, for the ledger log.
+  const fileTrace = [];
+  const traceNow = () => fileTrace.slice(-10).map((t) => `trace: ${t}`);
   async function applyFill(f, pkg, domByPath) {
     const dom = domByPath.get(f.path);
     if (!dom) return { ok: false, error: "field not on page" };
@@ -1476,8 +1484,10 @@
       case "file": {
         const b64 = f.file === "cover" ? pkg.coverB64 : pkg.resumeB64;
         const name = f.file === "cover" ? pkg.coverName : pkg.resumeName;
-        if (!b64) return { ok: false, error: f.file === "cover" ? "no cover letter bytes" : "no resume bytes" };
-        return execAshby("setFile", f.path, b64, name);
+        if (!b64) { fileTrace.push(`${f.file || "resume"}: no bytes`); return { ok: false, error: f.file === "cover" ? "no cover letter bytes" : "no resume bytes" }; }
+        const r = await execAshby("setFile", f.path, b64, name).catch((e) => ({ ok: false, error: e.message }));
+        fileTrace.push(`${f.file || "resume"} ${name} (${Math.round(b64.length * 0.75 / 1024)} KB): ${r?.ok ? `shown${r.via ? " via " + r.via : ""}` : `failed: ${r?.error || "?"}${r?.actual ? ` (input has ${r.actual})` : ""}`}`);
+        return r;
       }
       case "boolean":
         if (dom.type === "radio") return execAshby("radio", f.path, f.value);
@@ -1486,6 +1496,8 @@
       case "select":
         if (dom.type === "yesno") return execAshby("yesNo", f.path, f.value);
         if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
+        // A list behind a "Start typing..." box (the scan calls every such box "location").
+        if (dom.type === "location") return execAshby("choose", f.path, f.value);
         return execAshby("radio", f.path, f.value);
       case "multiselect":
         if (dom.type === "radio") return execAshby("radio", f.path, f.values[0]);
@@ -1501,6 +1513,14 @@
         if (dom.type === "yesno") return execAshby("yesNo", f.path, f.value);
         if (dom.type === "radio") return execAshby("radio", f.path, f.value);
         if (dom.type === "checkbox") return execAshby("checkboxes", f.path, [f.value]);
+        // A digits-only box (type=number) wipes "+1 (510) 935-6846": digits
+        // only, a US phone without its leading 1.
+        if (dom.type === "number" || f.kind === "number") {
+          const phone = /phone|mobile|cell/i.test(f.label || dom.label || "");
+          let v = String(f.value ?? "").replace(phone ? /\D/g : /[^\d.-]/g, "");
+          if (phone && /^1\d{10}$/.test(v)) v = v.slice(1);
+          return execAshby("fillText", f.path, v);
+        }
         return execAshby("fillText", f.path, String(f.value ?? ""));
     }
   }
@@ -1623,7 +1643,11 @@
     }
     const stillEmpty = after.filter((d) => d.required && !d.filled && !d.survey);
     const manual = new Map(); // label -> { path, note }
+    // A parked question the page does not show (a follow-up to an answer we
+    // did not give, "If you selected Other above...") needs nothing.
+    const onPage = new Set(after.map((d) => d.id));
     for (const r of pkg.review) {
+      if (r.path && after.length && !onPage.has(r.path)) continue;
       if (rescued.has(r.label) && !stillEmpty.some((d) => d.label === r.label)) continue;
       manual.set(r.label, { path: r.path || "", note: rescueNotes.has(r.label) ? `${r.note || "needs you"}. AI: ${rescueNotes.get(r.label)}` : r.note || "needs you" });
     }
@@ -1651,7 +1675,7 @@
     ledger("filled", {
       ...jobMeta(pendingJob), answersLog, needsAttention,
       filledCount: Object.keys(answersLog).length, totalFields: mainFields.length, requiredTotal: mainFields.filter((d) => d.required).length,
-      flow: "engine", schemaSource: pkg.schemaSource || "", reasons: pkg.reasons || [],
+      flow: "engine", schemaSource: pkg.schemaSource || "", reasons: [...(pkg.reasons || []), ...traceNow()],
     }).then((r) => { if (!r?.ok) console.warn("[JobWatch] ledger(filled) failed:", r?.error); });
 
     // Unattended auto-apply submits when nothing is left for the person.

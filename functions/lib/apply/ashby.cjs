@@ -16,7 +16,7 @@ const { savedIndex } = require("./savedAnswers.cjs");
 const { METROS } = require("../resumeLocation.cjs");
 const { candidateYearsOf, buildProfileText } = require("../jobFit.cjs");
 const { renderCoverLetterPdf, contactLine } = require("./coverPdf.cjs");
-const { aiContext, answerFreeText, coverLetter, pool } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption, coverLetter, pool } = require("./ai-text.cjs");
 
 const GQL = "https://jobs.ashbyhq.com/api/non-user-graphql";
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -310,7 +310,14 @@ function fillsFrom(questions, mapped, fieldKind, { survey = false, smsConsent = 
     if (a.answers[0].isFile) { fills.push({ ...base, kind: "file", file: "resume" }); return; }
     if (kind === "multiselect") { fills.push({ ...base, kind: "multiselect", values: a.answers.map((x) => labelOf(x.value)) }); return; }
     if (kind === "select" || kind === "boolean") { fills.push({ ...base, kind, value: labelOf(a.answers[0].value) }); return; }
-    fills.push({ ...base, kind: kind === "unknown" ? "text" : kind, value: String(a.answers[0].value) });
+    let value = String(a.answers[0].value);
+    // A Number box takes digits only: a phone goes in as 4155550100.
+    if (kind === "number" && /[^\d.-]/.test(value)) {
+      const phone = /phone|mobile|cell/i.test(q.label || "");
+      value = value.replace(phone ? /\D/g : /[^\d.-]/g, "");
+      if (phone && /^1\d{10}$/.test(value)) value = value.slice(1);
+    }
+    fills.push({ ...base, kind: kind === "unknown" ? "text" : kind, value });
   });
   return fills;
 }
@@ -422,9 +429,50 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     try { resumeB64 = Buffer.from(await (await fetchFn(resumeUrl)).arrayBuffer()).toString("base64"); } catch (_) { /* content script reports it */ }
   }
 
+  // 5d. Required choice questions no rule maps ("How would you rate your SQL?",
+  //     "Open to 50% travel?"): Claude picks the true option from the profile
+  //     and resume. Private facts the profile lacks (a salary number,
+  //     publications) are not choices and stay for the person.
+  const aiPicked = new Set();
+  if (openai) {
+    const choiceParked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] }))
+      .filter(({ q }) => q && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
+    await pool(choiceParked, 4, async ({ r, q }) => {
+      try {
+        const opts = q.fields[0].values;
+        const kind = fieldKind(q.fields[0]);
+        const p = await pickOption({ ...q, fields: [{ ...q.fields[0], type: kind === "multiselect" ? "multi" : "single" }] }, ctx, profile, aiDeps);
+        if (!p.values.length) { aiNotes.set(r.label, p.reason); return; }
+        const value = kind === "multiselect" ? undefined : p.values[0];
+        // Boolean Yes/No boxes take "Yes"/"No"; selects take the option's label.
+        fills.push({ path: q.path, label: q.label, source: "ai", note: `AI pick: ${p.why || ""}`.trim(), kind, ...(kind === "multiselect" ? { values: p.values } : { value: kind === "boolean" ? (/^y/i.test(value) ? "Yes" : /^n/i.test(value) ? "No" : value) : (opts.find((o) => o.label === value)?.label ?? value) }) });
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+  }
+
+  // 5e. Required number / short-text boxes no rule knows ("What percentage of
+  //     time do you enjoy coding?"): the AI answers in the box's own format.
+  if (openai) {
+    const openParked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] }))
+      .filter(({ r, q }) => q && !aiPicked.has(r.label) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+    await pool(openParked, 4, async ({ r, q }) => {
+      try {
+        const num = fieldKind(q.fields[0]) === "number";
+        const a = await answerFreeText({ ...q, ashbyType: num ? "Number" : q.ashbyType, description: [q.description, num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" ") }, ctx, aiDeps);
+        const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;
+        if (!value) { aiNotes.set(r.label, a.reason || "AI gave no answer"); return; }
+        fills.push({ path: q.path, label: q.label, source: "ai", note: "AI answer", kind: num ? "number" : "text", value });
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+  }
+
   // What still needs the person: required questions with no answer, plus the
-  // cover letter when it was asked for and could not be produced.
-  const review = mapped.review.map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path }));
+  // cover letter when it was asked for and could not be produced. A question
+  // that has a fill after all (the generated cover letter) is not open.
+  const filledPaths = new Set(fills.map((f) => f.path));
+  const review = mapped.review.filter((r) => !aiPicked.has(r.label) && !filledPaths.has(questions[mapped.answers.indexOf(r)]?.path)).map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path }));
   if (coverFileQ?.required && !coverB64) review.push({ label: coverFileQ.label, note: "cover letter not generated", path: coverFileQ.path });
 
   return {
@@ -433,7 +481,8 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     locationName: job.locationName,
     workplaceType: job.workplaceType,
     schemaSource,
-    ready: verdict.ok && review.length === 0,
+    // A completeness failure the AI picks cleared is not a failure.
+    ready: review.length === 0 && (verdict.ok || verdict.failures.every((f) => /completeness/i.test(String(f)))),
     reasons: verdict.failures,
     review,
     fills,

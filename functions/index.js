@@ -5011,7 +5011,12 @@ exports.recordApplication = onCall({ region: REGION, maxInstances: 10 }, async (
   }
   try {
     const r = await ledger.recordEvent(db, uid, { ...d, event, formKey, source, org, postingId });
-    logger.info(`recordApplication: uid=${uid} ${event} ${formKey} -> ${r.status}${r.duplicate ? " (duplicate)" : ""} attempts=${r.attempts ?? ""}`);
+    // Why a form needed the person, and how its resume went: labels and the
+    // page's own messages only, never the answers.
+    const needs = Array.isArray(d.needsAttention) ? d.needsAttention.slice(0, 8).map((n) => `${String(n?.label || "").slice(0, 60)}: ${String(n?.note || "").slice(0, 100)}`) : [];
+    // The content scripts put their resume trace in `reasons` ("trace: ..."), which the background forwards.
+    const trace = (Array.isArray(d.reasons) ? d.reasons : []).filter((t) => /^trace:/.test(String(t))).slice(0, 12).map((t) => String(t).slice(6, 166).trim());
+    logger.info(`recordApplication: uid=${uid} ${event} ${formKey} -> ${r.status}${r.duplicate ? " (duplicate)" : ""} attempts=${r.attempts ?? ""}${d.extensionVersion ? ` ext=${String(d.extensionVersion).slice(0, 12)}` : ""}${needs.length ? ` needs=${JSON.stringify(needs)}` : ""}${trace.length ? ` trace=${JSON.stringify(trace)}` : ""}`);
     return r;
   } catch (e) {
     logger.error("recordApplication failed", e);

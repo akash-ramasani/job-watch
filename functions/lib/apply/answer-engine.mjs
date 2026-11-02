@@ -166,6 +166,8 @@ function classify(label, kind = "") {
 
   // "Is your citizenship / residency / location in one of: Cuba, Iran, North Korea, Syria…?"
   if (choice && SANCTIONED.test(l) && /\b(one of|any of|following|located|reside|residen|citizen)/.test(l)) return "sanctionedCountry";
+  // "Please list the type of support you may require": the visa itself.
+  if (text && /\b(type|kind) of (support|sponsorship|assistance|visa)\b|which (visa|sponsorship) (would|will|do) you (need|require)/.test(l)) return "sponsorshipType";
   // ── Ashby corpus additions (2026-10-09) ────────────────────────────────────
   // Follow-ups that only apply when an earlier answer was Other/Yes: a blank
   // text box is the honest answer. Only text kinds take this exit, since a
@@ -260,7 +262,7 @@ function classify(label, kind = "") {
   if (/^(legal )?(first|given) name/.test(l)) return "legalFirstName";
   if (/^(legal )?(last name|surname|family name)/.test(l)) return "legalLastName";
   if (/^middle name/.test(l)) return "middleName";
-  if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b|(current|most recent|present) or (previous|past|most recent|last) (job )?title\b/.test(l)) return "currentTitle";
+  if (text && /^(current |your |most recent )?(job )?title$|current (job )?title\b|most recent (job )?title\b|(current|most recent|present)(\s*\/\s*| or )(previous|past|most recent|last) (job )?(title|role|position)\b/.test(l)) return "currentTitle";
   // "Please select the location you anticipate working in for the role": the job's own place.
   if (text && /\blocation (you )?(anticipate|plan|expect|intend|would like|want)( to)? (be )?work(ing)?\b|where (do )?you (anticipate|plan|expect|intend) (to )?work(ing)?\b/.test(l)) return "workLocation";
   if (text && /universit|college|school.{0,25}attend|alma mater/.test(l) && !/degree|graduat|relocat/.test(l)) return "university";
@@ -331,7 +333,7 @@ function classify(label, kind = "") {
   if (/provide .{0,30}references|professional references/.test(l)) return "referencesWilling";
   // Word-bounded: "current ... company" as substrings misfires on labels like
   // "current employees of a publicly-traded company" (Robinhood COI).
-  if (/\b(current|most recent|present)\s+(or (previous|past|most recent|last)\s+)?(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
+  if (/\b(current|most recent|present)\s*((\/|or)\s*(previous|past|most recent|last)\s+)?(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
   if (/security clearance/.test(l)) return "securityClearance";
   // "Select a response that describes your level of experience with AI tools"
   // (Exploratory / Individual / Team / Cross-functional): picked from the resume.
@@ -797,6 +799,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   if (key === "conditionalFollowup" || key === "referral" || key === "password" || key === "workSample"
     || (key === "publications" && !profileMap.publications) || (key === "twitter" && !profileMap.twitter)) {
     const why = { conditionalFollowup: "follow-up to an answer we did not give", referral: "no referral to name", password: "no password to share", workSample: "needs a link only you can provide", publications: "no publications on file", twitter: "no Twitter/X link on file" }[key];
+    // A required follow-up that does not apply ("If you selected Other above,
+    // please share here"; "If referred, by whom?"): "N/A" says so truthfully.
+    if (q.required && (key === "conditionalFollowup" || key === "referral") && ["text", "longtext"].includes(kinds[0])) return out([{ name, value: "N/A" }], SOURCE.RULE, 0.9, `${why}: N/A`);
     return q.required ? unanswered(why) : out([], SOURCE.NONE, 0, `left blank: ${why}`);
   }
   // Questions only the applicant can answer; a profile value unlocks them.
@@ -1591,6 +1596,11 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       // "Are you based somewhere we can employ you?" as a plain Yes/No for a U.S. profile.
       || (norm(profile.country || "united states") === "united states" ? findOnly(primary, [/^yes\b/]) : null);
     return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 0.9, m.label) : unanswered("no option matches the profile location");
+  }
+  if (key === "sponsorshipType") {
+    if (norm(profile.requiresSponsorship) !== "yes") return q.required ? out([{ name, value: "None" }], SOURCE.PROFILE, 0.9, "no sponsorship needed") : out([], SOURCE.NONE, 0, "no sponsorship needed");
+    const visa = String(profile.visaType || "H-1B").trim();
+    return out([{ name, value: `${visa} visa sponsorship` }], SOURCE.PROFILE, 1, "visa the person would need");
   }
   // Sanctioned-country checks: a residency or location question is answered
   // from the profile country; a citizenship one from profile.citizenshipCountry.

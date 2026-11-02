@@ -415,6 +415,39 @@
     return { ok: !!box.value?.trim(), picked: opt.textContent.trim(), actual: box.value, seen: texts.slice(0, 5) };
   }
 
+  /** A choice question drawn as a search box with a list ("How did you hear
+   *  about Render?" -> Start typing...): open the list, pick the option whose
+   *  text is the answer. Unlike location(), never falls back to the first row. */
+  async function choose(path, value) {
+    const wrap = wrapperOf(path);
+    const box = wrap && wrap.querySelector("input[role=combobox], .ashby-application-form-input-autocomplete");
+    if (!box) return { ok: false, error: "dropdown not found" };
+    const want = nrm(value);
+    const options = () => [...document.querySelectorAll("[role=listbox] [role=option], .ashby-application-form-input-autocomplete-popup-result")]
+      .filter((o) => o.offsetParent !== null && !/^no (results|matches|options)/i.test(o.textContent.trim()));
+    const find = (opts) => { const t = opts.map((o) => nrm(o.textContent)); let i = t.indexOf(want); if (i < 0) i = t.findIndex((x) => x.startsWith(want) || want.startsWith(x) && x.length > 3); if (i < 0) i = t.findIndex((x) => x.includes(want)); return i < 0 ? null : opts[i]; };
+    let opts = [];
+    // 1. Open the whole list (toggle button or a click), as a person would.
+    box.focus();
+    box.click();
+    wrap.querySelector("button")?.click();
+    for (let i = 0; i < 20 && !(opts = options()).length; i++) await sleep(100);
+    let opt = find(opts);
+    // 2. Not in view: type the answer to filter the list.
+    if (!opt) {
+      setNativeValue(box, "");
+      let typed = "";
+      for (const ch of String(value).slice(0, 40)) { typed += ch; setNativeValue(box, typed); await sleep(35); }
+      for (let i = 0; i < 25 && !(opt = find(opts = options())); i++) await sleep(100);
+    }
+    if (!opt) return { ok: false, error: "option not in the list", seen: opts.slice(0, 8).map((o) => o.textContent.trim()) };
+    opt.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    opt.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    opt.click();
+    await sleep(300);
+    return { ok: !!box.value?.trim(), picked: opt.textContent.trim(), actual: box.value };
+  }
+
   /** Visible validation messages after a submit attempt (best effort). */
   /** What the board itself is complaining about, per field. Ashby renders
    *  field errors inside the field wrapper (hashed _error_ classes, role=alert)
@@ -446,5 +479,5 @@
       || /your application (was|has been) (successfully )?submitted|application submitted successfully|thank(s| you) for (applying|your application)/i.test((document.body?.innerText || "").slice(0, 6000));
   }
 
-  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, errors, submitted, phone };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, errors, submitted, phone };
 })();

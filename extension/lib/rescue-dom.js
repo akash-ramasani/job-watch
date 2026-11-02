@@ -151,6 +151,12 @@
     for (const s of steps || []) {
       const el = document.querySelector(`[data-jw-ref="${CSS.escape(String(s.ref))}"]`);
       if (!el) { log.push(`${s.ref}: gone`); continue; }
+      // Never undo an attached file: a remove / delete / replace control next
+      // to an upload (the resume's trash icon) is off limits to the rescue.
+      const ctl = el.closest("button, [role=button], a") || el;
+      const said = `${ctl.textContent || ""} ${ctl.getAttribute("aria-label") || ""} ${ctl.getAttribute("title") || ""}`;
+      const nearFile = !!ctl.closest("[data-field-path], .field, div")?.querySelector("input[type=file]") || /\.(pdf|docx?)\b/i.test(ctl.parentElement?.textContent || "");
+      if (s.op === "click" && nearFile && (/remove|delete|trash|clear|replace/i.test(said) || (!said.trim() && ctl.querySelector("svg")))) { log.push(`${s.ref}: refused (would remove an attached file)`); continue; }
       try {
         if (s.op === "click") realClick(el);
         else if (s.op === "type") {
