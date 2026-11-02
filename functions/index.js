@@ -3010,6 +3010,10 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     logger.warn(`scoreNewJobsForUser: could not read user doc for userId=${userId}: ${err?.message}`);
   }
   const needsVisa = needsSponsorship(userData);
+  // aiJobScoring === false on the user doc: this user's jobs get the free rule
+  // score as final and never the AI assessment. Their other AI features
+  // (tailored resume, assistant) are unaffected.
+  const aiOffForUser = userData.aiJobScoring === false;
   if (!isAdmin) {
     try {
       const userDoc = { exists: Object.keys(userData).length > 0, data: () => userData };
@@ -3091,9 +3095,9 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     todo.push({ ...job, title: jobData.title || "", companyKey: jobData.companyKey || "", fullDescription: job.fullDescription || jobData.fullDescription || null, el: Array.isArray(jobData.el) ? jobData.el : null, existingFit: fit || null });
   });
   if (todo.length === 0) return 0;
-  logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}${aiPaused ? " (AI paused: rule scores only)" : ""}`);
+  logger.info(`scoreNewJobsForUser: ${todo.length} to score for userId=${userId}${aiOffForUser ? " (AI scoring off for this user: rule scores only)" : aiPaused ? " (AI paused: rule scores only)" : ""}`);
 
-  const scorer = aiPaused ? null : requireScorer();
+  const scorer = aiPaused || aiOffForUser ? null : requireScorer();
   const limiter = pLimit(SCORING_CONCURRENCY);
   const scoredAt = admin.firestore.Timestamp.now();
   const results = []; // { jobId, score, reason, fit }
@@ -3243,7 +3247,7 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
         return;
       }
       // Screened by the rules (too senior for the candidate): final, even on a forced rescore.
-      const wantsAi = !rule.screened && (force || audits.has(job.jobDocId) || rule.aiWorthy);
+      const wantsAi = !aiOffForUser && !rule.screened && (force || audits.has(job.jobDocId) || rule.aiWorthy);
       if (!wantsAi) { ruleOnly++; results.push(weakEvidence(job) && rule.score < weakMin(job) ? weakHidden(job, rule.score) : ruleResult(job, rule, false)); return; }
       // AI unavailable (paused, or out of credits): keep the rule score, flagged for the AI later.
       if (outOfCredits || aiPaused) {
@@ -3312,20 +3316,6 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     }, { merge: true }).catch(() => {});
   }
 
-  // Admin's job docs carry the legacy fields other readers (worker, MCP) use.
-  if (isAdmin && results.length) {
-    const batch = db.bulkWriter();
-    for (const r of results) {
-      batch.set(sharedJobsCol.doc(r.jobId), {
-        relevanceScore: r.score,
-        scoreReason: r.reason,
-        scoredAt,
-        ...(r.fit ? { scoreVersion: FIT_VERSION, scoreProfileStamp: profileStamp } : {}),
-      }, { merge: true });
-    }
-    await batch.close();
-  }
-
   const good = results.filter((r) => r.score >= 0);
   if (collect) collect.push(...good);
   // Only unreadable descriptions count toward giving up on a job; API errors
@@ -3338,6 +3328,26 @@ async function scoreNewJobsForUser(userId, newJobs, { deadlineMs = Infinity, for
     }
   } catch (err) {
     logger.warn(`score write failed for ${userId}: ${err?.message}`);
+  }
+
+  // Admin's job docs carry the legacy fields other readers (worker, MCP) use.
+  // Written after the user's own scores, which are what the Jobs page shows,
+  // so a run cut short here never leaves the page unscored.
+  if (isAdmin && results.length && !dryRun) {
+    try {
+      const batch = db.bulkWriter();
+      for (const r of results) {
+        batch.set(sharedJobsCol.doc(r.jobId), {
+          relevanceScore: r.score,
+          scoreReason: r.reason,
+          scoredAt,
+          ...(r.fit ? { scoreVersion: FIT_VERSION, scoreProfileStamp: profileStamp } : {}),
+        }, { merge: true });
+      }
+      await batch.close();
+    } catch (err) {
+      logger.warn(`legacy score fields write failed: ${err?.message}`);
+    }
   }
 
   logger.info(`scoreNewJobsForUser: userId=${userId} scored=${good.length} failed=${results.length - good.length} deferred=${skippedForTime}`);
@@ -3386,7 +3396,7 @@ async function getOrAssessFit({ uid, jobId, job, profile }) {
  * whose score for this user is missing, or came from an older method or an
  * older version of their resume. Costs two document reads.
  */
-async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = "", skipAiPending = false } = {}) {
+async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = "", skipAiPending = false, missingOnly = false } = {}) {
   const { freshnessKey } = require("./lib/userJobScores.cjs");
   const aggs = db.collection("users").doc(ADMIN_UID).collection("aggregations");
   const [recentSnap, allSnap, mineSnap] = await Promise.all([
@@ -3404,6 +3414,7 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
       if (!j?.id || seen.has(j.id) || skipIds.has(j.id)) continue;
       seen.add(j.id);
       const s = scores[j.id];
+      if (missingOnly) { if (!s) stale.push(j); continue; }
       const skippedByType = s && s.t !== undefined;
       if (s && s.k === key && (!skippedByType || s.t === tk)) continue; // current
       if (s && s.k === ruleKey && s.rt === tk && (!s.p || skipAiPending)) continue; // final rule score, or waiting while the AI is down
@@ -3419,8 +3430,9 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
 /**
  * Spare sync time: score the Jobs page for one user — a new user's whole list
  * after they add a resume, or the jobs affected by a resume edit. Works for
- * every AI-enabled user. Once nothing is stale the check is skipped for 6 hours
- * (a resume edit changes the stamp and ends the skip).
+ * every AI-enabled user. Once nothing is stale the full check is skipped for 6
+ * hours (a resume edit, or the AI coming back, ends the skip); listed jobs
+ * with no score at all are still picked up every run.
  */
 async function rescoreBacklog(userId, { deadlineMs }) {
   const userRef = db.collection("users").doc(userId);
@@ -3430,27 +3442,29 @@ async function rescoreBacklog(userId, { deadlineMs }) {
   const profileStamp = profileStampOf(profile);
   const userDoc = (await userRef.get()).data() || {};
   const tk = targetsKey(jobTypesFor(profile, prefsSnap.data() || {})) + (needsSponsorship(userDoc) ? "|visa" : "");
-  const clearKey = `${profileStamp}|${tk}`;
-
   const markerRef = userRef.collection("settings").doc("scoring");
   const marker = (await markerRef.get()).data() || {};
-  // The Profile page shows these as the default job types.
-  const autoJobTypes = familiesForProfile(profile);
-  if (JSON.stringify(marker.autoJobTypes || []) !== JSON.stringify(autoJobTypes)) await markerRef.set({ autoJobTypes }, { merge: true });
-  if (marker.backlogClearedFor === clearKey && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000) {
-    logger.info(`rescoreBacklog: userId=${userId} cleared ${Math.round((Date.now() - marker.backlogClearedAt.toMillis()) / 60000)} min ago, skipping`);
-    return 0;
-  }
-
-  // Jobs that failed repeatedly for this resume (no readable description, etc.).
-  const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
-  const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
   // After an out-of-credits error, don't retry AI-waiting jobs for an hour;
   // while the AI is paused they wait too (their rule score is already stored).
   const aiDown = marker.aiOutOfCreditsAt?.toMillis?.() > Date.now() - 3600 * 1000 || await aiScoringPaused();
-  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk, skipAiPending: aiDown });
+  // A clear made while the AI was down didn't cover the jobs waiting for it.
+  const clearKey = `${profileStamp}|${tk}${aiDown ? "|ai-down" : ""}`;
+  // The Profile page shows these as the default job types.
+  const autoJobTypes = familiesForProfile(profile);
+  if (JSON.stringify(marker.autoJobTypes || []) !== JSON.stringify(autoJobTypes)) await markerRef.set({ autoJobTypes }, { merge: true });
+  // Jobs that failed repeatedly for this resume (no readable description, etc.).
+  const failures = marker.failuresFor === profileStamp ? marker.failures || {} : {};
+  const gaveUp = new Set(Object.keys(failures).filter((id) => failures[id] >= MAX_SCORING_ATTEMPTS));
+  // Recently cleared: skip the full staleness check, but still score listed
+  // jobs that have no score at all (a sync cut short before saving them).
+  const recentlyCleared = marker.backlogClearedFor === clearKey && marker.backlogClearedAt?.toMillis?.() > Date.now() - 6 * 3600 * 1000;
+  const stale = await staleJobsFor(userId, profileStamp, { skipIds: gaveUp, tk, skipAiPending: aiDown, missingOnly: recentlyCleared });
 
   if (stale.length === 0) {
+    if (recentlyCleared) {
+      logger.info(`rescoreBacklog: userId=${userId} cleared ${Math.round((Date.now() - marker.backlogClearedAt.toMillis()) / 60000)} min ago, nothing unscored`);
+      return 0;
+    }
     logger.info(`rescoreBacklog: userId=${userId} nothing stale on the Jobs page`);
     await markerRef.set({ backlogClearedFor: clearKey, backlogClearedAt: admin.firestore.Timestamp.now() }, { merge: true });
     return 0;
@@ -3880,7 +3894,7 @@ Rules:
  * changes or the user asks to regenerate.
  * ═══════════════════════════════════════════════════════════════════════════
  */
-const TAILORED_RESUME_VERSION = 2; // 2: match report comes from the shared job-fit assessment
+const TAILORED_RESUME_VERSION = 3; // 3: every point of the user's own resume is kept (rewritten, never dropped)
 
 function normalizeSkillText(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9+#]+/g, " ").replace(/\s+/g, " ").trim();
@@ -3918,14 +3932,14 @@ function parseJsonLoose(raw) {
  * The user's own description as bullets. Parsed resumes usually arrive as one
  * paragraph, so fall back to sentence boundaries when there are no markers.
  */
-function splitDescriptionToBullets(description) {
+function splitDescriptionToBullets(description, limit = Infinity) {
   const text = String(description || "").trim();
   if (!text) return [];
   let parts = text.split(/\n+|(?:^|\s)[•\-–*]\s+/).map((s) => s.trim()).filter((s) => s.length > 3);
   if (parts.length <= 1) {
     parts = text.split(/(?<=[.!?])\s+(?=[A-Z0-9])/).map((s) => s.trim()).filter((s) => s.length > 3);
   }
-  return parts.slice(0, 6);
+  return parts.slice(0, limit);
 }
 
 exports.generateTailoredResume = onCall(
@@ -3993,6 +4007,10 @@ exports.generateTailoredResume = onCall(
     const profileGroups = Array.isArray(profile.skillGroups) && profile.skillGroups.length
       ? profile.skillGroups.map((g) => ({ label: String(g.label || "Skills"), skills: (g.skills || []).map((s) => String(s)) }))
       : [{ label: "Skills", skills: (profile.skills || []).map((s) => String(s)) }];
+    // The user's own resume, point by point. Every point must survive into the
+    // tailored resume: the model rewrites them for the job, it never drops one.
+    const rolePoints = roles.map((r) => splitDescriptionToBullets(r.description));
+    const projectPoints = projects.map((p) => splitDescriptionToBullets(p.description));
     const promptProfile = {
       summary: profile.summary || "",
       skillGroups: profileGroups,
@@ -4003,13 +4021,13 @@ exports.generateTailoredResume = onCall(
         location: r.location || "",
         startDate: r.startDate || "",
         endDate: r.endDate || "",
-        description: r.description || "",
+        points: rolePoints[index].map((text, i) => ({ i, text })),
       })),
       projects: projects.map((p, index) => ({
         index,
         name: p.name || "",
         technologies: p.techStack || (p.technologies || []).join(", "),
-        description: p.description || "",
+        points: projectPoints[index].map((text, i) => ({ i, text })),
       })),
       education: profile.education || [],
       certifications: profile.certifications || [],
@@ -4032,11 +4050,12 @@ exports.generateTailoredResume = onCall(
 
 Hard rules — violating any of them makes the output unusable:
 1. Use ONLY facts present in the candidate profile. Never add a tool, language, framework, metric, responsibility, certification or outcome that the profile does not state or clearly imply.
-1b. Each role's bullets must come ONLY from that role's own "description". Never move, reuse or blend an achievement from one role into another, and never put the same bullet under two roles. If a role's description is thin, write fewer bullets (even one) rather than borrowing.
-1c. Return bullets for EVERY role index and EVERY project index, including roles unrelated to this job: for those, keep the substance, tighten the wording, and bold the terms most transferable to the job. Never omit a role.
+1b. Each role's bullets must come ONLY from that role's own "points". Never move, reuse or blend an achievement from one role into another, and never put the same bullet under two roles.
+1c. Return bullets for EVERY role index and EVERY project index, including roles unrelated to this job (for those, bold the terms most transferable to the job). Never omit a role or a project.
+1d. NEVER DROP A POINT. Every point "i" of a role or project must be covered by a bullet, and every detail in it (each tool, technology, number, scope, responsibility and result) must still be in the rewritten bullet. Do not shorten the resume, merge points into vaguer summaries, or cut details to save space. Each bullet lists the point indexes it covers in "points"; normally one bullet per point, a long point may be split into several bullets, and two points may share a bullet only if both are kept in full.
 2. You do not write employers, titles, dates or locations. Refer to roles and projects by their "index" only.
-3. Rewrite each role's experience as 3-6 concise bullets that foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's. Lead with impact; keep numbers only if the profile has them. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Split a dense paragraph into several bullets rather than one long one. Wrap the 2-4 most job-relevant terms of each bullet in **double asterisks** for emphasis; nothing else.
-4. Skills: keep the candidate's skill groups (same labels), reorder within each group so the most job-relevant come first, and drop skills irrelevant to this job only if the group still has at least 3. Never add a skill or a group the candidate doesn't have.
+3. Rewrite every point for this job: reword it to foreground what the job asks for, using the job description's vocabulary where it is genuinely equivalent to the candidate's, lead with impact, and order each role's bullets so the most job-relevant come first. Keep all numbers the profile has. Do not append purpose or outcome clauses the profile doesn't state (no "…to support ML deployment" unless the profile says so). Wrap the 2-4 most job-relevant terms of each bullet in **double asterisks** for emphasis; nothing else.
+4. Skills: keep the candidate's skill groups (same labels) and every skill in them, reordered within each group so the most job-relevant come first. Never add a skill or a group the candidate doesn't have, and never remove one.
 5. If the job needs something the candidate lacks, leave it out. Do not paper over gaps.
 6. Write like a human engineer: plain, specific, no buzzword padding, no em dashes.
 7. The summary is a rephrasing of the candidate's existing summary and skills for this job. It may only name domains, technologies and responsibilities that appear in the profile; if the job's domain (e.g. "video understanding") is not in the profile, the summary must not mention it.
@@ -4044,8 +4063,8 @@ Hard rules — violating any of them makes the output unusable:
 {
   "summary": "2-3 sentence professional summary for this job, only claims the profile supports, with 3-5 key terms wrapped in **double asterisks**",
   "skillGroups": [{ "label": "same label as the profile", "skills": ["ordered", "list"] }],
-  "roles": [{ "index": 0, "bullets": ["...", "..."] }],
-  "projects": [{ "index": 0, "bullets": ["..."] }]
+  "roles": [{ "index": 0, "bullets": [{ "points": [0], "text": "..." }, { "points": [1], "text": "..." }] }],
+  "projects": [{ "index": 0, "bullets": [{ "points": [0], "text": "..." }] }]
 }`;
 
     const userPrompt = `## Job: ${jobTitle} at ${companyName}
@@ -4060,7 +4079,7 @@ ${JSON.stringify(promptProfile)}`;
         {
           model: OPENAI_SMART_MODEL,
           temperature: 0.2,
-          max_tokens: 4500,
+          max_tokens: 8000,
           response_format: { type: "json_object" },
           messages: [
             { role: "system", content: systemPrompt },
@@ -4083,27 +4102,33 @@ ${JSON.stringify(promptProfile)}`;
     const draftRoles = new Map((Array.isArray(draft.roles) ? draft.roles : []).map((r) => [Number(r.index), r]));
     const draftProjects = new Map((Array.isArray(draft.projects) ? draft.projects : []).map((p) => [Number(p.index), p]));
 
+    // Bullets are { text, points } until the end, so a bullet the audits drop
+    // can hand its points back to the user's original wording.
+    const toBullets = (list, nPoints) => (Array.isArray(list) ? list : [])
+      .map((b) => (typeof b === "string" ? { text: b, points: [] } : { text: String(b?.text || ""), points: Array.isArray(b?.points) ? b.points.map(Number) : [] }))
+      .map((b) => ({ text: b.text.trim(), points: b.points.filter((i) => Number.isInteger(i) && i >= 0 && i < nPoints) }))
+      .filter((b) => b.text);
+    const original = (points) => points.map((text, i) => ({ text, points: [i] }));
     const builtRoles = roles.map((r, index) => {
-      const bullets = (draftRoles.get(index)?.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 6);
+      const bullets = toBullets(draftRoles.get(index)?.bullets, rolePoints[index].length);
       return {
         title: r.title || "",
         company: r.company || "",
         location: r.location || "",
         startDate: r.startDate || "",
         endDate: r.endDate || "",
-        bullets: bullets.length ? bullets : splitDescriptionToBullets(r.description),
+        bullets: bullets.length ? bullets : original(rolePoints[index]),
       };
     });
     // Every project the user listed stays on the resume; the model may only
-    // rephrase or trim a project's bullets, never remove the project.
+    // rephrase a project's bullets, never remove the project.
     const builtProjects = projects.map((p, index) => {
-      const d = draftProjects.get(index);
-      const bullets = (d?.bullets || []).map((b) => String(b).trim()).filter(Boolean).slice(0, 4);
+      const bullets = toBullets(draftProjects.get(index)?.bullets, projectPoints[index].length);
       return {
         name: p.name || "",
         link: p.link || "",
         technologies: p.techStack || (p.technologies || []).join(", "),
-        bullets: bullets.length ? bullets : splitDescriptionToBullets(p.description),
+        bullets: bullets.length ? bullets : original(projectPoints[index]),
       };
     });
 
@@ -4129,7 +4154,10 @@ ${JSON.stringify(promptProfile)}`;
         else if (skillInCorpus(s, corpus)) kept.push(s); // real, just filed under another group
         else droppedSkills.push(s);
       }
-      return { label: g.label, skills: kept.length >= Math.min(3, g.skills.length) ? kept : g.skills };
+      // Reorder only: a skill the model left out goes back at the end of its group.
+      const keptKeys = new Set(kept.map(normalizeSkillText));
+      for (const s of g.skills) if (!keptKeys.has(normalizeSkillText(s))) kept.push(s);
+      return { label: g.label, skills: kept };
     });
     const skills = [...new Set(skillGroups.flatMap((g) => g.skills))];
     const stripEmphasis = (s) => String(s || "").replace(/\*\*/g, "");
@@ -4147,12 +4175,12 @@ ${JSON.stringify(promptProfile)}`;
     if (summary) flat.push({ id: "summary", text: stripEmphasis(summary), source: "professional summary", sourceText: wholeProfileText });
     builtRoles.forEach((r, ri) => {
       const sourceText = `${r.title} at ${r.company} (${r.startDate} - ${r.endDate}): ${roles[ri].description || ""}`;
-      r.bullets.forEach((b, bi) => flat.push({ id: `r${ri}:${bi}`, text: stripEmphasis(b), source: `${r.title} @ ${r.company}`, sourceText }));
+      r.bullets.forEach((b, bi) => flat.push({ id: `r${ri}:${bi}`, text: stripEmphasis(b.text), source: `${r.title} @ ${r.company}`, sourceText }));
     });
     builtProjects.forEach((p, pi) => {
       const src = projects.find((x) => (x.name || "") === p.name) || {};
       const sourceText = `Project ${p.name} (${p.technologies}): ${src.description || ""}`;
-      p.bullets.forEach((b, bi) => flat.push({ id: `p${pi}:${bi}`, text: stripEmphasis(b), source: `project ${p.name}`, sourceText }));
+      p.bullets.forEach((b, bi) => flat.push({ id: `p${pi}:${bi}`, text: stripEmphasis(b.text), source: `project ${p.name}`, sourceText }));
     });
 
     const removedBullets = [];
@@ -4163,7 +4191,7 @@ ${JSON.stringify(promptProfile)}`;
           {
             model: OPENAI_SMART_MODEL,
             temperature: 0,
-            max_tokens: 1800,
+            max_tokens: 3000,
             response_format: { type: "json_object" },
             messages: [
               {
@@ -4197,8 +4225,12 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
             return null;
           };
           summary = apply("summary", summary) || profile.summary || "";
-          builtRoles.forEach((r, ri) => { r.bullets = r.bullets.map((b, bi) => apply(`r${ri}:${bi}`, b)).filter(Boolean); });
-          builtProjects.forEach((p, pi) => { p.bullets = p.bullets.map((b, bi) => apply(`p${pi}:${bi}`, b)).filter(Boolean); });
+          const applyBullet = (id, b) => {
+            const text = apply(id, b.text);
+            return text ? { ...b, text } : null;
+          };
+          builtRoles.forEach((r, ri) => { r.bullets = r.bullets.map((b, bi) => applyBullet(`r${ri}:${bi}`, b)).filter(Boolean); });
+          builtProjects.forEach((p, pi) => { p.bullets = p.bullets.map((b, bi) => applyBullet(`p${pi}:${bi}`, b)).filter(Boolean); });
         }
       } catch (err) {
         // The audit is a safety net, not a gate; keep the draft but say the audit didn't run.
@@ -4225,18 +4257,39 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       }
     }
     const dropContaminated = (list, sourceLabel) => list.filter((b) => {
-      const bad = jdOnlyWords(b);
+      const bad = jdOnlyWords(b.text);
       if (bad.length === 0) return true;
-      removedBullets.push({ text: stripEmphasis(b), source: sourceLabel, reason: `uses terms from the job description that are not in your profile: ${bad.join(", ")}` });
+      removedBullets.push({ text: stripEmphasis(b.text), source: sourceLabel, reason: `uses terms from the job description that are not in your profile: ${bad.join(", ")}` });
       return false;
     });
     builtRoles.forEach((r) => { r.bullets = dropContaminated(r.bullets, `${r.title} @ ${r.company}`); });
     builtProjects.forEach((p) => { p.bullets = dropContaminated(p.bullets, `project ${p.name}`); });
 
-    // A role stripped bare falls back to the user's own description.
-    for (let i = 0; i < builtRoles.length; i++) {
-      if (builtRoles[i].bullets.length === 0) builtRoles[i].bullets = splitDescriptionToBullets(roles[i].description);
-    }
+    // No point of the user's resume goes missing: any point no surviving
+    // bullet covers (the model skipped it, or an audit dropped its bullet)
+    // comes back in the user's own words after the rewritten bullets.
+    const restoredPoints = [];
+    const restore = (bullets, points, sourceLabel) => {
+      const covered = new Set(bullets.flatMap((b) => b.points));
+      // A draft that tagged no indexes can't be checked point by point: trust
+      // it if it has a bullet per point, otherwise use the user's own points.
+      if (bullets.length && covered.size === 0) {
+        if (bullets.length >= points.length) return bullets;
+        points.forEach((text) => restoredPoints.push({ text, source: sourceLabel }));
+        return original(points);
+      }
+      const out = [...bullets];
+      points.forEach((text, i) => {
+        if (covered.has(i)) return;
+        restoredPoints.push({ text, source: sourceLabel });
+        out.push({ text, points: [i] });
+      });
+      return out;
+    };
+    builtRoles.forEach((r, ri) => { r.bullets = restore(r.bullets, rolePoints[ri], `${r.title} @ ${r.company}`); });
+    builtProjects.forEach((p, pi) => { p.bullets = restore(p.bullets, projectPoints[pi], `project ${p.name}`); });
+    builtRoles.forEach((r) => { r.bullets = r.bullets.map((b) => b.text); });
+    builtProjects.forEach((p) => { p.bullets = p.bullets.map((b) => b.text); });
 
     const fit = await fitPromise;
     const requirements = fit?.requirements || [];
@@ -4249,6 +4302,7 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       gaps: requirements.filter((q) => q.covered === "no").map((q) => q.requirement),
       removedBullets,
       trimmedBullets,
+      restoredPoints, // points of the user's resume put back verbatim because no rewritten bullet kept them
       droppedSkills,
       summaryReverted, // JD-only terms that made the generated summary unusable, or null
       location: { display: location.displayWithZip || location.display, zip: location.zip || null, tier: location.tier, reason: location.reason, candidates: location.candidates, jobLocation: job.locationName || null },
@@ -4290,7 +4344,7 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       createdAt: admin.firestore.Timestamp.now(),
     });
 
-    logger.info(`generateTailoredResume: uid=${uid} job=${jobId} coverage=${matchReport.coveragePct} trimmed=${trimmedBullets.length} removed=${removedBullets.length} droppedSkills=${droppedSkills.length}`);
+    logger.info(`generateTailoredResume: uid=${uid} job=${jobId} coverage=${matchReport.coveragePct} trimmed=${trimmedBullets.length} removed=${removedBullets.length} restored=${restoredPoints.length} droppedSkills=${droppedSkills.length}`);
     return { ok: true, cached: false, resume, matchReport };
   }
 );

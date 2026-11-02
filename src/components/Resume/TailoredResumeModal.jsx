@@ -159,6 +159,11 @@ function MatchSummary({ report }) {
               <p className="mt-1">If any of these are true, add them to your resume on the Profile page and try again.</p>
             </div>
           )}
+          {report?.restoredPoints?.length > 0 && (
+            <p className="text-xs text-gray-600">
+              <span className="font-semibold">Kept in your own words ({report.restoredPoints.length}):</span> points the rewrite couldn't keep accurately, so they appear as written on your resume.
+            </p>
+          )}
         </div>
       )}
     </div>
