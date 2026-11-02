@@ -179,14 +179,15 @@ const STATUS_LABEL = { submitted: "Submitted", needs_attention: "Needs you", err
 function renderAuto(st) {
   if (!st) return;
   const pill = $("auto-pill");
-  pill.textContent = st.on ? (st.current ? "Applying" : "On") : "Off";
+  pill.textContent = st.on ? (st.current ? "Applying" : st.idle ? "Waiting" : "On") : "Off";
   pill.className = `auto-pill${st.on ? " on" : ""}`;
   const btn = $("btn-auto");
   btn.textContent = st.on ? "Stop auto-apply" : "Start auto-apply";
   btn.classList.toggle("btn-stop", !!st.on);
   $("auto-line").textContent = st.current
     ? `Now: ${st.current.companyName} · ${st.current.title}`
-    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby and Greenhouse job on your Jobs page with a resume tailored to each role. Keep Chrome open.";
+    : st.on && st.idle ? `All caught up. Next check for new jobs at ${new Date(st.nextAt || Date.now()).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.${st.retrying ? ` ${st.retrying} failed job${st.retrying === 1 ? "" : "s"} will retry on ${st.retrying === 1 ? "its" : "their"} own.` : ""}`
+    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse and Lever job on your Jobs page with a resume tailored to each role. Once on, it stays on: it keeps the computer awake and checks for new jobs every 15 minutes.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
@@ -223,7 +224,7 @@ function refreshGmail() {
     $("gmail-status").style.color = mismatch ? "#b45309" : "";
     $("gmail-status").textContent = !res.connected ? "Choose the Gmail account that receives job emails."
       : mismatch ? `Connected to ${res.email}, but applications use ${res.profileEmail}. Reconnect with ${res.profileEmail}, or change the email on your Profile page.`
-      : `Reading security codes from ${res.email}.`;
+      : `Reading security codes and replies from companies (confirmations, rejections, interviews) from ${res.email}.`;
     $("btn-gmail").textContent = res.connected ? "Reconnect Gmail" : "Connect Gmail";
   });
 }

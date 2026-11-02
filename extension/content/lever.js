@@ -5,6 +5,10 @@
 // top to bottom, typing like a person -> verify four times, reading the board's
 // own errors -> record the attempt in the ledger -> STOP before submit. You
 // solve the hCaptcha and click "Submit application" yourself.
+// Auto-apply (a tab the background runner opened): fills without the
+// Autofill button and submits when nothing is left for the person; a visible
+// hCaptcha challenge or a field it cannot finish is reported back and the tab
+// stays open.
 
 (function () {
   "use strict";
@@ -86,6 +90,44 @@
     return el.closest(".application-question") || el.closest("li, .application-field")?.parentElement || el.parentElement;
   }
 
+  // ── Unattended auto-apply ─────────────────────────────────────────────────
+  let AUTO = null;
+  const autoReport = (status, note) => sendMsg({ type: "AUTO_RESULT", status, note }).catch(() => {});
+  function onScreen(el) {
+    const r = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    return r.width > 40 && r.height > 40 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity || 1) > 0.1 && r.bottom > 0 && r.top < innerHeight;
+  }
+  function captchaVisible() {
+    return [...document.querySelectorAll("iframe[src*='hcaptcha'][src*='challenge'], iframe[src*='recaptcha'][src*='bframe'], iframe[title*='challenge' i]")].some(onScreen);
+  }
+  async function autoSubmitLever(manual, pendingJob, answersLog) {
+    if (manual.size) return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
+    const btn = document.querySelector("#btn-submit, #application-form button[type=submit], button.postings-btn[type=submit]");
+    if (!btn) return autoReport("needs_attention", "could not find Lever's Submit button");
+    banner("Auto-apply: submitting.");
+    btn.scrollIntoView({ block: "center" });
+    await sleep(400);
+    btn.click();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 4 * 60 * 1000) {
+      await sleep(2000);
+      let done = false;
+      try { done = (await lever("submitted")) === true; } catch { done = !document.getElementById("application-form"); }
+      if (done) {
+        await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+        return autoReport("submitted", "");
+      }
+      if (captchaVisible()) {
+        banner("Auto-apply: Lever is showing a CAPTCHA. Solve it and press Submit; the queue moves on.");
+        return autoReport("needs_attention", "CAPTCHA challenge");
+      }
+      const errs = await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+      if (errs.length && Date.now() - t0 > 8000) return autoReport("needs_attention", `Lever flagged: ${errs.slice(0, 4).map((e) => e.label || e.text).join("; ")}`);
+    }
+    return autoReport("needs_attention", "no confirmation after 4 minutes (CAPTCHA or a field the form rejected)");
+  }
+
   // ── Main ──────────────────────────────────────────────────────────────────
   async function run() {
     const ids = pageIds();
@@ -93,20 +135,22 @@
 
     // Every form visit is an attempt; a form already submitted is left alone.
     const started = await ledger("start");
+    if (started?.duplicate && AUTO) { autoReport("skipped", "already applied"); return; }
     if (started?.duplicate) { banner(`JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
     if (!started?.ok) warn("ledger(start) failed:", started?.error);
 
     banner("JobWatch is reading the form.");
     const domFields = await lever("scan").then((x) => (Array.isArray(x) ? x : []));
-    if (!domFields.length) { warn("no fields found"); banner("JobWatch: no form fields found on this page."); return; }
+    if (!domFields.length) { warn("no fields found"); banner("JobWatch: no form fields found on this page."); if (AUTO) autoReport("error", "no form fields found"); return; }
     const domByPath = new Map(domFields.map((d) => [d.id, d]));
     log(`scanned ${domFields.length} fields`, domFields.map((d) => `${d.type}:${d.label}`));
 
     banner("JobWatch is working out your answers.");
     const header = pageJob();
     const res = await sendMsg({ type: "GET_LEVER_FILL_DATA", site: ids.site, id: ids.id, eu: ids.eu, domFields, ...header }).catch((e) => ({ ok: false, error: e.message }));
-    if (!res?.ok || !res.data) { warn("compute failed:", res?.error); banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); return; }
+    if (!res?.ok || !res.data) { warn("compute failed:", res?.error); banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); if (AUTO) autoReport("error", String(res?.error || "compute failed")); return; }
     const pkg = res.data;
+    if (pkg.alreadyApplied && AUTO) { autoReport("skipped", "already applied"); return; }
     if (pkg.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`); return; }
     const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };
     log(`computed: ${pkg.answered} fills for ${pkg.total} fields, ready=${pkg.ready}, review=${pkg.review.length}`, pkg.review);
@@ -205,6 +249,7 @@
     const needsAttention = [...manual.entries()].map(([label, v]) => ({ label, path: v.path, note: v.note }));
     const filled = Object.keys(answersLog).length;
     log(`DONE — filled ${filled}/${pkg.fills.length}. answersLog:`, answersLog);
+    if (manual.size && window.__jwLearnManual) window.__jwLearnManual([...manual.keys()], { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
     if (manual.size) {
       banner(`JobWatch filled ${filled}. These still need you, then solve the captcha and submit (saved to your Applications page):`, { items: [...manual.keys()] });
       warn("Needs you:", needsAttention);
@@ -216,6 +261,7 @@
       filledCount: filled, totalFields: domFields.length, requiredTotal: domFields.filter((d) => d.required).length,
       flow: "engine", schemaSource: "lever-dom", reasons: pkg.reasons || [],
     }).then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
+    if (AUTO) return autoSubmitLever(manual, pendingJob, answersLog);
     watchForSubmit(pendingJob, answersLog);
   }
 
@@ -243,7 +289,15 @@
       if (document.querySelector("#application-form input[name=name], #application-form input[name=email]")) break;
       await sleep(500);
     }
-    if (!document.querySelector("#application-form")) return;
+    try { AUTO = (await sendMsg({ type: "AUTO_JOB" }))?.job || null; } catch { AUTO = null; }
+    if (!document.querySelector("#application-form")) {
+      if (AUTO) autoReport("error", "no application form (the posting may be closed)");
+      return;
+    }
+    if (AUTO) {
+      run().catch((e) => { warn("run failed:", e.message); banner(`JobWatch failed: ${e.message}`); ledger("error", { error: e.message }); autoReport("error", e.message); });
+      return;
+    }
     // Nothing fills until the person presses Autofill.
     window.__jwNotify.launcher({
       onClick: async () => {

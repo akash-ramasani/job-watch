@@ -24,10 +24,19 @@ const STATUS = {
   submitted: { label: "Submitted", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", icon: "text-emerald-500", Icon: PaperAirplaneIcon },
   dismissed: { label: "Dismissed", cls: "bg-gray-100 text-gray-500 ring-gray-200", icon: "text-gray-300", Icon: XCircleIcon },
 };
+// What the company wrote back (read from Gmail by the extension; functions/lib/apply/emailTracker.cjs).
+const OUTCOME = {
+  confirmation: { label: "Received", cls: "bg-gray-50 text-gray-600 ring-gray-200" },
+  assessment: { label: "Assessment", cls: "bg-sky-50 text-sky-700 ring-sky-200" },
+  interview: { label: "Interview", cls: "bg-indigo-50 text-indigo-700 ring-indigo-200" },
+  rejection: { label: "Rejected", cls: "bg-red-50 text-red-700 ring-red-200" },
+  offer: { label: "Offer", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
+};
 const TABS = [
   { key: "attention", label: "Needs attention", match: (a) => ["needs_attention", "error", "in_progress"].includes(a.status) },
   { key: "ready", label: "Ready", match: (a) => a.status === "ready" },
   { key: "submitted", label: "Submitted", match: (a) => a.status === "submitted" },
+  { key: "replies", label: "Replies", match: (a) => ["interview", "assessment", "offer"].includes(a.outcome) },
   { key: "all", label: "All", match: () => true },
 ];
 
@@ -131,6 +140,11 @@ export default function Applications({ user }) {
                 <st.Icon className={`h-3 w-3 ${st.icon}`} />
                 {st.label}
               </span>
+              {OUTCOME[a.outcome] && (
+                <span title={a.lastEmail?.subject || ""} className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-black uppercase tracking-widest ring-1 ring-inset ${OUTCOME[a.outcome].cls}`}>
+                  {OUTCOME[a.outcome].label}
+                </span>
+              )}
               {Number.isFinite(a.filledCount) && (
                 <span className="text-xs text-gray-400">
                   <span className="font-semibold text-gray-600">{a.filledCount}{a.totalFields ? ` / ${a.totalFields}` : ""}</span> filled

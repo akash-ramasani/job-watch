@@ -287,6 +287,7 @@
     if (attention.size) {
       banner(`JobWatch filled ${filled}${stepLabel ? ` (${stepLabel})` : ""}. These still need you, then ${next} yourself:`, { items: [...attention.keys()] });
       warn("Needs you:", [...attention.entries()]);
+      if (window.__jwLearnManual) window.__jwLearnManual([...attention.keys()], { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
     } else {
       banner(`JobWatch filled ${filled} field${filled === 1 ? "" : "s"}${stepLabel ? ` (${stepLabel})` : ""}. Review, then ${next} yourself.`);
     }

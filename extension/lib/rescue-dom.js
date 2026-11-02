@@ -7,6 +7,9 @@
 // and whether it already holds an answer.
 // act(steps): run the steps the AI chose on those refs (click, type, select,
 // check, uncheck, key), like a person would.
+// valueOf(question): the answer the field holds now, as text ("" if none),
+// for the answer bank. Also loaded in the content scripts' own world, where
+// it reads the same DOM.
 
 (function () {
   if (window.__jwRescueDom) return;
@@ -37,8 +40,13 @@
         const controls = [...node.querySelectorAll(CONTROL)].filter((c) => visible(c) || c.type === "radio" || c.type === "checkbox");
         if (!controls.length) continue;
         // One question per block: stop before swallowing the next questions.
-        const questions = node.querySelectorAll("label, legend").length;
-        if (node.textContent.length > 4000 || questions > 12) break;
+        // (Option labels wrapping a checkbox or radio are answers, not questions.)
+        const questions = [...node.querySelectorAll("label, legend")].filter((l) => !l.querySelector("input, select, textarea")
+          && !(l.htmlFor && document.getElementById(l.htmlFor)?.matches?.("input[type=radio], input[type=checkbox]"))).length;
+        // A long <select>'s options are not the block's own text.
+        let textLen = node.textContent.length;
+        for (const sel of node.querySelectorAll("select")) textLen -= sel.textContent.length;
+        if (textLen > 4000 || questions > 12) break;
         return node;
       }
     }
@@ -73,6 +81,14 @@
       for (const c of el.children) walk(c);
     };
     walk(clone);
+    // A long list (every university) is cut to its ends; any option can still be
+    // chosen by its exact text with "select".
+    for (const sel of clone.querySelectorAll("select")) {
+      const opts = [...sel.querySelectorAll("option")];
+      if (opts.length <= 80) continue;
+      opts.slice(40, -20).forEach((o) => o.remove());
+      sel.setAttribute("data-options-shown", `first 40 and last 20 of ${opts.length}`);
+    }
     // Current values, which live in properties rather than attributes.
     const live = root.querySelectorAll("input, select, textarea");
     clone.querySelectorAll("input, select, textarea").forEach((n, i) => {
@@ -158,5 +174,25 @@
     return { ok: true, log };
   }
 
-  window.__jwRescueDom = { snapshot, act };
+  function valueOf(question) {
+    const block = findBlock(question);
+    if (!block) return "";
+    const out = [];
+    const labelOf = (el) => (el.labels?.[0]?.textContent || el.closest("label")?.textContent || el.getAttribute("aria-label") || el.value || "").replace(/\s+/g, " ").trim();
+    for (const el of block.querySelectorAll("input, select, textarea")) {
+      if (["hidden", "file", "submit", "button", "password"].includes(el.type)) continue;
+      if (el.type === "radio" || el.type === "checkbox") { if (el.checked) out.push(labelOf(el)); continue; }
+      if (el.tagName === "SELECT") { const t = el.options[el.selectedIndex]?.textContent?.trim() || ""; if (el.value && !PLACEHOLDER.test(t)) out.push(t); continue; }
+      // A picker's search box holds typing, not the choice.
+      if (el.getAttribute("role") === "combobox" || el.closest("[class*=select__] , [class*=Select]")) continue;
+      if (el.value?.trim()) out.push(el.value.trim());
+    }
+    for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) {
+      const t = el.textContent.replace(/\s+/g, " ").trim();
+      if (t) out.push(t);
+    }
+    return [...new Set(out.filter(Boolean))].join("; ").slice(0, 300);
+  }
+
+  window.__jwRescueDom = { snapshot, act, valueOf };
 })();

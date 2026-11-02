@@ -469,9 +469,19 @@ async function autoAddFeed(tabUrl, tabTitle) {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !/^https:/.test(tab.url || "")) return;
   autoAddFeed(tab.url, tab.title);
+  autoLeverThanks(tabId, tab.url).catch(() => {});
 });
 
-// ─── Unattended auto-apply (Ashby + Greenhouse) ──────────────────────────────
+/** Lever leaves the form for a separate /thanks page after Submit: that is the submission. */
+async function autoLeverThanks(tabId, url) {
+  if (!/jobs\.(eu\.)?lever\.co\/[^/]+\/[0-9a-f-]{36}\/thanks/i.test(url)) return;
+  const job = await autoJobForTab(tabId);
+  if (!job) return;
+  await callFunction("recordApplication", { event: "submitted", applyUrl: job.applyUrl, jobId: job.jobId, jobTitle: job.title, companyName: job.companyName }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
+  await autoFinish({ status: "submitted", note: "" });
+}
+
+// ─── Unattended auto-apply (Ashby, Greenhouse, Lever) ──────────────────────────────
 // Works through getAutoApplyQueue one job at a time in a background tab: the
 // tailored resume is made first (tailoredResumeFile), the page's content
 // script fills the form, submits when nothing is left for the person, enters
@@ -479,12 +489,43 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // (AUTO_RESULT). Anything it cannot finish stays open in its tab and is
 // listed in the popup. State lives in chrome.storage.local so a restarted
 // service worker carries on; a one-minute alarm keeps the loop alive.
+//
+// Always on: when the queue runs dry the runner waits and checks for new jobs
+// every 15 minutes instead of stopping, starts again when the browser opens,
+// and keeps the computer awake while it is on (chrome.power). Failed jobs are
+// retried on their own (30 minutes, then 2 hours; three tries in all; closed
+// postings never). A job that needed the person is retried once they add a
+// saved answer on the Profile page, if its tab was closed.
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
+const AUTO_IDLE_MS = 15 * 60 * 1000; // queue empty: look for new jobs this often
+const AUTO_RETRY_MS = [30 * 60 * 1000, 2 * 60 * 60 * 1000]; // after the 1st and 2nd failure
+const AUTO_MAX_TRIES = 3;
+const CLOSED_POSTING = /not found|no longer (accepting|available|open)|position (has been )?(filled|closed)|job (is )?closed|posting (was )?(removed|expired|closed)|\b404\b/i;
 let autoBusy = false;
-let autoQueue = { at: 0, list: [] };
+let autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
+
+/** Keep the computer awake while auto-apply is on (the display may still sleep). */
+function keepAwake(on) {
+  try { if (on) chrome.power.requestKeepAwake("system"); else chrome.power.releaseKeepAwake(); } catch (_) { /* no power API */ }
+}
+
+/** Whether a job is due now: never tried, or a failure whose retry time came. */
+async function autoDue(j, st) {
+  const r = st.results[j.jobId];
+  if (!r) return true;
+  if ((r.tries || 1) >= AUTO_MAX_TRIES || r.closed) return false;
+  if (r.status === "error") return Date.now() >= (r.retryAt || 0);
+  if (r.status === "needs_attention") {
+    // Waiting on the person: retried after they add an answer, once its tab is gone.
+    if (!(autoQueue.answersUpdatedAt > r.at)) return false;
+    if (r.tabId && await chrome.tabs.get(r.tabId).then(() => true).catch(() => false)) return false;
+    return true;
+  }
+  return false;
+}
 
 async function autoState() {
   const { [AUTO_KEY]: st } = await chrome.storage.local.get(AUTO_KEY);
@@ -543,18 +584,26 @@ async function withTailoredResume(data, tailoredP) {
 }
 
 async function autoNextJob(st) {
-  if (Date.now() - autoQueue.at > 15 * 60 * 1000 || !autoQueue.list.length) {
+  if (Date.now() - autoQueue.at > AUTO_IDLE_MS || !autoQueue.list.length) {
     const r = await callFunction("getAutoApplyQueue", {});
-    autoQueue = { at: Date.now(), list: r.queue || [] };
+    autoQueue = { at: Date.now(), list: r.queue || [], answersUpdatedAt: Number(r.answersUpdatedAt) || 0 };
   }
-  return autoQueue.list.find((j) => !st.results[j.jobId]) || null;
+  for (const j of autoQueue.list) if (await autoDue(j, st)) return j;
+  return null;
 }
 
 async function autoFinish(result) {
   const st = await autoState();
   const cur = st.current;
   if (!cur) return;
-  st.results[cur.jobId] = { status: result.status, note: String(result.note || "").slice(0, 300), title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now() };
+  const prev = st.results[cur.jobId];
+  const tries = (prev?.tries || 0) + 1;
+  const note = String(result.note || "").slice(0, 300);
+  st.results[cur.jobId] = {
+    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries,
+    ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
+    ...(result.status === "needs_attention" ? { tabId: cur.tabId || null } : {}),
+  };
   st.current = null;
   st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
   await saveAuto(st);
@@ -573,6 +622,7 @@ async function autoTick() {
   autoBusy = true;
   try {
     const st = await autoState();
+    keepAwake(!!st.on);
     if (!st.on) return;
     if (st.current) {
       const alive = st.current.tabId ? await chrome.tabs.get(st.current.tabId).then(() => true).catch(() => false) : true;
@@ -583,12 +633,20 @@ async function autoTick() {
     if (st.nextAt && Date.now() < st.nextAt) return;
     const job = await autoNextJob(st);
     if (!job) {
-      st.on = false;
+      // Nothing due: wait for new jobs (or a retry's time) instead of stopping.
+      const retryAts = Object.values(st.results).filter((r) => r.status === "error" && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).map((r) => r.retryAt || 0);
+      st.nextAt = Math.min(Date.now() + AUTO_IDLE_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
+      if (!st.idle) {
+        const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
+        notify("Auto-apply is waiting for new jobs", `Every job so far is done (${n} submitted). It checks for new ones every 15 minutes.`);
+      }
+      st.idle = true;
+      autoQueue.at = 0; // fetch a fresh queue next time
       await saveAuto(st);
-      const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
-      notify("Auto-apply finished", `No more Ashby or Greenhouse jobs to apply to. ${n} submitted.`);
+      chrome.alarms.create("jwAutoKick", { when: st.nextAt });
       return;
     }
+    st.idle = false;
     st.current = { ...job, tabId: null, startedAt: Date.now() };
     await saveAuto(st);
     await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
@@ -609,13 +667,16 @@ async function autoTick() {
 
 chrome.alarms.create("jwAutoTick", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick(); });
+// The browser opened: carry on where it left off (a job whose tab is gone is retried later).
+chrome.runtime.onStartup.addListener(() => { autoTick(); });
 
 async function autoStatus() {
   const st = await autoState();
   const results = Object.entries(st.results || {}).map(([jobId, r]) => ({ jobId, ...r })).sort((a, b) => b.at - a.at);
   const count = (s) => results.filter((r) => r.status === s).length;
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
-  return { on: !!st.on, current: st.current, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  const retrying = results.filter((r) => r.status === "error" && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
+  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.current, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
@@ -670,6 +731,75 @@ async function greenhouseCode(sinceMs) {
   return "";
 }
 
+// ─── Replies from companies (Gmail) ──────────────────────────────────────────
+// Every 30 minutes while Gmail is connected: recent messages that look like
+// application mail go to trackApplicationEmails, which matches them to
+// submitted applications and records confirmations, rejections, interviews,
+// assessments and offers. An interview, assessment or offer is a notification.
+
+async function scanApplicationMail() {
+  const g = await gmailState();
+  if (!g.clientId || !g.email) return;
+  let token;
+  try { token = await gmailToken(false); } catch (err) { console.warn("[JobWatch] mail scan: no Gmail token:", err.message); return; }
+  const auth = { headers: { Authorization: `Bearer ${token}` } };
+  const q = encodeURIComponent('newer_than:3d -in:sent -category:promotions -category:social (application OR applying OR applied OR interview OR candidacy OR "next steps" OR unfortunately OR assessment OR offer OR position OR role)');
+  const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=40`, auth).then((r) => r.json()).catch(() => ({}));
+  const { jwMailSeen = [] } = await chrome.storage.local.get("jwMailSeen");
+  const seen = new Set(jwMailSeen);
+  const fresh = (list.messages || []).filter((m) => !seen.has(m.id)).slice(0, 25);
+  if (!fresh.length) return;
+  const emails = [];
+  for (const m of fresh) {
+    const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`, auth).then((r) => r.json()).catch(() => null);
+    if (!msg?.id) continue;
+    const h = (n) => (msg.payload?.headers || []).find((x) => x.name.toLowerCase() === n)?.value || "";
+    emails.push({ id: msg.id, from: h("from"), subject: h("subject"), snippet: msg.snippet || "", date: Number(msg.internalDate) || Date.now() });
+  }
+  let out;
+  try { out = await callFunction("trackApplicationEmails", { emails }); } catch (err) { console.warn("[JobWatch] mail scan failed:", err.message); return; }
+  await chrome.storage.local.set({ jwMailSeen: [...jwMailSeen, ...fresh.map((m) => m.id)].slice(-1000) });
+  const { jwMailEvents = [] } = await chrome.storage.local.get("jwMailEvents");
+  const events = [...jwMailEvents, ...(out.updates || []).map((u) => ({ ...u, at: Date.now() }))].filter((e) => Date.now() - e.at < 14 * 864e5).slice(-300);
+  await chrome.storage.local.set({ jwMailEvents: events });
+  for (const u of out.updates || []) {
+    const what = { interview: "wants to interview you", assessment: "sent an assessment", offer: "sent an offer" }[u.kind];
+    if (what) notify(`${u.companyName} ${what}`, `${u.jobTitle || "Your application"}. Check your email.`);
+  }
+  console.log("[JobWatch] mail scan:", emails.length, "checked,", (out.updates || []).length, "matched");
+}
+
+// ─── Daily summary (8 PM) ─────────────────────────────────────────────────────
+function next8pm() {
+  const d = new Date();
+  d.setHours(20, 0, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+async function dailySummary() {
+  const st = await autoState();
+  const day = Date.now() - 864e5;
+  const recent = Object.values(st.results || {}).filter((r) => r.at >= day);
+  const n = (s) => recent.filter((r) => r.status === s).length;
+  const { jwMailEvents = [] } = await chrome.storage.local.get("jwMailEvents");
+  const mail = jwMailEvents.filter((e) => e.at >= day);
+  const m = (k) => mail.filter((e) => e.kind === k).length;
+  const parts = [
+    `${n("submitted")} submitted`, n("needs_attention") && `${n("needs_attention")} need you`, n("error") && `${n("error")} failed`,
+    m("interview") && `${m("interview")} interview${m("interview") === 1 ? "" : "s"}`, m("assessment") && `${m("assessment")} assessment${m("assessment") === 1 ? "" : "s"}`,
+    m("offer") && `${m("offer")} offer${m("offer") === 1 ? "" : "s"}`, m("rejection") && `${m("rejection")} rejection${m("rejection") === 1 ? "" : "s"}`,
+  ].filter(Boolean);
+  if (!recent.length && !mail.length) return;
+  notify("JobWatch today", `${parts.join(", ")}.${st.on ? "" : " Auto-apply is off."}`);
+}
+
+chrome.alarms.get("jwMailScan", (a) => { if (!a) chrome.alarms.create("jwMailScan", { delayInMinutes: 2, periodInMinutes: 30 }); });
+chrome.alarms.get("jwDaily", (a) => { if (!a) chrome.alarms.create("jwDaily", { when: next8pm(), periodInMinutes: 24 * 60 }); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "jwMailScan") scanApplicationMail().catch((e) => console.warn("[JobWatch] mail scan:", e.message));
+  if (a.name === "jwDaily") dailySummary().catch(() => {});
+});
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -688,17 +818,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "AUTO_START") {
         const st = await autoState();
-        st.on = true; st.nextAt = 0; st.startedAt = st.startedAt || Date.now();
+        st.on = true; st.idle = false; st.nextAt = 0; st.startedAt = st.startedAt || Date.now();
         await saveAuto(st);
-        autoQueue = { at: 0, list: [] };
+        keepAwake(true);
+        autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
         autoTick();
         sendResponse({ ok: true });
         return;
       }
       if (message.type === "AUTO_STOP") {
         const st = await autoState();
-        st.on = false; st.current = null;
+        st.on = false; st.idle = false; st.current = null;
         await saveAuto(st);
+        keepAwake(false);
         sendResponse({ ok: true });
         return;
       }
@@ -707,9 +839,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const st = await autoState();
         let n = 0;
         for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") { delete st.results[id]; n++; }
+        st.idle = false; st.nextAt = 0;
         await saveAuto(st);
-        autoQueue = { at: 0, list: [] };
+        autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
+        if (st.on) autoTick();
         sendResponse({ ok: true, retried: n });
+        return;
+      }
+      if (message.type === "LEARN_ANSWERS") {
+        // The answer bank (functions/lib/apply/savedAnswers.cjs).
+        try { sendResponse({ ok: true, result: await callFunction("learnAnswers", { saved: message.saved || [], missing: message.missing || [] }) }); }
+        catch (err) { sendResponse({ ok: false, error: err.message }); }
         return;
       }
       if (message.type === "AUTO_STATUS") {
@@ -944,6 +1084,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const { idToken } = await getFreshToken();
           const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
           const job = pendingJob && jobMatchesExternalId(pendingJob, message.id) ? pendingJob : null;
+          const tailoredP = startTailored(sender, { source: "lever", externalId: message.id });
           const res = await fetch(`${FUNCTIONS_BASE}/prepareLeverApplication`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
@@ -954,7 +1095,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           const json = await res.json();
           if (!res.ok || json.error) throw new Error(json.error?.message || `prepareLeverApplication ${res.status}`);
-          sendResponse({ ok: true, data: json.result, pendingJob: job });
+          sendResponse({ ok: true, data: await withTailoredResume(json.result, tailoredP), pendingJob: job });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }

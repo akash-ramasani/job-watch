@@ -1,11 +1,11 @@
 // autoApply.cjs — the queue behind the extension's unattended auto-apply.
 //
-// Every Ashby and Greenhouse job on the person's Jobs page (the same
+// Every Ashby, Greenhouse and Lever job on the person's Jobs page (the same
 // "related" rule the page uses: job types, AI/rule verdicts, visa
 // eligibility), newest first, minus every job already applied to (by job id,
 // form key and company+title). No score floor and no daily cap: the person
 // asked for all of them. Each entry carries the URL the runner opens: the
-// Ashby application page, or Greenhouse's own embedded form (a company's
+// Ashby or Lever application page, or Greenhouse's own embedded form (a company's
 // careers site may wrap it in an iframe the runner cannot drive).
 
 const { createAssistantContext, isRelatedJob } = require("../assistantTools.cjs");
@@ -14,6 +14,8 @@ const ledger = require("./ledger.cjs");
 
 const GH_SOURCES = new Set(["greenhouse"]);
 const ASHBY_SOURCES = new Set(["ashby", "ashbyhq"]);
+const LEVER_SOURCES = new Set(["lever"]);
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Board slug of a feed URL: boards-api.greenhouse.io/v1/boards/<token>/..., posting-api/job-board/<org>. */
 function feedSlug(url) {
@@ -22,6 +24,8 @@ function feedSlug(url) {
   if (gh && !/^(v1|embed)$/i.test(gh[1])) return { source: "greenhouse", slug: gh[1] };
   const ash = u.match(/ashbyhq\.com\/posting-api\/job-board\/([^/?#]+)/i) || u.match(/jobs\.ashbyhq\.com\/([^/?#]+)/i);
   if (ash) return { source: "ashby", slug: ash[1] };
+  const lev = u.match(/api\.(eu\.)?lever\.co\/v0\/postings\/([^/?#]+)/i) || u.match(/jobs\.(eu\.)?lever\.co\/([^/?#]+)/i);
+  if (lev) return { source: "lever", slug: decodeURIComponent(lev[2]), eu: !!lev[1] };
   return null;
 }
 
@@ -35,6 +39,12 @@ function applyUrlFor(job, feedSlugs) {
     if (m) return `https://jobs.ashbyhq.com/${m[1]}/${m[2]}/application`;
     const org = feedSlugs.get(job.companyKey)?.slug;
     return org && /^[0-9a-f-]{36}$/i.test(ext) ? `https://jobs.ashbyhq.com/${org}/${ext}/application` : "";
+  }
+  if (LEVER_SOURCES.has(src)) {
+    const m = url.match(/jobs\.(eu\.)?lever\.co\/([^/?#]+)\/([0-9a-f-]{36})/i);
+    if (m) return `https://jobs.${m[1] ? "eu." : ""}lever.co/${m[2]}/${m[3].toLowerCase()}/apply`;
+    const f = feedSlugs.get(job.companyKey);
+    return f?.source === "lever" && UUID.test(ext) ? `https://jobs.${f.eu ? "eu." : ""}lever.co/${encodeURIComponent(f.slug)}/${ext.toLowerCase()}/apply` : "";
   }
   if (GH_SOURCES.has(src)) {
     let token = feedSlugs.get(job.companyKey)?.slug || "";
@@ -64,8 +74,9 @@ function resumeFileName(fullName, jobTitle) {
 }
 
 /**
- * The queue: [{ jobId, source: "ashby"|"greenhouse", applyUrl, title,
- * companyName, externalId, locationName, postedAt }].
+ * The queue: [{ jobId, source, applyUrl, title,
+ * companyName, externalId, locationName, postedAt }]; source is "ashby",
+ * "greenhouse" or "lever".
  */
 async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   const ctx = createAssistantContext(db, uid, { adminUid });
@@ -100,7 +111,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (!j?.id || seen.has(j.id)) continue;
     seen.add(j.id);
     const src = String(j.source || "").toLowerCase();
-    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src)) continue;
+    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
@@ -114,7 +125,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     const ts = j.sourceUpdatedTs;
     const postedAt = ts?.toMillis ? ts.toMillis() : ts?._seconds ? ts._seconds * 1000 : (Date.parse(ts) || 0);
     out.push({
-      jobId: j.id, source: ASHBY_SOURCES.has(src) ? "ashby" : "greenhouse", applyUrl,
+      jobId: j.id, source: ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse", applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
       locationName: j.locationName || "", postedAt,
     });

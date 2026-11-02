@@ -592,6 +592,55 @@ export function classifyQuestion(q) {
  * writer (or stays blank when optional).
  */
 export function answerQuestion(q, profile, ai, ctx = {}) {
+  // Saved answers (Profile > Saved answers, and what the AI rescue or the
+  // person filled before): the person's own come first, the AI's fill gaps.
+  const saved = savedAnswerFor(q, profile);
+  if (saved && saved.source === "you") { const s = applySaved(q, saved); if (s) return s; }
+  const a = answerQuestionGuarded(q, profile, ai, ctx);
+  if (!a.answers.length && saved) { const s = applySaved(q, saved); if (s) return s; }
+  return a;
+}
+
+/** Same normalization as lib/apply/savedAnswers.cjs normQuestion (a test keeps them equal). */
+export function normQuestion(s) {
+  return String(s || "").replace(/[*✱]/g, " ").replace(/\s+/g, " ").trim().toLowerCase().replace(/[\s:?.]+$/, "");
+}
+function savedAnswerFor(q, profile) {
+  const idx = profile && profile.savedAnswers;
+  if (!idx || typeof idx !== "object") return null;
+  const hit = idx[normQuestion(q.label || q.fields?.[0]?.name || "")];
+  return hit && String(hit.answer || "").trim() ? hit : null;
+}
+/** A saved answer put on this question's field, or null when it does not fit (no such option). */
+function applySaved(q, saved) {
+  const primary = (q.fields || [])[0] || {};
+  const kind = fieldKind(primary);
+  if (kind === "file") return null;
+  const name = primary.name || "";
+  const label = q.label || name;
+  const note = `saved answer (${saved.source === "you" ? "yours" : "learned"})`;
+  const done = (answers) => ({ label, required: !!q.required, source: SOURCE.PROFILE, confidence: 0.9, note, answers });
+  const text = String(saved.answer).trim();
+  const values = primary.values || primary.options || [];
+  if (["select", "multiselect", "boolean"].includes(kind) && values.length) {
+    const parts = kind === "multiselect" ? text.split(/\s*;\s*/).filter(Boolean) : [text];
+    const picked = [];
+    for (const part of parts) {
+      const want = norm(part);
+      let hit = values.find((v) => norm(v.label) === want);
+      if (!hit && want.length >= 2) {
+        const loose = values.filter((v) => { const l = norm(v.label); return l.startsWith(want) || (l.length >= 2 && want.startsWith(l)); });
+        if (loose.length === 1) hit = loose[0];
+      }
+      if (!hit) return null;
+      picked.push({ name, value: hit.value });
+    }
+    return picked.length ? done(picked) : null;
+  }
+  return done([{ name, value: text }]);
+}
+
+function answerQuestionGuarded(q, profile, ai, ctx = {}) {
   const a = answerQuestionCore(q, profile, ai, ctx);
   const kinds = (q.fields || []).map(fieldKind);
   const isSelect = kinds.some((k) => ["select", "multiselect", "boolean"].includes(k));

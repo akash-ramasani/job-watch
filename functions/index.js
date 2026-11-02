@@ -131,6 +131,8 @@ const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-opus-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
+const savedAnswers = require("./lib/apply/savedAnswers.cjs");
+const { trackEmails } = require("./lib/apply/emailTracker.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
 
@@ -4882,9 +4884,12 @@ exports.getAutoApplyQueue = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const queue = await buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID });
+    const [queue, userSnap] = await Promise.all([buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID }), db.collection("users").doc(uid).get()]);
+    // When the person last added a saved answer: jobs that waited on them are retried after it.
+    const at = userSnap.exists ? userSnap.data()?.answersUpdatedAt : null;
+    const answersUpdatedAt = at?.toMillis ? at.toMillis() : (Date.parse(at) || 0);
     logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length}`);
-    return { queue, count: queue.length };
+    return { queue, count: queue.length, answersUpdatedAt };
   }
 );
 
@@ -4954,6 +4959,35 @@ exports.rescueField = onCall(
       userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
     logger.info(`rescueField: uid=${uid} round=${d.round || 1} q="${String(d.question).slice(0, 80)}" steps=${plan.steps.length} done=${plan.done} cannot="${plan.cannot}" ms=${Date.now() - t0}`);
     return plan;
+  }
+);
+
+// The answer bank: what the AI rescue finished, what the person filled by hand
+// and what nobody could answer, reported by the extension
+// (lib/apply/savedAnswers.cjs). The next form asking the same question fills
+// from it without the AI or the person.
+exports.learnAnswers = onCall({ region: REGION, maxInstances: 10 }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+  const r = await savedAnswers.learn(db, uid, request.data || {}, { FieldValue: admin.firestore.FieldValue });
+  logger.info(`learnAnswers: uid=${uid} saved=${r.saved} missing=${r.missing}`);
+  return r;
+});
+
+// What companies wrote back: the extension sends recent Gmail messages
+// (sender, subject, snippet); matched ones are sorted by Claude and recorded
+// on the application (lib/apply/emailTracker.cjs).
+exports.trackApplicationEmails = onCall(
+  { region: REGION, maxInstances: 5, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    let ai = null;
+    try { ai = requireOpenAI(); } catch (e) { logger.warn("trackApplicationEmails: no AI client:", e.message); }
+    const t0 = Date.now();
+    const out = await trackEmails({ db, ai, model: OPENAI_FAST_MODEL }, uid, request.data?.emails);
+    logger.info(`trackApplicationEmails: uid=${uid} in=${(request.data?.emails || []).length} updates=${out.updates.length} ms=${Date.now() - t0}`);
+    return out;
   }
 );
 

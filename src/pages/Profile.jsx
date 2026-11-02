@@ -13,6 +13,7 @@ import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
 import ResumeProfileSection from "../components/Resume/ResumeProfileSection.jsx";
 import JobTypesCard from "../components/JobTypesCard.jsx";
+import SavedAnswersCard from "../components/SavedAnswersCard.jsx";
 import { contactFromUser, downloadResumePdf, downloadResumeTex, profileToResume } from "../lib/resumeDownloads.js";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -647,6 +648,16 @@ export default function Profile({ user, userMeta }) {
               </div>
             </div>
           </div>
+        </ProfileCard>
+      </motion.div>
+
+      {/* ═══ SAVED ANSWERS ═══ */}
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.05 }}>
+        <ProfileCard
+          title="Saved answers"
+          description="Questions from application forms, answered once and reused on every form. Answer the ones waiting and auto-apply retries the jobs that needed them."
+        >
+          <SavedAnswersCard uid={user?.uid} notify={showToast} />
         </ProfileCard>
       </motion.div>
 

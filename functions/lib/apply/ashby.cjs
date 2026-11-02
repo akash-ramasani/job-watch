@@ -12,6 +12,7 @@
 // call for every unknown field (compliance included), which truncated and
 // dropped answers on longer forms.
 
+const { savedIndex } = require("./savedAnswers.cjs");
 const { METROS } = require("../resumeLocation.cjs");
 const { candidateYearsOf, buildProfileText } = require("../jobFit.cjs");
 const { renderCoverLetterPdf, contactLine } = require("./coverPdf.cjs");
@@ -256,6 +257,8 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     education: Array.isArray(resume.education) ? resume.education : [],
     certifications: Array.isArray(resume.certifications) ? resume.certifications : [],
     companyName: job.companyName || "",
+    // The answer bank (savedAnswers.cjs), keyed by normalized question.
+    savedAnswers: savedIndex(user),
     // Remote/hybrid history from the resume's role locations when the person
     // has not said; "Yes, fully remote" / "Yes, hybrid" style answers map by prefix.
     remoteExperience: user.remoteExperience ?? (roles.some((r) => /\bremote\b/i.test(r.location || "")) ? "Yes, fully remote" : roles.some((r) => /\bhybrid\b/i.test(r.location || "")) ? "Yes, hybrid" : undefined),

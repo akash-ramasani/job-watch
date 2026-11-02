@@ -436,6 +436,8 @@
       ? `JobWatch filled ${ok} of ${data.fills.length}. These still need you, then press Submit:`
       : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then press Submit.`;
     banner(doneMsg, { action: submitAction(doneMsg, needs), items: needs });
+    // What the person types into these before Submit goes to the answer bank.
+    if (needs.length && window.__jwLearnManual) window.__jwLearnManual(needs, { jobTitle: data.jobTitle || "", companyName: data.companyName || "" });
     // Record the attempt: every answer, everything left for the person
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [

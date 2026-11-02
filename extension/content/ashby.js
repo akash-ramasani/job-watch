@@ -1613,6 +1613,8 @@
       manual.set(label, { path: e.path, note: prev ? `${prev.note}. The form says: ${e.text}` : `The form says: ${e.text}` });
     }
     const needsAttention = [...manual.entries()].map(([label, v]) => ({ label, path: v.path, note: v.note }));
+    // What the person types into these before Submit goes to the answer bank.
+    if (manual.size && window.__jwLearnManual) window.__jwLearnManual([...manual.keys()], { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "" });
     console.log("[JobWatch] Filled. answersLog:", JSON.stringify(answersLog, null, 2));
     if (manual.size) {
       const names = [...manual.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));

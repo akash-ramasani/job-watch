@@ -46,6 +46,7 @@ You get the applicant's profile and resume, the job, the field's question, and t
 Rules:
 - Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details. When the honest answer needs information the profile does not have, return no steps and say what is missing in "cannot".
 - Work authorization, sponsorship, visa, EEO and similar answers come only from the profile. Statements that the applicant's answers are their own work are confirmed (their standing choice).
+- A long <select> marked data-options-shown lists only some options: you may still "select" any option by its exact text (for example the applicant's university), or the list's "Other" option when theirs is surely not offered.
 - A dropdown or typeahead whose options are not in the HTML yet: click or type to open it, set done to false, and you will see the options next round.
 - Only refs present in the HTML. Prefer the fewest steps. Set done to true when your steps complete the field.
 - "answer" is the value you chose, in a few words.
