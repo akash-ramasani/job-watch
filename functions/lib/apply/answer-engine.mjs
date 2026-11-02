@@ -380,7 +380,9 @@ function classify(label, kind = "") {
 /** Stand-ins for a missing social link: the site itself, no profile claimed. */
 export const BARE_LINKS = { linkedin: "https://www.linkedin.com/", github: "https://www.github.com/" };
 const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "availability", "noticePeriod", "heardAboutUs", "currentCompany", "conditionalFollowup", "referral", "workSample", "publications", "location", "cityState", "linkedin", "github", "portfolio", "university", "currentTitle",
-  "requiresSponsorship", "workAuthorized", "willingToWorkHybrid", "preferredLanguage", "referredYesNo", "notApplicable", "ownWorkStatement", "testScore"]);
+  "requiresSponsorship", "workAuthorized", "willingToWorkHybrid", "preferredLanguage", "referredYesNo", "notApplicable", "ownWorkStatement", "testScore",
+  // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
+  "yearsExperience"]);
 
 /** Does the resume text show the experience a gate asks about? Pulls the
  *  technology/skill terms after "with/in/using" and checks each against the

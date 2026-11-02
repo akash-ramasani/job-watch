@@ -49,6 +49,7 @@ const FIELDS = [
   { id: "date:date#1", label: "Date", type: "date", required: true, options: [] },
   { id: "resume-cv:file#1", label: "Resume/CV (Select files)", type: "file", required: true, options: [] },
   { id: "date-available:text#1", label: "Date Available", type: "text", required: false, options: [] },
+  { id: "years:textarea#1", label: "How many years of software engineering experience do you have?", type: "textarea", required: true, options: [] },
 ];
 const POSTING = {
   jobPostingInfo: { title: "Senior Software Engineer", location: "US, CA, Santa Clara", remoteType: "Hybrid", jobReqId: "JR1987654", jobDescription: "<p>Build GPU cloud services in Python.</p>" },
@@ -138,6 +139,9 @@ test("workday: scanned form end to end on the shared engine", async () => {
   assert.equal(by["resume-cv:file#1"].kind, "file");
   assert.equal(by["date-available:text#1"].kind, "date");
   assert.match(by["date-available:text#1"].value, /^\d{2}\/\d{2}\/\d{4}$/);
+  // A years question in a paragraph box is the number from the profile, not AI prose (Stitch Fix, Greenhouse).
+  assert.equal(by["years:textarea#1"].source, "profile");
+  assert.match(by["years:textarea#1"].value, /^\d+(\.\d)?$/);
   // Resume history for My Experience.
   assert.equal(out.history.roles[0].company, "Runn Technologies");
   assert.equal(out.history.roles[0].current, true);
