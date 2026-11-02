@@ -196,8 +196,7 @@
     const filled = Object.keys(answersLog).length;
     log(`DONE — filled ${filled}/${pkg.fills.length}. answersLog:`, answersLog);
     if (manual.size) {
-      const names = [...manual.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));
-      banner(`JobWatch filled ${filled}. Complete manually: ${names.join(", ")}${manual.size > 3 ? `, +${manual.size - 3} more` : ""}. Then solve the captcha and Submit. (Saved to your Applications page.)`);
+      banner(`JobWatch filled ${filled}. These still need you, then solve the captcha and submit (saved to your Applications page):`, { items: [...manual.keys()] });
       warn("Needs you:", needsAttention);
     } else {
       banner(`JobWatch filled all ${filled} fields. Review, solve the captcha, then click Submit application yourself.`);
@@ -224,14 +223,9 @@
     }, 2000);
   }
 
-  let bannerEl = null;
-  function banner(text) {
-    if (!bannerEl) {
-      bannerEl = document.createElement("div");
-      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center";
-      document.body.appendChild(bannerEl);
-    }
-    bannerEl.textContent = text;
+  // The JobWatch card, bottom right (content/notify.js).
+  function banner(text, { action = null, items = null } = {}) {
+    window.__jwNotify.show(text, undefined, { action, items });
   }
 
   (async () => {
@@ -239,7 +233,13 @@
       if (document.querySelector("#application-form input[name=name], #application-form input[name=email]")) break;
       await sleep(500);
     }
-    await sleep(600);
-    run().catch((e) => { warn("run failed:", e.message); banner(`JobWatch failed: ${e.message}`); ledger("error", { error: e.message }); });
+    if (!document.querySelector("#application-form")) return;
+    // Nothing fills until the person presses Autofill.
+    window.__jwNotify.launcher({
+      onClick: async () => {
+        await sleep(300);
+        run().catch((e) => { warn("run failed:", e.message); banner(`JobWatch failed: ${e.message}`); ledger("error", { error: e.message }); });
+      },
+    });
   })();
 })();

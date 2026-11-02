@@ -1304,98 +1304,12 @@
     return missing;
   }
 
-  // ─── Overlay UI ──────────────────────────────────────────────────────────
-  // ─── Premium Toast Notification ──────────────────────────────────────────
+  // ─── Overlay UI: the shared JobWatch card (content/notify.js) ─────────────
   function showOverlay(text, type = "info", { action = null } = {}) {
-    // Inject styles once
-    if (!document.getElementById("jw-toast-styles")) {
-      const s = document.createElement("style");
-      s.id = "jw-toast-styles";
-      s.textContent = `
-        #jw-overlay {
-          position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
-          display: flex; align-items: center; gap: 12px;
-          padding: 12px 16px; border-radius: 12px; max-width: 380px;
-          font-family: 'Inter', system-ui, sans-serif; font-size: 13px; font-weight: 500;
-          color: #f1f5f9; background: rgba(15, 15, 26, 0.95);
-          backdrop-filter: blur(20px) saturate(180%);
-          -webkit-backdrop-filter: blur(20px) saturate(180%);
-          border: 1px solid rgba(255,255,255,0.1);
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
-          transform: translateY(12px); opacity: 0;
-          transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.25s ease, border-color 0.3s;
-          will-change: transform, opacity;
-          box-sizing: border-box;
-        }
-        #jw-overlay * { box-sizing: border-box; }
-        #jw-overlay.jw-visible { transform: translateY(0); opacity: 1; }
-        #jw-overlay.jw-hiding  { transform: translateY(8px); opacity: 0; }
-        #jw-overlay-icon { 
-          font-size: 18px; flex-shrink: 0; 
-          line-height: 1 !important; margin: 0 !important; padding: 0 !important;
-          display: flex; align-items: center; justify-content: center;
-        }
-        #jw-overlay-text {
-          flex: 1; word-break: break-word;
-          line-height: 1.5 !important; margin: 0 !important; padding: 0 !important;
-        }
-        #jw-overlay-action {
-          flex-shrink: 0; cursor: pointer; border: 0; border-radius: 8px;
-          padding: 8px 12px; font: inherit; font-weight: 600; color: #fff;
-          background: linear-gradient(90deg,#10b981,#059669); white-space: nowrap;
-        }
-        #jw-overlay-action:hover { filter: brightness(1.1); }
-        #jw-overlay-action:disabled { opacity: 0.6; cursor: default; }
-      `;
-      document.head.appendChild(s);
-    }
-
-    const COLORS = {
-      info: { border: "rgba(99,102,241,0.35)", bar: "linear-gradient(90deg,#4f46e5,#7c3aed)" },
-      success: { border: "rgba(16,185,129,0.35)", bar: "linear-gradient(90deg,#10b981,#34d399)" },
-      warning: { border: "rgba(245,158,11,0.35)", bar: "linear-gradient(90deg,#f59e0b,#fbbf24)" },
-      error: { border: "rgba(239,68,68,0.35)", bar: "linear-gradient(90deg,#ef4444,#f87171)" },
-      ai: { border: "rgba(124,58,237,0.35)", bar: "linear-gradient(90deg,#7c3aed,#a855f7)" },
-    };
-
-    // Detect type from emoji prefix if type not explicitly set
-    if (type === "info") {
-      if (text.startsWith("✅")) type = "success";
-      else if (text.startsWith("⚠️")) type = "warning";
-      else if (text.startsWith("❌")) type = "error";
-      else if (text.startsWith("🤖") || text.startsWith("🔄")) type = "ai";
-    }
-
-    const colors = COLORS[type] || COLORS.info;
-
-    // Extract icon (first emoji char cluster)
-    const iconMatch = text.match(/^(\p{Emoji_Presentation}|\p{Emoji}\uFE0F|\p{Extended_Pictographic})\s*/u);
-    const icon = iconMatch ? iconMatch[0].trim() : "🔹";
-    const message = iconMatch ? text.slice(iconMatch[0].length).trim() : text;
-
-    let el = document.getElementById("jw-overlay");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "jw-overlay";
-      el.innerHTML = `<div id="jw-overlay-icon"></div><div id="jw-overlay-text"></div>`;
-      document.body.appendChild(el);
-      requestAnimationFrame(() => el.classList.add("jw-visible"));
-    }
-
-    el.classList.remove("jw-hiding");
-    requestAnimationFrame(() => el.classList.add("jw-visible"));
-    el.style.borderColor = colors.border;
-    el.querySelector("#jw-overlay-icon").textContent = icon;
-    el.querySelector("#jw-overlay-text").textContent = message;
-    // Optional action button (e.g. "Submit application"). A fresh element each
-    // time, so an old handler never survives a new message.
-    el.querySelector("#jw-overlay-action")?.remove();
-    if (action) {
-      const b = document.createElement("button");
-      b.id = "jw-overlay-action"; b.type = "button"; b.textContent = action.label;
-      b.addEventListener("click", () => { b.disabled = true; action.onClick(b); });
-      el.appendChild(b);
-    }
+    // The "Complete manually: a, b" messages list the fields as items.
+    const m = String(text).match(/complete manually:\s*(.+?)(?:,\s*then press submit\.?)?$/i);
+    const items = m ? m[1].split(/,\s*/).filter((x) => !/^\+\d+ more$/.test(x)) : null;
+    window.__jwNotify.show(m ? "These still need you. Fill them in, then submit." : text, type === "info" ? undefined : type, { action, items });
   }
 
   // ─── Submit from the overlay ───────────────────────────────────────────────
@@ -1427,13 +1341,7 @@
   /** Show the end-of-fill message with the Submit button attached. */
   function offerSubmit(message, type) { showOverlay(message, type, { action: submitAction(message, type) }); }
 
-  function removeOverlay() {
-    const el = document.getElementById("jw-overlay");
-    if (!el) return;
-    el.classList.remove("jw-visible");
-    el.classList.add("jw-hiding");
-    setTimeout(() => el.remove(), 350);
-  }
+  function removeOverlay() { window.__jwNotify.hide(); }
 
   // ─── Send message to background (promisified) ─────────────────────────────
   function sendMsg(payload) {
@@ -1728,7 +1636,6 @@
     console.error("[JobWatch Extension]", err);
     showOverlay(`❌ ${err.message}`, "error");
     ledger("error", { error: err.message });
-    setTimeout(removeOverlay, 6000);
   }
 
   }
@@ -1755,8 +1662,14 @@
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN — computed application first, legacy mapper as the fallback
   // ─────────────────────────────────────────────────────────────────────────
+  // Nothing fills on page load: the card offers Autofill and the person presses it.
+  try { await waitForForm(15000); } catch { return; }
+  window.__jwNotify.launcher({ onClick: () => { autofill(); } });
+
+  async function autofill() {
   try {
     const form = await waitForForm();
+    window.__jwNotify.show("JobWatch is reading the form…", "working");
     await sleep(600); // let the yes/no, autocomplete and date widgets mount
     // Every form visit is an attempt in the ledger; a form already submitted
     // is never filled again.
@@ -1773,7 +1686,7 @@
     console.error("[JobWatch Extension]", err);
     showOverlay(`❌ ${err.message}`, "error");
     ledger("error", { error: err.message });
-    setTimeout(removeOverlay, 6000);
+  }
   }
 
 })();

@@ -96,8 +96,8 @@ function renderProfile(userDoc, uid) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
   const isAdmin = uid === ADMIN_UID;
-  document.querySelectorAll("#screen-profile > .field, #screen-profile > .url-preview, #btn-add-feed, #feed-status")
-    .forEach((el) => { if (!isAdmin) el.style.display = "none"; });
+  $("feeds-section").style.display = isAdmin ? "block" : "none";
+  if (isAdmin) renderAutoFeeds();
   $("member-note").style.display = isAdmin ? "none" : "block";
 
   const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
@@ -135,237 +135,28 @@ function startAuthValidityCheck() {
   }, 10_000); // check every 10 seconds
 }
 
-// ── Add feed ──────────────────────────────────────────────────────────────────
-function companyToSlug(name) {
-  return (name || "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+// ── Feeds: added automatically by the background from the pages you open ─────
+function timeAgo(iso) {
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 }
-
-function buildFeedUrl(source, slug) {
-  if (source === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
-  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=true`;
-}
-
-// Lightweight URL used only for live validation — Greenhouse without
-// ?content=true skips the full job descriptions (much smaller payload).
-function buildCheckUrl(source, slug) {
-  if (source === "ashby") return `https://api.ashbyhq.com/posting-api/job-board/${slug}`;
-  return `https://boards-api.greenhouse.io/v1/boards/${slug}/jobs`;
-}
-
-function selectedSource() {
-  return document.querySelector('input[name="feed-source"]:checked')?.value || "greenhouse";
-}
-
-// Workday feeds are keyed by the career-site URL, not a company slug. Same
-// parsing as parseWorkdayFeedUrl in functions/index.js.
-function parseWorkdayCareerUrl(raw) {
-  let u;
-  try {
-    u = new URL((raw || "").trim());
-  } catch {
-    return null;
-  }
-  const host = u.hostname.match(/^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$/i);
-  if (!host) return null;
-  const parts = u.pathname.split("/").filter(Boolean);
-  if (parts.length && /^[a-z]{2}-[A-Z]{2}$/.test(parts[0])) parts.shift();
-  const site = parts[0];
-  if (!site || site === "wday") return null;
-  return {
-    careerUrl: `https://${u.hostname}/${site}`,
-    apiUrl: `https://${u.hostname}/wday/cxs/${host[1]}/${site}/jobs`,
-  };
-}
-
-// Oracle Recruiting Cloud sites: https://<pod>.fa.<region>.oraclecloud.com/
-// hcmUI/CandidateExperience/<locale>/sites/<site>. Same parsing as
-// parseOracleFeedUrl in functions/index.js.
-function parseOracleCareerUrl(raw) {
-  let u;
-  try {
-    u = new URL((raw || "").trim());
-  } catch {
-    return null;
-  }
-  if (!/\.oraclecloud\.com$/i.test(u.hostname)) return null;
-  const m = u.pathname.match(/\/hcmUI\/CandidateExperience\/([a-z]{2}(?:-[A-Z]{2})?)\/sites\/([^/?#]+)/i);
-  if (!m) return null;
-  return {
-    careerUrl: `https://${u.hostname}/hcmUI/CandidateExperience/en/sites/${m[2]}`,
-    apiUrl: `https://${u.hostname}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?finder=findReqs;siteNumber=${m[2]}`,
-  };
-}
-
-// Sources keyed by a pasted career-site URL rather than a company slug.
-const URL_SOURCES = {
-  workday: {
-    label: "Workday Career Site URL",
-    placeholder: "https://<company>.wd5.myworkdayjobs.com/<SiteName>",
-    pretty: "Workday",
-    parse: parseWorkdayCareerUrl,
-  },
-  oracle: {
-    label: "Oracle Cloud Career Site URL",
-    placeholder: "https://<pod>.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/<Site>",
-    pretty: "Oracle Cloud",
-    parse: parseOracleCareerUrl,
-  },
-};
-
-// ── Live endpoint check: runs on every company/radio change ──────────────────
-// green = endpoint returns real job data, red = 404 / empty / unreachable.
-let endpointStatus = "idle"; // idle | checking | valid | invalid
-let checkTimer = null;
-let checkController = null;
-let checkSeq = 0;
-
-function paintPreview(text, color) {
-  const el = $("feed-url-preview");
-  el.textContent = text;
-  el.style.color = color;
-}
-
-function updateUrlPreview() {
-  const slug = companyToSlug($("feed-company").value);
-  const source = selectedSource();
-
-  clearTimeout(checkTimer);
-  if (checkController) checkController.abort();
-
-  // Workday's and Oracle's endpoints send no CORS headers, so they can't be
-  // probed from here. Validate the URL shape; the first backend sync verifies it.
-  const urlSource = URL_SOURCES[source];
-  $("feed-workday-field").style.display = urlSource ? "" : "none";
-  if (urlSource) {
-    $("feed-site-url-label").textContent = urlSource.label;
-    $("feed-workday-url").placeholder = urlSource.placeholder;
-    const raw = $("feed-workday-url").value;
-    const parsed = urlSource.parse(raw);
-    if (!raw.trim()) {
-      endpointStatus = "idle";
-      paintPreview(`Paste the company's ${urlSource.pretty} career page; the endpoint is derived from it.`, "#9ca3af");
-    } else if (parsed) {
-      endpointStatus = "valid";
-      paintPreview(`${parsed.apiUrl} — verified on first sync`, "#059669");
-    } else {
-      endpointStatus = "invalid";
-      paintPreview(`Not a ${urlSource.pretty} career site URL — expected ${urlSource.placeholder}`, "#dc2626");
+function renderAutoFeeds() {
+  chrome.storage.local.get("jwAutoFeeds", ({ jwAutoFeeds = [] }) => {
+    const list = $("auto-feeds");
+    list.innerHTML = "";
+    if (!jwAutoFeeds.length) {
+      list.innerHTML = '<li class="auto-empty">None yet. Open any job on Greenhouse, Ashby, Lever, Workday, Oracle, Workable, SmartRecruiters or BambooHR.</li>';
+      return;
     }
-    return;
-  }
-
-  if (!slug) {
-    endpointStatus = "idle";
-    paintPreview("The API endpoint is built from the company name.", "#9ca3af");
-    return;
-  }
-
-  const url = buildFeedUrl(source, slug);
-  endpointStatus = "checking";
-  paintPreview(`${url} — checking…`, "#9ca3af");
-
-  const seq = ++checkSeq;
-  checkTimer = setTimeout(async () => {
-    checkController = new AbortController();
-    try {
-      const resp = await fetch(buildCheckUrl(source, slug), { signal: checkController.signal });
-      const data = resp.ok ? await resp.json().catch(() => null) : null;
-      const jobCount = Array.isArray(data?.jobs) ? data.jobs.length : 0;
-      if (seq !== checkSeq) return; // a newer check superseded this one
-      if (jobCount > 0) {
-        endpointStatus = "valid";
-        paintPreview(`${url} — ${jobCount} jobs live`, "#059669");
-      } else {
-        endpointStatus = "invalid";
-        paintPreview(`${url} — no data at this endpoint`, "#dc2626");
-      }
-    } catch (err) {
-      if (err.name === "AbortError" || seq !== checkSeq) return;
-      endpointStatus = "invalid";
-      paintPreview(`${url} — no data at this endpoint`, "#dc2626");
+    for (const f of jwAutoFeeds.slice(0, 6)) {
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="auto-name"></span><span class="auto-meta"></span>';
+      li.querySelector(".auto-name").textContent = f.company;
+      li.querySelector(".auto-meta").textContent = `${f.label} · ${timeAgo(f.at)}`;
+      list.appendChild(li);
     }
-  }, 500);
-}
-
-$("feed-company").addEventListener("input", updateUrlPreview);
-$("feed-workday-url").addEventListener("input", updateUrlPreview);
-document.querySelectorAll('input[name="feed-source"]').forEach((r) =>
-  r.addEventListener("change", updateUrlPreview)
-);
-updateUrlPreview();
-
-function setFeedStatus(text, kind) {
-  const st = $("feed-status");
-  st.style.display = "block";
-  st.textContent = text;
-  st.style.color = kind === "error" ? "#dc2626" : "#065f46";
-}
-
-const ADD_LABEL = "Add Feed";
-
-function submitFeed() {
-  const company = $("feed-company").value.trim();
-  const source = selectedSource();
-  if (!company) {
-    setFeedStatus("Please enter a company name.", "error");
-    return;
-  }
-  if (endpointStatus === "checking" || endpointStatus === "idle") {
-    setFeedStatus("Still verifying the endpoint — one moment.", "error");
-    return;
-  }
-  if (endpointStatus !== "valid") {
-    setFeedStatus(
-      URL_SOURCES[source]
-        ? `Paste the company's ${URL_SOURCES[source].pretty} career site URL (${URL_SOURCES[source].placeholder}).`
-        : "This endpoint has no job data. Check the company name and job board.",
-      "error"
-    );
-    return;
-  }
-  const workdayUrl = URL_SOURCES[source] ? URL_SOURCES[source].parse($("feed-workday-url").value)?.careerUrl : undefined;
-
-  const btn = $("btn-add-feed");
-  btn.disabled = true;
-  btn.textContent = "Adding…";
-  $("feed-status").style.display = "none";
-
-  // Never leave the button stuck on "Adding…" — a stale service worker that
-  // doesn't know ADD_FEED would otherwise hold the message channel open forever.
-  let settled = false;
-  const finish = (fn) => {
-    if (settled) return;
-    settled = true;
-    clearTimeout(watchdog);
-    btn.disabled = false;
-    btn.textContent = ADD_LABEL;
-    fn();
-  };
-  const watchdog = setTimeout(() => {
-    finish(() =>
-      setFeedStatus("No response from the extension. Reload it in chrome://extensions and try again.", "error")
-    );
-  }, 15000);
-
-  chrome.runtime.sendMessage({ type: "ADD_FEED", company, source, url: workdayUrl }, (res) => {
-    finish(() => {
-      if (chrome.runtime.lastError || !res?.ok) {
-        setFeedStatus(chrome.runtime.lastError?.message || res?.error || "Failed to add feed.", "error");
-        return;
-      }
-      const label = source === "ashby" ? "AshbyHQ" : URL_SOURCES[source]?.pretty || "Greenhouse";
-      setFeedStatus(`✅ ${company} (${label}) feed added`, "ok");
-      $("feed-company").value = "";
-      $("feed-workday-url").value = "";
-      updateUrlPreview();
-    });
   });
 }
-
-$("btn-add-feed").addEventListener("click", submitFeed);
-$("feed-company").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") submitFeed();
-});
 
 // ── Fill this page: run the universal filler in the active tab ───────────────
 $("btn-fill-page").addEventListener("click", () => {

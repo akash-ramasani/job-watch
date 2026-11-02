@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Automatically fill job applications from JobWatch on Ashby, Greenhouse, Lever, Workday and every other job board. You review and submit.",
   "permissions": [
     "storage",
@@ -54,6 +54,7 @@
       ],
       "js": [
         "content/highlight.js",
+        "content/notify.js",
         "content/ashby.js"
       ],
       "run_at": "document_idle"
@@ -68,6 +69,7 @@
       "all_frames": true,
       "js": [
         "content/highlight.js",
+        "content/notify.js",
         "content/greenhouse.js"
       ],
       "run_at": "document_idle"
@@ -79,6 +81,7 @@
       ],
       "js": [
         "content/highlight.js",
+        "content/notify.js",
         "content/lever.js"
       ],
       "run_at": "document_idle"
@@ -129,6 +132,7 @@
       "all_frames": true,
       "js": [
         "content/highlight.js",
+        "content/notify.js",
         "content/universal.js"
       ],
       "run_at": "document_idle"

@@ -352,6 +352,125 @@ async function fsAdd(parentPath, collectionId, data, idToken) {
   return res.json();
 }
 
+// ─── Auto-add feeds from the pages you open (admin) ──────────────────────────
+// Opening any job page on a supported board adds that company's board as a
+// feed, the same document the Feeds page writes, then pulls in its last three
+// days of openings. Replaces the popup's manual Company / Job Board / Add Feed.
+
+const FEED_LABEL = { greenhouse: "Greenhouse", ashby: "AshbyHQ", lever: "Lever", workday: "Workday", oracle: "Oracle Cloud", workable: "Workable", smartrecruiters: "SmartRecruiters", bamboohr: "BambooHR" };
+
+/** { source, slug, url, check? } for a page on a supported board, else null. */
+function feedFromUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { return null; }
+  const host = u.hostname.toLowerCase();
+  const parts = u.pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const slugOk = (x) => !!x && /^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(x);
+  if (/^(job-)?boards(\.eu)?\.greenhouse\.io$/.test(host)) {
+    const token = (u.searchParams.get("for") || (parts[0] !== "embed" ? parts[0] : "") || "").toLowerCase();
+    if (!slugOk(token)) return null;
+    return { source: "greenhouse", slug: token, url: buildFeedUrl("greenhouse", token), check: `https://boards-api.greenhouse.io/v1/boards/${token}/jobs`, count: (j) => j?.jobs?.length || 0 };
+  }
+  if (host === "jobs.ashbyhq.com") {
+    const org = (parts[0] || "").toLowerCase();
+    if (!slugOk(org) || org === "api") return null;
+    return { source: "ashby", slug: org, url: buildFeedUrl("ashby", org), check: buildFeedUrl("ashby", org), count: (j) => j?.jobs?.length || 0 };
+  }
+  let m = host.match(/^jobs\.(eu\.)?lever\.co$/);
+  if (m) {
+    const slug = parts[0];
+    if (!slugOk(slug)) return null;
+    return { source: "lever", slug, url: `https://jobs.${m[1] || ""}lever.co/${slug}` };
+  }
+  m = host.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/);
+  if (m) {
+    if (parts.length && /^[a-z]{2}-[a-z]{2}$/i.test(parts[0])) parts.shift();
+    const site = parts[0];
+    if (!site || site === "wday") return null;
+    return { source: "workday", slug: m[1], url: `https://${host}/${site}` };
+  }
+  if (/\.oraclecloud\.com$/.test(host)) {
+    const o = u.pathname.match(/\/hcmUI\/CandidateExperience\/[a-z]{2}(?:-[A-Z]{2})?\/sites\/([^/?#]+)/i);
+    return o ? { source: "oracle", slug: host.split(".")[0], url: `https://${host}/hcmUI/CandidateExperience/en/sites/${o[1]}` } : null;
+  }
+  if (host === "apply.workable.com") {
+    const slug = (parts[0] || "").toLowerCase();
+    if (!slugOk(slug) || ["j", "api"].includes(slug)) return null;
+    return { source: "workable", slug, url: `https://apply.workable.com/${slug}` };
+  }
+  if (/^(jobs|careers)\.smartrecruiters\.com$/.test(host)) {
+    const slug = parts[0] === "oneclick-ui" ? parts[2] : parts[0];
+    if (!slugOk(slug)) return null;
+    return { source: "smartrecruiters", slug, url: `https://jobs.smartrecruiters.com/${slug}` };
+  }
+  m = host.match(/^([a-z0-9-]+)\.bamboohr\.com$/);
+  if (m && !["www", "api", "app"].includes(m[1])) return { source: "bamboohr", slug: m[1], url: `https://${m[1]}.bamboohr.com/careers` };
+  return null;
+}
+
+/** A readable company name: from the tab title when it says, else the slug. */
+function companyFromTab(title, slug) {
+  const t = String(title || "").trim();
+  const pick = t.match(/ at ([^|–—]+?)\s*$/) || t.match(/ @ ([^|–—]+?)\s*$/) || t.match(/^Jobs at ([^|–—]+)/i) || t.match(/^([^|–—-]+?) (?:Careers|Jobs)\b/i);
+  const name = pick?.[1]?.trim();
+  if (name && name.length <= 60 && !/^(job application|apply|careers?)$/i.test(name)) return name;
+  return String(slug || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+let feedCache = { at: 0, urls: new Set() };
+const feedInFlight = new Set();
+
+async function autoAddFeed(tabUrl, tabTitle) {
+  const f = feedFromUrl(tabUrl);
+  if (!f) return;
+  const key = f.url.toLowerCase();
+  if (feedInFlight.has(key)) return;
+  const { jwUid } = await getStoredAuth();
+  if (jwUid !== ADMIN_UID) return; // feeds are the admin's
+  const { jwFeedSeen = [] } = await chrome.storage.local.get("jwFeedSeen");
+  if (jwFeedSeen.includes(key)) return; // already checked on an earlier visit
+  feedInFlight.add(key);
+  try {
+    const { idToken } = await getFreshToken();
+    if (Date.now() - feedCache.at > 10 * 60 * 1000) {
+      const existing = await fsQuery(`users/${ADMIN_UID}`, "feeds", [], idToken);
+      feedCache = { at: Date.now(), urls: new Set(existing.map((x) => String(x.url || "").toLowerCase())) };
+    }
+    const remember = async () => chrome.storage.local.set({ jwFeedSeen: [key, ...jwFeedSeen].slice(0, 2000) });
+    if (feedCache.urls.has(key)) { await remember(); return; } // present (or archived on purpose)
+    // Slug boards: only a board that answers with jobs.
+    if (f.check) {
+      const r = await fetch(f.check).catch(() => null);
+      const json = r?.ok ? await r.json().catch(() => null) : null;
+      if (!json || f.count(json) === 0) { console.log("[JobWatch] auto feed: no jobs at", f.check); await remember(); return; }
+    }
+    const company = companyFromTab(tabTitle, f.slug);
+    const added = await fsAdd(`users/${ADMIN_UID}`, "feeds", {
+      company, url: f.url, source: f.source, createdAt: new Date(), archivedAt: null, lastCheckedAt: null, lastError: null, addedBy: "extension",
+    }, idToken);
+    feedCache.urls.add(key);
+    await remember();
+    const feedId = String(added?.name || "").split("/").pop();
+    console.log("[JobWatch] auto feed added:", company, f.source, f.url);
+    // Bring in the last three days' openings, as the Feeds page does.
+    if (feedId) fetch(`${FUNCTIONS_BASE}/runSyncNow?feedIds=${encodeURIComponent(feedId)}&lookbackHours=72`, { headers: { Authorization: `Bearer ${idToken}` } }).catch(() => {});
+    const { jwAutoFeeds = [] } = await chrome.storage.local.get("jwAutoFeeds");
+    await chrome.storage.local.set({ jwAutoFeeds: [{ company, source: f.source, label: FEED_LABEL[f.source] || f.source, url: f.url, at: new Date().toISOString() }, ...jwAutoFeeds].slice(0, 30) });
+    chrome.action.setBadgeBackgroundColor({ color: "#4f46e5" });
+    chrome.action.setBadgeText({ text: "+1" });
+    setTimeout(() => chrome.action.setBadgeText({ text: "" }), 8000);
+  } catch (err) {
+    console.warn("[JobWatch] auto feed failed:", err.message);
+  } finally {
+    feedInFlight.delete(key);
+  }
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" || !/^https:/.test(tab.url || "")) return;
+  autoAddFeed(tab.url, tab.title);
+});
+
 // ─── Message handler ──────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -629,7 +748,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (!tab?.id || !/^https?:/i.test(tab.url || "")) throw new Error("Open a job application page first.");
           const target = { tabId: tab.id, allFrames: true };
           await chrome.scripting.executeScript({ target, func: () => { window.__jwManualStart = true; } });
-          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/universal.js"] });
+          await chrome.scripting.executeScript({ target, files: ["content/highlight.js", "content/notify.js", "content/universal.js"] });
           sendResponse({ ok: true });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });

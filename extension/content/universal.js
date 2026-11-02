@@ -50,7 +50,9 @@
   ];
   const source = (SOURCES.find(([re]) => re.test(host)) || [null, "web"])[1];
   const isWorkday = source === "workday";
-  const manual = () => !!window.__jwManualStart; // the popup's "Fill this page"
+  // The popup's "Fill this page": counts as pressing Autofill on this page.
+  const manual = () => !!window.__jwManualStart;
+  let forced = false; // the popup was used here: skip the "is this an application?" checks
 
   /** A stable key for this posting: Workday's req id, else an id in the URL. */
   function postingKey() {
@@ -87,16 +89,10 @@
   const fmtDay = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "an earlier date"; };
 
   // ── Banner and outline ────────────────────────────────────────────────────
-  let bannerEl = null;
-  function banner(text) {
+  // The JobWatch card, bottom right (content/notify.js).
+  function banner(text, { action = null, items = null } = {}) {
     if (window.top !== window && !document.querySelector("[data-jw-id]")) return; // quiet in frames without a form
-    if (!bannerEl) {
-      bannerEl = document.createElement("div");
-      bannerEl.id = "jw-banner";
-      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.2)";
-      document.documentElement.appendChild(bannerEl);
-    }
-    bannerEl.textContent = text;
+    window.__jwNotify.show(text, undefined, { action, items });
   }
   const hl = window.__jwHL || { focus() {}, mark() {}, hide() {} };
   const elOf = (id) => {
@@ -275,8 +271,7 @@
     const filled = Object.keys(answersLog).length;
     const next = isWorkday ? "click Save and Continue" : "go on to the next step or submit";
     if (attention.size) {
-      const names = [...attention.keys()].slice(0, 3).map((l) => (l.length > 38 ? l.slice(0, 38) + "…" : l));
-      banner(`JobWatch filled ${filled}${stepLabel ? ` (${stepLabel})` : ""}. Complete manually: ${names.join(", ")}${attention.size > 3 ? `, +${attention.size - 3} more` : ""}. Then ${next} yourself.`);
+      banner(`JobWatch filled ${filled}${stepLabel ? ` (${stepLabel})` : ""}. These still need you, then ${next} yourself:`, { items: [...attention.keys()] });
       warn("Needs you:", [...attention.entries()]);
     } else {
       banner(`JobWatch filled ${filled} field${filled === 1 ? "" : "s"}${stepLabel ? ` (${stepLabel})` : ""}. Review, then ${next} yourself.`);
@@ -291,6 +286,8 @@
   // ── The step loop ─────────────────────────────────────────────────────────
   let stopped = false;
   let busy = false;
+  let armedFor = ""; // the page/step the person pressed Autofill on
+  let armNext = false;
   const done = new Set(); // field ids already computed (filled or parked)
   let lastStep = "";
   let submittedSeen = false;
@@ -317,7 +314,8 @@
   async function tick() {
     if (stopped || busy) return;
     if (!onApplyFlow()) return;
-    if (!started && !manual() && (!formish() || pageSig() === notAFormSig)) return;
+    if (manual()) { window.__jwManualStart = false; forced = true; armNext = true; }
+    if (!started && !forced && (!formish() || pageSig() === notAFormSig)) return;
     busy = true;
     try {
       if (started && await gen("submitted").catch(() => false)) {
@@ -338,7 +336,7 @@
         return;
       }
       if (!fields.length) { if (!started) notAFormSig = pageSig(); return; }
-      if (!started && !manual() && !looksLikeApplication(fields)) { notAFormSig = pageSig(); return; }
+      if (!started && !forced && !looksLikeApplication(fields)) { notAFormSig = pageSig(); return; }
 
       // Sign-in and account pages: only the email; the password is the person's.
       if (await gen("hasPassword").catch(() => false)) {
@@ -360,6 +358,17 @@
       const fresh = fields.filter((f) => !done.has(f.id) && !f.filled);
       if (!fresh.length && !(isWorkday && newStep && /experience/i.test(step))) { lastStep = step; return; }
 
+      // Nothing fills until the person presses Autofill, once per page or step.
+      const stepKey = `${location.pathname}|${step}`;
+      if (armNext) { armedFor = stepKey; armNext = false; }
+      if (armedFor !== stepKey) {
+        window.__jwNotify.launcher({
+          text: step && started ? `Next step: ${step}. Fill it from your JobWatch profile.` : "Fill this application from your JobWatch profile. You review and submit.",
+          onClick: () => { armedFor = stepKey; banner("JobWatch is reading the form…"); setTimeout(tick, 50); },
+        });
+        return;
+      }
+
       if (!started) {
         header = await gen("pageJob").catch(() => header);
         // Boards that put the company in the URL: apply.workable.com/<company>/..., <company>.bamboohr.com, ...
@@ -375,7 +384,7 @@
         started = true;
       }
       lastStep = step;
-      banner(`JobWatch is reading the form${step ? `: ${step}` : ""}.`);
+      banner(`JobWatch is reading the form${step ? `: ${step}` : ""}…`);
       // Read options of the fresh pick lists (opens each dropdown once).
       fields = await gen("scan", { readOptions: true }).catch(() => fields);
       const ids = new Set(fields.filter((f) => !done.has(f.id) && !f.filled).map((f) => f.id));

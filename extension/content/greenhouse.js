@@ -188,7 +188,7 @@
   // ── Main ──────────────────────────────────────────────────────────────────
   async function run() {
     const ids = jobIds();
-    if (!ids) { warn("could not read token/id from URL"); return; }
+    if (!ids) { warn("could not read token/id from URL"); banner("JobWatch could not read this job's id from the page address."); return; }
     log("job", ids.token, ids.id, "— requesting computed application...");
 
     // Every form visit is an attempt; a form already submitted is left alone.
@@ -196,11 +196,13 @@
     if (started?.duplicate) { banner(`JobWatch: you already applied to ${started.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(started.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
     if (!started?.ok) warn("ledger(start) failed:", started?.error);
 
+    banner("JobWatch is working out your answers…");
     const pkg = await sendMsg({ type: "GET_GH_FILL_DATA", token: ids.token, id: ids.id });
-    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
+    if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); banner(`JobWatch could not compute this application: ${pkg?.error || "no answer from the extension"}`, { action: { label: "Try again", onClick: () => run().catch(() => {}) } }); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
     const data = pkg.data;
     if (data.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(data.submittedAt)}. Not filling it again.`); return; }
     log(`computed: ready=${data.ready}, ${data.fills.length} fields, resume=${data.resumeB64 ? "yes" : "no"}`);
+    banner(`JobWatch is filling ${data.fills.length} fields, top to bottom…`);
     if (!data.ready) warn("gate parked this job:", data.reasons);
     const answersLog = {};
 
@@ -333,10 +335,11 @@
     }
     hl.hide();
     log(`DONE — filled ${ok}/${data.fills.length}${pending.length ? `, unfilled: ${pending.length}` : ""}. Review the form, solve any CAPTCHA, then click Submit.`);
-    const doneMsg = pending.length
-      ? `JobWatch filled ${ok}/${data.fills.length}. Complete manually: ${pending.map((f) => f.label).join(", ").slice(0, 140)} — then press Submit.`
+    const needs = [...new Set([...pending.map((f) => f.label), ...(data.review || []).map((r) => r.label), ...boardNotes.keys()])].filter(Boolean);
+    const doneMsg = needs.length
+      ? `JobWatch filled ${ok} of ${data.fills.length}. These still need you, then press Submit:`
       : `JobWatch filled all ${ok} fields. Review, solve the CAPTCHA, then press Submit.`;
-    banner(doneMsg, { action: submitAction(doneMsg) });
+    banner(doneMsg, { action: submitAction(doneMsg, needs), items: needs });
     // Record the attempt: every answer, everything left for the person
     // (fields that would not fill, plus questions the engine parked).
     const needsAttention = [
@@ -385,30 +388,16 @@
     return out;
   }
 
-  let bannerEl = null;
-  function banner(text, { action = null } = {}) {
-    if (!bannerEl) {
-      bannerEl = document.createElement("div");
-      bannerEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#4f46e5;color:#fff;padding:10px 16px;font:600 13px system-ui;text-align:center;display:flex;gap:12px;align-items:center;justify-content:center";
-      document.body.appendChild(bannerEl);
-    }
-    bannerEl.textContent = text;
-    // Optional "Submit application" button: the PERSON presses it; it clicks
-    // Greenhouse's own Submit. Nothing submits on its own.
-    if (action) {
-      const b = document.createElement("button");
-      b.type = "button"; b.textContent = action.label;
-      b.style.cssText = "cursor:pointer;border:0;border-radius:8px;padding:6px 12px;font:600 13px system-ui;color:#fff;background:#059669;white-space:nowrap";
-      b.addEventListener("click", () => { b.disabled = true; action.onClick(b); });
-      bannerEl.appendChild(b);
-    }
+  // The JobWatch card, bottom right (content/notify.js).
+  function banner(text, { action = null, items = null } = {}) {
+    window.__jwNotify.show(text, undefined, { action, items });
   }
   function ghSubmitButton() {
     return document.querySelector("#submit_app, button#submit_app, input#submit_app")
       || [...document.querySelectorAll("button, input[type=submit]")].find((b) => /submit application|^submit$/i.test((b.textContent || b.value || "").trim()))
       || null;
   }
-  function submitAction(message) {
+  function submitAction(message, items = null) {
     return {
       label: "Submit application",
       onClick: async () => {
@@ -419,19 +408,26 @@
         banner("JobWatch: submitting…");
         await sleep(3500);
         const stillHere = !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name");
-        if (stillHere) banner("JobWatch: Greenhouse did not accept it yet. Solve the CAPTCHA or fix the field it marks, then press Submit again.", { action: submitAction(message) });
+        if (stillHere) banner("JobWatch: Greenhouse did not accept it yet. Solve the CAPTCHA or fix the field it marks, then press Submit again.", { action: submitAction(message, items), items });
       },
     };
   }
 
-  // Greenhouse renders the form async; wait for the first name field, then run.
+  // Greenhouse renders the form async; wait for the first name field, then
+  // offer Autofill. Nothing fills until the person presses it.
   (async () => {
+    let found = false;
     for (let i = 0; i < 40; i++) {
-      if (document.querySelector("#first_name, input[id^='question_']")) break;
+      if (document.querySelector("#first_name, input[id^='question_']")) { found = true; break; }
       await sleep(500);
     }
-    // small settle for the rest of the comboboxes to mount
-    await sleep(800);
-    run().catch((e) => { warn("run failed:", e.message); ledger("error", { error: e.message }); });
+    if (!found) return; // a posting page without the form (or a frame without it)
+    window.__jwNotify.launcher({
+      onClick: async () => {
+        banner("JobWatch is reading the form…");
+        await sleep(800); // let the rest of the comboboxes mount
+        run().catch((e) => { warn("run failed:", e.message); banner(`JobWatch failed: ${e.message}`); ledger("error", { error: e.message }); });
+      },
+    });
   })();
 })();
