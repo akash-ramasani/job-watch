@@ -55,29 +55,47 @@ const ADMIN_UID = "7Tojjo8l5PZIYctPmdwncf7PC133";
 // name pronunciation, resume parsing).
 //
 // The API keys are stored in Google Secret Manager and injected at runtime.
-// Every function that calls OpenAI must include `secrets: [OPENAI_API_KEY]`
+// Every function that calls a text model must include `secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY]`
 // in its options; every function that scores jobs also needs ANTHROPIC_API_KEY.
 const OpenAI = require("openai");
+const { claudeChatClient } = require("./lib/claudeClient.cjs");
 // Loaded on first use: only the scorer needs it, and it is a heavy module.
 let Anthropic = null;
 const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 
-// Default OpenAI models used across features. Override via env if needed.
-const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "gpt-4o-mini";
-const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "gpt-4o-mini";
-// The chat assistant: multi-step tool use and reading the user's tone need the stronger model.
-const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "gpt-4o";
+// Models for every text feature, all on Claude (lib/claudeClient.cjs). The
+// names stay from the OpenAI days so the call sites are unchanged. Fast tier:
+// Autofill answers and form mapping; smart tier: tailored resumes and resume
+// parsing; chat: the assistant (multi-step tool use). Override via env.
+const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "claude-haiku-5-5";
+const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "claude-opus-5-5";
+const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "claude-opus-5-5";
 const ASSISTANT_HISTORY_TURNS = 30; // messages of conversation the model sees
 const ASSISTANT_MESSAGE_MAX_CHARS = 6000;
 const ASSISTANT_TOOL_RESULT_MAX_CHARS = 60000;
 
+/**
+ * The text-model client every feature uses (`client.chat.completions.create`).
+ * With a real Anthropic key it runs on Claude through the Anthropic SDK
+ * (lib/claudeClient.cjs); without one it falls back to OpenAI, mapping the
+ * Claude model names back to OpenAI's.
+ */
 function requireOpenAI() {
+  const claudeKey = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
+  if (/^sk-ant-/.test(claudeKey)) {
+    if (!Anthropic) Anthropic = require("@anthropic-ai/sdk");
+    return claudeChatClient(new Anthropic({ apiKey: claudeKey, maxRetries: 2 }));
+  }
   const apiKey = OPENAI_API_KEY.value() || process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error("OPENAI_API_KEY is not configured on the server.");
+    throw new Error("No AI key is configured on the server (ANTHROPIC_API_KEY or OPENAI_API_KEY).");
   }
-  return new OpenAI({ apiKey });
+  const openai = new OpenAI({ apiKey });
+  const create = openai.chat.completions.create.bind(openai.chat.completions);
+  const gptFor = (m) => (/^claude-haiku/.test(String(m)) ? "gpt-4o-mini" : /^claude-/.test(String(m)) ? "gpt-4o" : m);
+  openai.chat.completions.create = (req, opts) => create({ ...req, model: gptFor(req.model) }, opts);
+  return openai;
 }
 
 // Job scoring (jobFit.assessJobFit) runs on Claude Haiku: same price class as
@@ -3510,7 +3528,7 @@ async function sendPushNotification(userId, summary, durationMs) {
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
 exports.askAssistant = onRequest(
-  { region: REGION, timeoutSeconds: 120, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 120, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
     try {
       let decodedToken;
@@ -3634,7 +3652,7 @@ exports.askAssistant = onRequest(
  * Returns: { ok: true, parsed: { summary, skills, roles, education, projects, certifications, rawText } }
  */
 exports.parseResume = onRequest(
-  { region: REGION, timeoutSeconds: 120, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 120, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed. Use POST." });
@@ -4294,7 +4312,7 @@ exports.mapFormFields = onCall(
     timeoutSeconds: 30,
     memory: "512MiB",
     maxInstances: 10,
-    secrets: [OPENAI_API_KEY],
+    secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
   async (request) => {
     const uid = request.auth?.uid;
@@ -4659,7 +4677,7 @@ ${fieldList}`;
 
 // ── Generate name pronunciation ─────────────────────────────────────────────
 exports.generateNamePronunciation = onRequest(
-  { region: REGION, timeoutSeconds: 15, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY] },
+  { region: REGION, timeoutSeconds: 15, memory: "512MiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
 
@@ -4698,7 +4716,7 @@ exports.generateNamePronunciation = onRequest(
 // Compute a full Greenhouse application (answers + cover letter + resume bytes)
 // for the browser extension to fill. Reuses the tested answer engine.
 exports.prepareGreenhouseApplication = onCall(
-  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
@@ -4722,7 +4740,7 @@ exports.prepareGreenhouseApplication = onCall(
 // for the browser extension to fill. Same engine as Greenhouse; the content
 // script sends the DOM-scraped fields as a fallback schema.
 exports.prepareAshbyApplication = onCall(
-  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
@@ -4747,7 +4765,7 @@ exports.prepareAshbyApplication = onCall(
 // server-rendered HTML with no public schema, so the content script sends the
 // scraped fields; the same engine answers them.
 exports.prepareLeverApplication = onCall(
-  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
@@ -4776,7 +4794,7 @@ exports.prepareLeverApplication = onCall(
 // empty domFields still returns the resume and its history (Workday asks for
 // them on later steps).
 exports.prepareGenericApplication = onCall(
-  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY] },
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 120, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
