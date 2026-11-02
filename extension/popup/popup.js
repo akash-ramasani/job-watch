@@ -241,3 +241,18 @@ refreshGmail();
 $("btn-auto-retry").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "AUTO_RETRY" }, () => setTimeout(refreshAuto, 300));
 });
+
+// A newer version is on disk but Edge still runs the old one (background.js selfUpdate).
+(async () => {
+  try {
+    const disk = (await (await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" })).json())?.version;
+    const running = chrome.runtime.getManifest().version;
+    if (!disk || disk === running) return;
+    $("update-text").textContent = `JobWatch ${disk} is ready (running ${running}).`;
+    $("update-bar").style.display = "block";
+    $("update-btn").addEventListener("click", () => {
+      const scheme = /Edg\//.test(navigator.userAgent) ? "edge" : "chrome";
+      chrome.tabs.create({ url: `${scheme}://extensions/?id=${chrome.runtime.id}` });
+    });
+  } catch (_) { /* no bar */ }
+})();

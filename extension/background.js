@@ -704,9 +704,41 @@ async function autoTick() {
 }
 
 chrome.alarms.create("jwAutoTick", { periodInMinutes: 1 });
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick(); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "jwAutoTick") selfUpdate().catch(() => {});
+  if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick();
+});
 // The browser opened: carry on where it left off (a job whose tab is gone is retried later).
 chrome.runtime.onStartup.addListener(() => { autoTick(); });
+// Reloaded with new code (selfUpdate, or the Reload button): carry on too.
+chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") autoTick(); });
+
+/** The extension is loaded unpacked, and Edge keeps running the old code when
+ *  the files on disk change (until Reload on edge://extensions). Once a
+ *  minute: a newer version on disk gets one notification per version, which
+ *  opens the extensions page. (chrome.runtime.reload() would do it unseen, but
+ *  in testing it unloaded a command-line-loaded extension instead; a stopped
+ *  runner is worse than a prompt.) */
+async function selfUpdate() {
+  const disk = (await (await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" })).json())?.version;
+  const running = chrome.runtime.getManifest().version;
+  if (!disk || disk === running) return;
+  const [d, r] = [disk, running].map((v) => v.split(".").map(Number));
+  const i = d.findIndex((n, k) => n !== (r[k] || 0));
+  if (i < 0 || d[i] < (r[i] || 0)) return; // same or older on disk
+  const { jwUpdateSeen } = await chrome.storage.local.get("jwUpdateSeen");
+  if (jwUpdateSeen === disk) return;
+  await chrome.storage.local.set({ jwUpdateSeen: disk, jwUpdateReady: { disk, running } });
+  try {
+    chrome.notifications.create("jwUpdate", { type: "basic", iconUrl: "icons/icon128.png", requireInteraction: true, title: `JobWatch ${disk} is ready (running ${running})`, message: "Click here, then press Reload on JobWatch. Auto-apply keeps its place." });
+  } catch (_) { /* a nicety */ }
+}
+chrome.notifications?.onClicked.addListener((id) => {
+  if (id !== "jwUpdate") return;
+  const url = /Edg\//.test(navigator.userAgent) ? `edge://extensions/?id=${chrome.runtime.id}` : `chrome://extensions/?id=${chrome.runtime.id}`;
+  chrome.tabs.create({ url }).catch(() => {});
+  chrome.notifications.clear(id);
+});
 
 async function autoStatus() {
   const st = await autoState();
