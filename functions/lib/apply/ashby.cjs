@@ -469,9 +469,10 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   }
 
   // 5f. Education History (a repeatable School / Degree / Field / dates
-  //     block): every school on the resume, newest first.
+  //     block): the latest school only. Ashby needs one, and a second entry
+  //     it judged "Invalid value in entry #2" (Applied Intuition, 2026-11-02).
   const eduQ = all.find((q) => q.path === "_systemfield_education_history" || /^education ?history$/i.test(q.ashbyType || ""));
-  const schools = (resume.education || []).filter((e) => e.institution || e.school).slice(0, 3);
+  const schools = (resume.education || []).filter((e) => e.institution || e.school).slice(0, 1);
   if (eduQ && schools.length) {
     const MON = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
     const when = (v) => {
