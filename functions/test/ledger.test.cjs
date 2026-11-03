@@ -152,3 +152,12 @@ test("role key: same company + title under a new posting id is a duplicate, unle
   assert.equal(sub.status, "submitted");
   assert.equal(sub.attempts, 2);
 });
+
+test("Greenhouse's confirmation page names the same form as its application page", () => {
+  // The extension records a submission from the confirmation URL alone
+  // (ghConfirmationPage in background.js), so the two must key alike.
+  const form = formKeyFromUrl("https://job-boards.greenhouse.io/embed/job_app?for=robinhood&token=8080893");
+  const done = formKeyFromUrl("https://job-boards.greenhouse.io/embed/job_app/confirmation?for=robinhood&token=8080893");
+  assert.equal(done.formKey, form.formKey);
+  assert.equal(done.formKey, "greenhouse|robinhood|8080893");
+});

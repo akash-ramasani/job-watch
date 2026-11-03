@@ -251,7 +251,12 @@
     // Where a fill lands on the page, so the form is filled top to bottom.
     function elementFor(f) {
       if (f.kind === "file") return findFileInput(fileSlot(f));
-      let el = findFieldByLabel(f.label);
+      // By the question's own id first: new boards use the question name
+      // (question_123) as the input id, and a form can ask the same question
+      // twice (Pinterest asks work authorization twice). By label, both fills
+      // landed on the first box and the second stayed empty.
+      let el = f.name && /^question_\d+/.test(f.name) ? document.getElementById(f.name) : null;
+      if (!el) el = findFieldByLabel(f.label);
       if (!el && ["select", "multiselect", "boolean"].includes(f.kind)) el = findChoiceGroup(f.label)?.[0] || null;
       if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
       if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
@@ -414,7 +419,10 @@
       banner(`JobWatch is checking the form, pass ${pass} of 4. Fixing ${problems.length} field${problems.length === 1 ? "" : "s"}.`);
       for (const p of problems) {
         if (p.error) boardNotes.set(p.label, p.error);
-        const f = data.fills.find((x) => norm(x.label) === norm(p.label) || squash(x.label) === squash(p.label));
+        // The page calls the location "Location (City)"; its fill is named "Location".
+        const f = (p.id ? data.fills.find((x) => x.name === p.id) : undefined)
+          || data.fills.find((x) => norm(x.label) === norm(p.label) || squash(x.label) === squash(p.label))
+          || (/^location\b/i.test(p.label || "") ? data.fills.find((x) => x.kind === "location") : undefined);
         if (!f) continue;
         try {
           hl.focus(blockFor(f), `Fixing: ${f.label}`);
@@ -445,13 +453,21 @@
     const rescued = new Set();
     const rescueNotes = new Map();
     const stuck = [...new Set([...pending.filter((f) => f.required !== false && !f.absent).map((f) => f.label), ...(data.review || []).map((r) => r.label), ...ghProblems().map((p) => p.label)])].filter((l) => l && !isOptional(l));
-    for (const label of stuck.slice(0, 8)) {
+    // Ask the AI about the page's own label: it looks for "Location (City)",
+    // not the fill's name "Location" (which it reported as "field not found").
+    const pageLabelFor = (l) => {
+      if (!/^location$/i.test(l)) return l;
+      const lab = [...document.querySelectorAll("label")].find((x) => /^location\b/i.test((x.textContent || "").trim()));
+      return lab ? lab.textContent.replace(/\*/g, "").trim() : l;
+    };
+    for (const stuckLabel of stuck.slice(0, 8)) {
+      const label = pageLabelFor(stuckLabel);
       if (!window.__jwRescue) break;
       banner(`JobWatch is asking AI how to finish: ${label}`);
       const r = await window.__jwRescue(label, { jobTitle: data.jobTitle || "", companyName: data.companyName || "" });
       log("rescue:", label, r);
-      if (r?.ok) { rescued.add(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
-      else if (r?.why) rescueNotes.set(label, r.why);
+      if (r?.ok) { rescued.add(label); rescued.add(stuckLabel); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      else if (r?.why) { rescueNotes.set(label, r.why); rescueNotes.set(stuckLabel, r.why); }
     }
     // What is still wrong after the rescue, by the page's own "*" and errors.
     // An optional question (Cover Letter, the voluntary EEO survey) never
@@ -633,9 +649,11 @@
       const errEl = [...(wrap?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
       const error = errEl ? errEl.textContent.replace(/\s+/g, " ").trim().slice(0, 160) : (el.getAttribute("aria-invalid") === "true" ? "this field is not valid" : "");
       if ((required && isEmpty(el)) || error) {
-        if (seen.has(label)) continue;
-        seen.add(label);
-        out.push({ label, error, empty: isEmpty(el) });
+        // Keyed by the box, not the label: two questions can share one wording.
+        const key = el.id || label;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ label, id: el.id || "", error, empty: isEmpty(el) });
       }
     }
     return out;

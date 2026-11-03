@@ -96,7 +96,7 @@ export default function Profile({ user, userMeta }) {
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "",
+    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
@@ -185,6 +185,9 @@ export default function Profile({ user, userMeta }) {
         hourlyRate: userMeta.hourlyRate || "",
         visaType: userMeta.visaType || "H-1B",
         citizenshipCountry: userMeta.citizenshipCountry || "",
+        gpa: userMeta.gpa || "",
+        satScore: userMeta.satScore || "",
+        actScore: userMeta.actScore || "",
         workAuthorized: userMeta.workAuthorized || "Yes",
         requiresSponsorship: userMeta.requiresSponsorship || "No",
         smsConsent: userMeta.smsConsent || "No",
@@ -571,6 +574,18 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="citizenshipCountry" className="caps-label block mb-2">Citizenship</label>
                 <input id="citizenshipCountry" name="citizenshipCountry" type="text" value={formData.citizenshipCountry} onChange={handleChange} className="input-standard" placeholder="India" />
+              </div>
+              <div>
+                <label htmlFor="gpa" className="caps-label block mb-2">GPA</label>
+                <input id="gpa" name="gpa" type="text" value={formData.gpa} onChange={handleChange} className="input-standard" placeholder="3.6" />
+              </div>
+              <div>
+                <label htmlFor="satScore" className="caps-label block mb-2">SAT Score</label>
+                <input id="satScore" name="satScore" type="text" value={formData.satScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
+              </div>
+              <div>
+                <label htmlFor="actScore" className="caps-label block mb-2">ACT Score</label>
+                <input id="actScore" name="actScore" type="text" value={formData.actScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
               </div>
             </div>
 

@@ -471,7 +471,39 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   autoAddFeed(tab.url, tab.title);
   autoLeverThanks(tabId, tab.url).catch(() => {});
   autoThanksPage(tabId, tab.url).catch(() => {});
+  ghConfirmationPage(tabId, tab.url).catch(() => {});
 });
+
+/** Greenhouse's confirmation page names the form it confirms
+ *  (/embed/job_app/confirmation?for=<board>&token=<job>), so reaching it is a
+ *  submission no matter who pressed Submit: the runner, or the person
+ *  finishing a "needs you" tab by hand. Until 2026-11-02 only the runner's own
+ *  submits were recorded; 20 real applications that day were logged as
+ *  "the tab was closed" or "needs you", and the duplicate guard did not know
+ *  about them. Recorded once per page load; the ledger ignores repeats. */
+async function ghConfirmationPage(tabId, url) {
+  if (!/greenhouse\.io\/embed\/job_app\/confirmation\?/i.test(url || "")) return;
+  const params = new URL(url).searchParams;
+  const board = params.get("for");
+  const token = params.get("token");
+  if (!board || !token) return;
+  const applyUrl = `https://job-boards.greenhouse.io/embed/job_app?for=${board}&token=${token}`;
+  const job = await autoJobForTab(tabId);
+  await callFunction("recordApplication", {
+    event: "submitted", applyUrl,
+    ...(job ? { jobId: job.jobId, jobTitle: job.title, companyName: job.companyName } : {}),
+  }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
+  // The runner's own job: finish it as submitted (autoThanksPage may have already).
+  if (job) { await autoFinish({ status: "submitted", note: "" }); return; }
+  // A job the runner left for the person: the popup counts it as submitted now.
+  const st = await autoState();
+  const sameForm = (u) => { try { const q = new URL(u).searchParams; return q.get("for") === board && q.get("token") === token; } catch (_) { return false; } };
+  let changed = false;
+  for (const r of Object.values(st.results || {})) {
+    if (r.status !== "submitted" && sameForm(r.url)) { r.status = "submitted"; r.note = "finished by hand"; r.at = Date.now(); changed = true; }
+  }
+  if (changed) await saveAuto(st);
+}
 
 /** After the form pressed Submit (AUTO_SUBMITTING), a new page in the job's
  *  tab that thanks the applicant is the submission. Greenhouse (and some
@@ -888,7 +920,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "AUTO_RESULT") {
         const job = await autoJobForTab(sender?.tab?.id);
-        if (job) await autoFinish({ status: message.status, note: message.note });
+        // "Already applied" is the ledger saying this form WAS submitted
+        // (often a retry of a job whose submit went unrecorded): count it so.
+        const already = message.status === "skipped" && /already applied/i.test(message.note || "");
+        if (job) await autoFinish({ status: already ? "submitted" : message.status, note: already ? "already applied" : message.note });
         sendResponse({ ok: true });
         return;
       }
@@ -1752,36 +1787,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const nrm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
           const el = document.getElementById(fieldId);
           if (!el) return { ok: false, error: "location input not found: " + fieldId };
-          // Background tabs send no focus events; the typeahead needs them to search.
-          el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-          el.focus();
-          el.dispatchEvent(new FocusEvent("focus"));
-          el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
-          el.click();
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-          if (setter) setter.call(el, city); else el.value = city;
-          el.dispatchEvent(new Event("input", { bubbles: true }));
+          // "Cambridge, Massachusetts": the state is what tells Cambridge MA from
+          // Cambridge, England. Picking the first "Cambridge" sent Lila Sciences
+          // an English city (2026-11-02).
+          const want = nrm(matchPrefix || city);
+          const cityN = nrm(city);
+          const state = want.includes(",") ? want.split(",").slice(1).join(",").trim() : "";
+          const type = (text) => {
+            el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+            el.focus();
+            el.dispatchEvent(new FocusEvent("focus"));
+            el.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+            el.click();
+            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+            if (setter) setter.call(el, ""); else el.value = "";
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            if (setter) setter.call(el, text); else el.value = text;
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+          };
           // Only this picker's own list (the phone's country menu can be open too).
           const collect = () => {
             const lb = document.getElementById(el.getAttribute("aria-controls") || "") || document.getElementById(`react-select-${fieldId}-listbox`);
-            return [...(lb || document).querySelectorAll("[role=option], ul[role=listbox] li, [class*='option']")].filter(o => o.offsetParent !== null);
+            return [...(lb || document).querySelectorAll("[role=option], ul[role=listbox] li, [class*='option']")]
+              .filter((o) => o.offsetParent !== null && !/^(no (results|options)|loading)/i.test(o.textContent.trim()));
           };
-          const want = nrm(matchPrefix || city);
-          let pick = null, opts = [];
-          for (let i = 0; i < 16 && !pick; i++) {
-            await wait(300);
-            // The search runs on the typed text, but the menu stays shut until a
-            // key opens it: ArrowDown, as a person would press.
-            if (el.getAttribute("aria-expanded") !== "true" && i % 3 === 2) {
-              for (const t of ["keydown", "keyup"]) el.dispatchEvent(new KeyboardEvent(t, { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true, cancelable: true }));
+          const choose = (opts) => {
+            const t = (o) => nrm(o.textContent);
+            if (state) {
+              // The right city in the right state, nothing else.
+              return opts.find((o) => t(o).startsWith(want))
+                || opts.find((o) => t(o).startsWith(cityN) && t(o).includes(state))
+                || null;
             }
-            opts = collect();
-            pick = opts.find(o => nrm(o.textContent).startsWith(want))
-              || opts.find(o => nrm(o.textContent).includes(want));
+            return opts.find((o) => t(o).startsWith(want)) || opts.find((o) => t(o).includes(want)) || null;
+          };
+          // Search the specific "City, State" first, then the bare city. A
+          // background tab runs the board's search on throttled timers, so the
+          // list can take many seconds: keep asking (ArrowDown opens the menu,
+          // retyping restarts a search that was dropped) for up to ~15 s each.
+          const queries = [...new Set([matchPrefix, city].filter(Boolean))];
+          let pick = null, opts = [];
+          for (const q of queries) {
+            type(q);
+            for (let i = 0; i < 50 && !pick; i++) {
+              await wait(300);
+              if (el.getAttribute("aria-expanded") !== "true" && i % 3 === 2) {
+                for (const t of ["keydown", "keyup"]) el.dispatchEvent(new KeyboardEvent(t, { key: "ArrowDown", code: "ArrowDown", keyCode: 40, which: 40, bubbles: true, cancelable: true }));
+              }
+              opts = collect();
+              pick = choose(opts);
+              if (!pick && opts.length && i >= 6) break; // results came back, none of them is this place
+              if (!opts.length && i > 0 && i % 12 === 0) type(q);
+            }
+            if (pick) break;
           }
-          // Fall back to the first suggestion for the right city (e.g. no state).
-          if (!pick) pick = opts.find(o => nrm(o.textContent).startsWith(nrm(city)));
-          if (!pick) return { ok: false, error: "no matching location option", want, seen: opts.slice(0, 8).map(o => o.textContent.trim()) };
+          if (!pick) return { ok: false, error: "no matching location option", want, seen: opts.slice(0, 8).map((o) => o.textContent.trim()) };
           pick.scrollIntoView({ block: "nearest" });
           pick.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
           pick.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
@@ -1790,6 +1850,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await wait(300);
           return { ok: true, picked: pick.textContent.trim() };
         };
+
 
         // Paste the generated cover letter: Greenhouse's cover-letter widget
         // offers Attach / Dropbox / ... / "enter manually" — click the manual
