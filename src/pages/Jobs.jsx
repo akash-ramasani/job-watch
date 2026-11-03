@@ -1,7 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { arrayRemove, arrayUnion, doc, onSnapshot, setDoc } from "firebase/firestore";
+import { arrayRemove, arrayUnion, collection, doc, onSnapshot, query, setDoc, where } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "../firebase";
@@ -13,6 +13,13 @@ import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/re
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
 import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
 import { titleCase } from "../lib/titleCase.js";
+
+/** Same role at the same company (functions/lib/apply/ledger.cjs roleKeyOf). */
+const roleKey = (company, title) => {
+  const n = (v) => String(v || "").toLowerCase().replace(/\(.*?\)/g, " ").replace(/[^a-z0-9]+/g, " ").trim();
+  const c = n(company), t = n(title);
+  return c && t ? `${c}|${t}` : "";
+};
 
 
 const US_STATES = [
@@ -244,6 +251,29 @@ export default function Jobs({ user, userMeta, preferences }) {
     return () => unsub();
   }, [user?.uid]);
 
+  // Jobs already submitted (users/{uid}/applications, status "submitted"):
+  // gone from the page, so it lists only what is still to apply to. Matched
+  // like the auto-apply queue: by job id, else by company + title.
+  const [applied, setApplied] = useState({ ids: new Set(), roles: new Set() });
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return onSnapshot(
+      query(collection(db, "users", user.uid, "applications"), where("status", "==", "submitted")),
+      (snap) => {
+        const ids = new Set();
+        const roles = new Set();
+        for (const d of snap.docs) {
+          const a = d.data();
+          if (a.jobId) ids.add(String(a.jobId));
+          const rk = roleKey(a.companyName, a.jobTitle || a.title);
+          if (rk) roles.add(rk);
+        }
+        setApplied({ ids, roles });
+      },
+      (err) => console.warn("applications snapshot error:", err)
+    );
+  }, [user?.uid]);
+
   // Whether this user has a resume yet — scores are measured against it.
   useEffect(() => {
     if (!user?.uid) return undefined;
@@ -331,6 +361,7 @@ export default function Jobs({ user, userMeta, preferences }) {
 
     const filtered = jobs.filter((j) => {
       if (hidden.has(String(j.companyName || "").trim().toLowerCase())) return false;
+      if (applied.ids.has(String(j.id)) || applied.roles.has(roleKey(j.companyName, j.title))) return false;
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 
       if (companyKeySet && !companyKeySet.has(j.companyKey)) return false;
@@ -365,7 +396,7 @@ export default function Jobs({ user, userMeta, preferences }) {
       });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
-  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance, hiddenCompanies]);
+  }, [jobs, myScores, titleSearch, stateFilter, selectedKeys, timeframe, jobTypes, relevance, hiddenCompanies, applied]);
 
   const aiOn = preferences?.aiScoringEnabled !== false && userMeta?.aiAccess !== false;
   // Wait for the user's job types too, so unrelated jobs never flash in.
