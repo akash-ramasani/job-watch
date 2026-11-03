@@ -213,20 +213,6 @@
   }
   const fmtDay = (iso) => { const d = iso ? new Date(iso) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "an earlier date"; };
 
-  // Greenhouse shows a confirmation page (or empties the form) once the person
-  // submits. Poll for 30 minutes; never click Submit.
-  function watchForSubmit(answersLog) {
-    const t0 = Date.now();
-    const formPresent = () => !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name");
-    const watch = setInterval(() => {
-      const done = !formPresent() || /confirmation|thank/i.test(location.href) || /thank you for applying|application has been submitted|application submitted/i.test(document.body?.innerText?.slice(0, 4000) || "");
-      if (done) {
-        clearInterval(watch);
-        ledger("submitted", { answersLog }).then(() => banner("JobWatch: application recorded as submitted."));
-      } else if (Date.now() - t0 > 30 * 60 * 1000) clearInterval(watch);
-    }, 2000);
-  }
-
   // ── Main ──────────────────────────────────────────────────────────────────
   async function run() {
     const ids = jobIds();
@@ -521,8 +507,9 @@
     ];
     ledger("filled", { answersLog, needsAttention, filledCount: ok, totalFields: data.totalFields || data.fills.length + needsAttention.length, requiredTotal: data.requiredTotal || 0, flow: "engine", schemaSource: "greenhouse-api", reasons: data.reasons || [], jobTitle: data.jobTitle || "", companyName: data.companyName || "" })
       .then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
-    if (AUTO) return autoSubmitGreenhouse(needs, answersLog, data);
-    watchForSubmit(answersLog);
+    // Submit, auto-apply or not (the person's call, 2026-11-02): a form
+    // JobWatch filled goes in on its own, with the same repair rounds.
+    return autoSubmitGreenhouse(needs, answersLog, data);
   }
 
   // ── Unattended auto-apply (background.js runs the queue) ─────────────────
@@ -564,6 +551,11 @@
   async function submitAndRepair({ answersLog = {}, auto = false, needs = [] } = {}) {
     const say = (t, items) => banner(`${auto ? "Auto-apply" : "JobWatch"}: ${t}`, items ? { items, action: submitAction("", items) } : {});
     const meta = { jobTitle: document.title || "", companyName: "" };
+    // Test runs set jwNoSubmit: fill, never send.
+    if ((await chrome.storage.local.get("jwNoSubmit").catch(() => ({}))).jwNoSubmit) return { status: "needs_attention", note: "test run: not submitted" };
+    // Never without the resume.
+    const noResume = ghProblems().find((p) => /^(resume|cv)\b/i.test(p.label || ""));
+    if (noResume) { say("the resume would not attach. Attach it and press Submit.", [noResume.label]); return { status: "needs_attention", note: "resume would not attach" }; }
     let codeTries = 0;
     for (let round = 0; round <= 3; round++) {
       const btn = ghSubmitButton();

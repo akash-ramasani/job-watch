@@ -1323,6 +1323,8 @@
   }
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
   async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, round = 0) {
+    // Test runs set jwNoSubmit: fill, never send.
+    if ((await chrome.storage.local.get("jwNoSubmit").catch(() => ({}))).jwNoSubmit) return autoReport("needs_attention", "test run: not submitted");
     // Last look before Submit: every required field filled (the resume included).
     const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => (d.required || d.id === "_systemfield_resume") && !d.filled && !d.survey).map((d) => d.label);
     let empty = await scanEmpty();
@@ -1702,8 +1704,9 @@
       flow: "engine", schemaSource: pkg.schemaSource || "", reasons: [...(pkg.reasons || []), ...traceNow()],
     }).then((r) => { if (!r?.ok) console.warn("[JobWatch] ledger(filled) failed:", r?.error); });
 
-    // Unattended auto-apply submits when nothing is left for the person.
-    if (AUTO) {
+    // Submit, auto-apply or not (the person's call, 2026-11-02): a form
+    // JobWatch filled goes in on its own, with the same repair rounds.
+    {
       // After a refused Submit: fill again whatever the form has lost (Ashby
       // can drop an uploaded resume), from the same computed answers.
       // Then every field the board flags (or left empty) goes to the AI with
