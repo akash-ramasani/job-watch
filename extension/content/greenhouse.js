@@ -400,6 +400,19 @@
         }
       }
     } catch (e) { warn("education extras:", e.message); }
+    // The board's resume parser fills Employment blocks from the resume and
+    // glues the job's place onto the title ("Senior Software Engineer
+    // Remote", "... San Jose, California"). Keep the title only.
+    try {
+      for (const lab of document.querySelectorAll("label")) {
+        if (!/^title\b/i.test((lab.textContent || "").replace(/\*/g, "").trim())) continue;
+        const el = document.getElementById(lab.getAttribute("for") || "") || lab.closest("div")?.querySelector("input");
+        const block = el?.closest("fieldset, [class*='employment'], [class*='experience']") || el?.closest("div")?.parentElement?.parentElement;
+        if (!el || el.tagName !== "INPUT" || !/company name/i.test(block?.textContent || "")) continue;
+        const clean = stripPlace(el.value);
+        if (clean && clean !== el.value) { await fillText(el, clean); log("employment title:", el.value, "<-", clean); }
+      }
+    } catch (e) { warn("employment titles:", e.message); }
 
     // Mandatory consent / acknowledgement boxes the form adds outside its questions.
     const consents = await tickRequiredConsents();
@@ -613,6 +626,21 @@
 
   // Required fields that are still empty, plus every error message the board
   // shows, each tied to its field label.
+  // "Senior Software Engineer San Jose, California" -> "Senior Software Engineer".
+  const US_STATES = "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC|USA|India";
+  const ROLE_WORD = /^(engineer|developer|manager|scientist|lead|analyst|designer|architect|intern|consultant|director|specialist|administrator|associate|programmer|researcher|officer|head|ii|iii|iv|i|sr\.?|jr\.?|senior|staff|principal)$/i;
+  function stripPlace(title) {
+    let t = String(title || "").trim().replace(/\s*[-–|(]?\s*\(?(remote|hybrid|on-?site)\)?$/i, "").trim();
+    const m = t.match(new RegExp(`^(.*?),\\s*(?:${US_STATES})$`));
+    if (m) {
+      const words = m[1].split(/\s+/);
+      let n = 0; // the city: up to three words after the last role word
+      while (n < 3 && words.length - n > 1 && !ROLE_WORD.test(words[words.length - 1 - n])) n++;
+      if (n && ROLE_WORD.test(words[words.length - 1 - n])) t = words.slice(0, words.length - n).join(" ");
+    }
+    return t.replace(/[\s,–-]+$/, "");
+  }
+
   function ghProblems() {
     const out = [];
     const seen = new Set();
@@ -641,6 +669,8 @@
       const forId = lab.getAttribute("for");
       const el = (forId && document.getElementById(forId)) || lab.closest("div")?.querySelector("input, textarea, select, [role=combobox]");
       if (!el) continue;
+      // A greyed-out box (End date when "Current role" is ticked) can't be filled and isn't asked for.
+      if (el.disabled || el.closest("[aria-disabled='true'], [class*='is-disabled'], [class*='--disabled']")) continue;
       const wrap = lab.closest("div.field, div[class*='field'], fieldset, div") || lab.parentElement;
       // Mandatory = a "*" in the question or right after its <label>, or required markers.
       const next = lab.nextElementSibling;
