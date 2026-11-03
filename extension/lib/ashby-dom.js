@@ -589,6 +589,13 @@
     return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 
+  /** Still sending: a submit request without its reply, or the button busy. */
+  function sending() {
+    if ((window.__jwNet?.pending || 0) > 0) return true;
+    const btn = [...document.querySelectorAll("button")].find((b) => /submit/i.test((b.textContent || "").trim()));
+    return !!btn && (btn.disabled || /submitting|sending/i.test(btn.textContent || "") || btn.getAttribute("aria-busy") === "true");
+  }
+
   // What the page looks like after a refused Submit, for the log.
   function afterSubmit() {
     const btn = [...document.querySelectorAll("button")].find((b) => /submit|submitting/i.test((b.textContent || "").trim()));
@@ -606,5 +613,5 @@
       || /your application (was|has been) (successfully )?submitted|application submitted successfully|thank(s| you) for (applying|your application)/i.test((document.body?.innerText || "").slice(0, 6000));
   }
 
-  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, education, errors, submitted, afterSubmit, phone };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, education, errors, submitted, sending, afterSubmit, phone };
 })();

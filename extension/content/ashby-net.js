@@ -8,7 +8,8 @@
 (function () {
   "use strict";
   if (window.__jwNet) return;
-  const net = (window.__jwNet = { submits: [] });
+  // pending: submit requests sent and not yet answered (no second press while one is on its way).
+  const net = (window.__jwNet = { submits: [], pending: 0 });
   const isSubmit = (url, body) => /submit/i.test(String(url || "")) || /"operationName"\s*:\s*"[^"]*submit/i.test(String(body || ""));
   const record = (url, status, text) => {
     let errors = [];
@@ -38,7 +39,8 @@
       const body = init?.body;
       const p = ofetch.apply(this, arguments);
       if (isSubmit(url, typeof body === "string" ? body : "")) {
-        p.then((r) => r.clone().text().then((t) => record(url, r.status, t))).catch((e) => record(url, 0, String(e?.message || e)));
+        net.pending++;
+        p.then((r) => r.clone().text().then((t) => record(url, r.status, t))).catch((e) => record(url, 0, String(e?.message || e))).finally(() => { net.pending = Math.max(0, net.pending - 1); });
       }
       return p;
     };
@@ -48,7 +50,8 @@
   XMLHttpRequest.prototype.open = function (method, url) { this.__jwUrl = url; return oopen.apply(this, arguments); };
   XMLHttpRequest.prototype.send = function (body) {
     if (isSubmit(this.__jwUrl, typeof body === "string" ? body : "")) {
-      this.addEventListener("loadend", () => { try { record(this.__jwUrl, this.status, this.responseText || ""); } catch (_) { /* binary */ } });
+      net.pending++;
+      this.addEventListener("loadend", () => { net.pending = Math.max(0, net.pending - 1); try { record(this.__jwUrl, this.status, this.responseText || ""); } catch (_) { /* binary */ } });
     }
     return osend.apply(this, arguments);
   };

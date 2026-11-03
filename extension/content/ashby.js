@@ -1337,7 +1337,7 @@
     if (manual.size || empty.length) console.log("[JobWatch] submitting with open fields; the form will say what it needs:", [...manual.keys(), ...empty]);
     const btn = ashbySubmitButton();
     if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
-    showOverlay(`⏳ Auto-apply: submitting${round ? ` (try ${round + 1})` : ""}… Ashby can take up to 90 seconds to confirm.`);
+    showOverlay(`⏳ Auto-apply: submitting${round ? ` (try ${round + 1})` : ""}…`);
     try {
       const res = (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((d) => d.id === "_systemfield_resume");
       fileTrace.push(`before submit ${round + 1}: resume ${res ? (res.filled ? "shown" : "EMPTY") : "field absent"}`);
@@ -1346,6 +1346,8 @@
     await sleep(600);
     await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for a thank-you page
     btn.click();
+    // Ten seconds for Ashby to confirm; longer only while the application is
+    // still on its way (a second press then could send it twice).
     for (let i = 0; i < 45; i++) {
       await sleep(2000);
       let done = false;
@@ -1359,8 +1361,8 @@
         showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
         return autoReport("needs_attention", "CAPTCHA challenge");
       }
-      // The board flagged fields and the form is still here: fix them now
-      // instead of waiting out the full minute and a half.
+      if (i >= 4 && (await execAshby("sending").catch(() => false)) !== true) break;
+      // The board flagged fields and the form is still here: fix them now.
       if (i >= 3 && refill && round < 3) {
         const flagged = await execAshby("errors").then((x) => (Array.isArray(x) ? x.filter((e) => e.path) : [])).catch(() => []);
         if (flagged.length) break;
@@ -1388,7 +1390,7 @@
       if (n) { showOverlay(`⏳ Auto-apply: Ashby refused it; fixed ${n} field${n === 1 ? "" : "s"}, submitting again (try ${round + 2} of 4)…`); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
       // Nothing to fix: Ashby sometimes takes the same form on a second press
       // (Applied Intuition, 2026-11-02). One more try after a pause.
-      if (round === 0) { showOverlay("⏳ Auto-apply: Ashby did not confirm; trying Submit once more…"); await sleep(5000); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
+      if (round === 0) { showOverlay("⏳ Auto-apply: Ashby did not confirm; trying Submit once more…"); await sleep(1500); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
     }
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
