@@ -545,8 +545,8 @@ async function autoLeverThanks(tabId, url) {
 // listed in the popup. State lives in chrome.storage.local so a restarted
 // service worker carries on; a one-minute alarm keeps the loop alive.
 //
-// Always on: when the queue runs dry the runner waits and checks for new jobs
-// every 15 minutes instead of stopping, starts again when the browser opens,
+// Always on: when the queue runs dry the runner checks every minute whether
+// the job list changed and starts on a new job at once, starts again when the browser opens,
 // and keeps the computer awake while it is on (chrome.power). Failed jobs are
 // retried on their own (30 minutes, then 2 hours; three tries in all; closed
 // postings never). A job that needed the person is retried once they add a
@@ -555,7 +555,8 @@ async function autoLeverThanks(tabId, url) {
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
 const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
-const AUTO_IDLE_MS = 15 * 60 * 1000; // queue empty: look for new jobs this often
+const AUTO_IDLE_MS = 15 * 60 * 1000; // the queue is fetched again at least this often
+const AUTO_POLL_MS = 60 * 1000; // nothing to do: check whether the job list changed this often
 const AUTO_RETRY_MS = [30 * 60 * 1000, 2 * 60 * 60 * 1000]; // after the 1st and 2nd failure
 const AUTO_MAX_TRIES = 3;
 const AUTO_MAX_OPEN = 3; // "needs you" tabs left open at once
@@ -646,10 +647,28 @@ async function withTailoredResume(data, tailoredP) {
   return data;
 }
 
+/** When the job list or the match scores last changed (two one-field reads):
+ *  a new value means new jobs, so the queue is fetched again at once. */
+let jobsStampSeen = "";
+async function jobsStamp() {
+  try {
+    const { idToken, uid } = await getFreshToken();
+    const one = async (path) => {
+      const r = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents/${path}?mask.fieldPaths=updatedAt`, { headers: { Authorization: `Bearer ${idToken}` } });
+      return r.ok ? (await r.json())?.fields?.updatedAt?.timestampValue || "" : "";
+    };
+    const [jobs, scores] = await Promise.all([one(`users/${ADMIN_UID}/aggregations/recentJobs`), one(`users/${uid || ADMIN_UID}/aggregations/myJobScores`)]);
+    return `${jobs}|${scores}`;
+  } catch (_) { return ""; }
+}
+
 async function autoNextJob(st) {
-  if (Date.now() - autoQueue.at > AUTO_IDLE_MS || !autoQueue.list.length) {
+  const stamp = await jobsStamp();
+  const changed = stamp && stamp !== jobsStampSeen;
+  if (Date.now() - autoQueue.at > AUTO_IDLE_MS || !autoQueue.at || changed) {
     const r = await callFunction("getAutoApplyQueue", {});
     autoQueue = { at: Date.now(), list: r.queue || [], answersUpdatedAt: Number(r.answersUpdatedAt) || 0 };
+    if (stamp) jobsStampSeen = stamp;
   }
   for (const j of autoQueue.list) if (await autoDue(j, st)) return j;
   return null;
@@ -713,13 +732,13 @@ async function autoTick() {
       // Nothing due: wait for new jobs (or a retry's time) instead of stopping.
       const retryAts = Object.values(st.results).filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES)
         .map((r) => (r.status === "error" ? r.retryAt || 0 : r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1])));
-      st.nextAt = Math.min(Date.now() + AUTO_IDLE_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
+      // Look again in a minute: new jobs start the moment the list changes.
+      st.nextAt = Math.min(Date.now() + AUTO_POLL_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
       if (!st.idle) {
         const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
-        notify("Auto-apply is waiting for new jobs", `Every job so far is done (${n} submitted). It checks for new ones every 15 minutes.`);
+        notify("Auto-apply is waiting for new jobs", `Every job so far is done (${n} submitted). A new job starts within a minute of appearing on your Jobs page.`);
       }
       st.idle = true;
-      autoQueue.at = 0; // fetch a fresh queue next time
       await saveAuto(st);
       chrome.alarms.create("jwAutoKick", { when: st.nextAt });
       return;
