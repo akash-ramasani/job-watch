@@ -8,7 +8,7 @@
 // page-header, a segmented tab control, and one white ring panel with a caps
 // header strip and hover rows.
 import React, { useEffect, useMemo, useState } from "react";
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import { collection, onSnapshot, doc, updateDoc, setDoc } from "firebase/firestore";
 import { AnimatePresence, motion } from "framer-motion";
 import { db } from "../firebase";
 import { useToast } from "../components/Toast/ToastProvider.jsx";
@@ -82,14 +82,29 @@ export default function Applications({ user }) {
     return unsub;
   }, [user?.uid, showToast]);
 
-  const counts = useMemo(() => Object.fromEntries(TABS.map((t) => [t.key, (rows || []).filter(t.match).length])), [rows]);
+  // users/{uid}.applicationsSince: the page lists only activity from then on.
+  // Older records stay in the database (they are what stops a second
+  // application to the same job), just not on this page.
+  const [since, setSince] = useState(0);
+  useEffect(() => {
+    if (!user?.uid) return undefined;
+    return onSnapshot(doc(db, "users", user.uid), (snap) => setSince(toDate(snap.data()?.applicationsSince)?.getTime() || 0), () => setSince(0));
+  }, [user?.uid]);
+  const shown = useMemo(() => (rows || []).filter((a) => when(a).getTime() >= since), [rows, since]);
+  async function startFresh() {
+    if (!window.confirm("Start this page fresh? Applications so far are hidden here (they still stop JobWatch from applying to the same job twice).")) return;
+    try { await setDoc(doc(db, "users", user.uid), { applicationsSince: new Date().toISOString() }, { merge: true }); showToast("Starting fresh from now", "success"); }
+    catch (e) { console.error(e); showToast("Could not start fresh", "error"); }
+  }
+
+  const counts = useMemo(() => Object.fromEntries(TABS.map((t) => [t.key, shown.filter(t.match).length])), [shown]);
   const list = useMemo(() => {
     const t = TABS.find((x) => x.key === tab) || TABS[0];
     const needle = q.trim().toLowerCase();
-    return (rows || []).filter(t.match)
+    return shown.filter(t.match)
       .filter((a) => !needle || `${a.companyName} ${a.jobTitle} ${a.org}`.toLowerCase().includes(needle))
       .sort((a, b) => when(b) - when(a));
-  }, [rows, tab, q]);
+  }, [shown, tab, q]);
 
   async function setStatus(a, status) {
     const now = new Date().toISOString();
@@ -300,6 +315,10 @@ export default function Applications({ user }) {
         <div>
           <h1>Applications</h1>
           <p>Every form the extension touched. Rows that need you list exactly what is left to do.</p>
+          <p className="mt-1 text-xs text-gray-500">
+            {since ? `Showing activity since ${new Date(since).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}. ` : ""}
+            <button type="button" onClick={startFresh} className="font-semibold text-indigo-600 hover:text-indigo-800">Start fresh</button>
+          </p>
         </div>
 
         <div className="flex justify-center w-full md:w-auto overflow-hidden">
