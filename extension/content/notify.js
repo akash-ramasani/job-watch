@@ -50,7 +50,8 @@
     .spin { animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .msg { flex: 1; font-size: 13px; line-height: 1.55; color: #374151; margin: 0; word-break: break-word; }
-    .items { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 168px; overflow: auto; }
+    .items { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 168px; overflow: auto; scrollbar-width: none; }
+    .items::-webkit-scrollbar { display: none; }
     .items li { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.45; color: #374151;
       background: #fffbeb; border-radius: 8px; padding: 6px 10px; box-shadow: inset 0 0 0 1px rgba(217,119,6,.2); }
     .items li::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: #f59e0b; flex-shrink: 0; margin-top: 6px; }
