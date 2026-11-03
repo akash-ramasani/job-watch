@@ -357,7 +357,6 @@ async function fsAdd(parentPath, collectionId, data, idToken) {
 // feed, the same document the Feeds page writes, then pulls in its last three
 // days of openings. Replaces the popup's manual Company / Job Board / Add Feed.
 
-const FEED_LABEL = { greenhouse: "Greenhouse", ashby: "AshbyHQ", lever: "Lever", workday: "Workday", oracle: "Oracle Cloud", workable: "Workable", smartrecruiters: "SmartRecruiters", bamboohr: "BambooHR" };
 
 /** { source, slug, url, check? } for a page on a supported board, else null. */
 function feedFromUrl(raw) {
@@ -454,8 +453,6 @@ async function autoAddFeed(tabUrl, tabTitle) {
     console.log("[JobWatch] auto feed added:", company, f.source, f.url);
     // Bring in the last three days' openings, as the Feeds page does.
     if (feedId) fetch(`${FUNCTIONS_BASE}/runSyncNow?feedIds=${encodeURIComponent(feedId)}&lookbackHours=72`, { headers: { Authorization: `Bearer ${idToken}` } }).catch(() => {});
-    const { jwAutoFeeds = [] } = await chrome.storage.local.get("jwAutoFeeds");
-    await chrome.storage.local.set({ jwAutoFeeds: [{ company, source: f.source, label: FEED_LABEL[f.source] || f.source, url: f.url, at: new Date().toISOString() }, ...jwAutoFeeds].slice(0, 30) });
     chrome.action.setBadgeBackgroundColor({ color: "#4f46e5" });
     chrome.action.setBadgeText({ text: "+1" });
     setTimeout(() => chrome.action.setBadgeText({ text: "" }), 8000);
@@ -597,8 +594,15 @@ async function autoState() {
   // Up to AUTO_PARALLEL jobs at once, each in its own tab (older state kept one in `current`).
   out.running = Array.isArray(out.running) ? out.running : out.current ? [out.current] : [];
   delete out.current;
+  // Keep only what matters: a finished job (submitted, skipped) is forgotten
+  // after a day; the server's applications record keeps it from a second
+  // application. Jobs still waiting on a retry stay until they are done.
+  const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [id, r] of Object.entries(out.results)) if (["submitted", "skipped"].includes(r.status) && (r.at || 0) < dayAgo) delete out.results[id];
   return out;
 }
+// The old "Feeds" list in the popup is gone: drop what it stored.
+chrome.storage.local.remove("jwAutoFeeds").catch(() => {});
 // One change to the runner's state at a time: jobs in parallel tabs finish
 // whenever they finish, and two read-modify-writes must not cross.
 let autoLock = Promise.resolve();

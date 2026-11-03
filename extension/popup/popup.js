@@ -96,8 +96,6 @@ function renderProfile(userDoc, uid) {
   showScreen("profile");
   setHeaderSub("Ready to apply");
   const isAdmin = uid === ADMIN_UID;
-  $("feeds-section").style.display = isAdmin ? "block" : "none";
-  if (isAdmin) renderAutoFeeds();
   $("member-note").style.display = isAdmin ? "none" : "block";
 
   const name = userDoc.fullName || `${userDoc.firstName || ""} ${userDoc.lastName || ""}`.trim() || "User";
@@ -135,29 +133,6 @@ function startAuthValidityCheck() {
   }, 10_000); // check every 10 seconds
 }
 
-// ── Feeds: added automatically by the background from the pages you open ─────
-function timeAgo(iso) {
-  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
-}
-function renderAutoFeeds() {
-  chrome.storage.local.get("jwAutoFeeds", ({ jwAutoFeeds = [] }) => {
-    const list = $("auto-feeds");
-    list.innerHTML = "";
-    if (!jwAutoFeeds.length) {
-      list.innerHTML = '<li class="auto-empty">None yet. Open any job on Greenhouse, Ashby, Lever, Workday, Oracle, Workable, SmartRecruiters or BambooHR.</li>';
-      return;
-    }
-    for (const f of jwAutoFeeds.slice(0, 6)) {
-      const li = document.createElement("li");
-      li.innerHTML = '<span class="auto-name"></span><span class="auto-meta"></span>';
-      li.querySelector(".auto-name").textContent = f.company;
-      li.querySelector(".auto-meta").textContent = `${f.label} · ${timeAgo(f.at)}`;
-      list.appendChild(li);
-    }
-  });
-}
-
 // ── Fill this page: run the universal filler in the active tab ───────────────
 $("btn-fill-page").addEventListener("click", () => {
   const status = $("fill-status");
@@ -175,7 +150,6 @@ $("btn-fill-page").addEventListener("click", () => {
 });
 
 // ── Auto-apply: start / stop and live status ─────────────────────────────────
-const STATUS_LABEL = { submitted: "Submitted", needs_attention: "Needs you", error: "Error", skipped: "Skipped" };
 function renderAuto(st) {
   if (!st) return;
   const pill = $("auto-pill");
@@ -188,20 +162,9 @@ function renderAuto(st) {
     : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby and Greenhouse job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
-  $("btn-auto-clear").style.display = (st.submitted || st.needs || st.errors || st.skipped || (st.recent || []).length) ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
-  $("auto-stats").innerHTML = [["Submitted", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
+  $("auto-stats").innerHTML = [["Submitted (24 h)", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
     .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
-  const list = $("auto-recent");
-  list.innerHTML = "";
-  for (const r of st.recent || []) {
-    const li = document.createElement("li");
-    li.innerHTML = '<span class="auto-name"></span><span class="auto-meta"></span>';
-    li.querySelector(".auto-name").textContent = `${r.companyName} · ${r.title}`;
-    li.querySelector(".auto-meta").textContent = STATUS_LABEL[r.status] || r.status;
-    li.title = r.note || "";
-    list.appendChild(li);
-  }
 }
 function refreshAuto() { chrome.runtime.sendMessage({ type: "AUTO_STATUS" }, (res) => renderAuto(res?.status)); }
 refreshAuto();
@@ -233,10 +196,6 @@ $("btn-gmail").addEventListener("click", () => {
 });
 refreshGmail();
 
-$("btn-auto-clear").addEventListener("click", () => {
-  if (!confirm("Clear the auto-apply counts and recent list? Auto-apply carries on; jobs already submitted stay skipped.")) return;
-  chrome.runtime.sendMessage({ type: "AUTO_CLEAR" }, () => setTimeout(refreshAuto, 300));
-});
 $("btn-auto-retry").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "AUTO_RETRY" }, () => setTimeout(refreshAuto, 300));
 });
