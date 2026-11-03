@@ -190,6 +190,7 @@ function renderAuto(st) {
     : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse and Lever job on your Jobs page with a resume tailored to each role. Once on, it stays on: it keeps the computer awake and checks for new jobs every 15 minutes.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
+  $("btn-auto-clear").style.display = (st.submitted || st.needs || st.errors || st.skipped || (st.recent || []).length) ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
   $("auto-stats").innerHTML = [["Submitted", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
     .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
@@ -238,6 +239,10 @@ $("btn-gmail").addEventListener("click", () => {
 });
 refreshGmail();
 
+$("btn-auto-clear").addEventListener("click", () => {
+  if (!confirm("Clear the auto-apply counts and recent list? Auto-apply stops until you start it again. Jobs already submitted stay skipped.")) return;
+  chrome.runtime.sendMessage({ type: "AUTO_CLEAR" }, () => setTimeout(refreshAuto, 300));
+});
 $("btn-auto-retry").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "AUTO_RETRY" }, () => setTimeout(refreshAuto, 300));
 });

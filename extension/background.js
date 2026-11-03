@@ -957,6 +957,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true, retried: n });
         return;
       }
+      if (message.type === "AUTO_CLEAR") {
+        // Wipe the popup's counts and recent list. Auto-apply stops so nothing
+        // re-runs until the person starts it again; submitted jobs stay
+        // skipped (the server keeps them in applications).
+        const st = await autoState();
+        await saveAuto({ on: false, current: null, results: {}, startedAt: null });
+        autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
+        keepAwake(false);
+        try { chrome.notifications.clear("jwNeeds"); } catch (_) { /* none */ }
+        sendResponse({ ok: true, cleared: Object.keys(st.results || {}).length });
+        return;
+      }
       if (message.type === "JW_WAIT") {
         // A pause for a hidden tab (content/wake.js): the worker's timers are not throttled.
         await new Promise((r) => setTimeout(r, Math.min(Math.max(Number(message.ms) || 0, 0), 60000)));
