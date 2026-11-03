@@ -1323,18 +1323,18 @@
   }
   /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
   async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, round = 0) {
-    if (manual.size) {
-      window.__jwNotify.show(`Auto-apply: ${manual.size === 1 ? "1 field needs" : `${manual.size} fields need`} you. Left open for you; the queue moves on.`, "warning", { items: [...manual.keys()] });
-      return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
-    }
     // Last look before Submit: every required field filled (the resume included).
     const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => (d.required || d.id === "_systemfield_resume") && !d.filled && !d.survey).map((d) => d.label);
     let empty = await scanEmpty();
     if (empty.length && refill && await refill()) empty = await scanEmpty();
-    if (empty.length) {
-      window.__jwNotify.show(`Auto-apply: ${empty.length === 1 ? "1 required field is" : `${empty.length} required fields are`} still empty. Left open for you; the queue moves on.`, "warning", { items: empty });
+    // A field still open does not stop the attempt: Submit, and the form
+    // says what it really wants; the repair rounds below hand that to the AI.
+    // Only the resume is a hard stop (Ashby never takes an application without it).
+    if (empty.includes("Resume") || empty.some((l) => /^resume\b/i.test(l))) {
+      window.__jwNotify.show("Auto-apply: the resume would not attach. Left open for you; the queue moves on.", "warning", { items: empty });
       return autoReport("needs_attention", `still empty: ${empty.slice(0, 4).join("; ")}`);
     }
+    if (manual.size || empty.length) console.log("[JobWatch] submitting with open fields; the form will say what it needs:", [...manual.keys(), ...empty]);
     const btn = ashbySubmitButton();
     if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
     showOverlay("⏳ Auto-apply: submitting…");
@@ -1390,7 +1390,9 @@
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
     ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: errs.slice(0, 8).map((e) => ({ label: e.label || e.path || "form", path: e.path || "", note: `after Submit: ${e.text}` })), reasons: traceNow() }).catch(() => {});
-    showOverlay(`⚠️ Auto-apply: Ashby did not accept the submission${said ? `: ${said}` : ""}. Check the form and press Submit.`, "warning");
+    const open = [...new Set([...errs.filter((e) => e.path).map((e) => e.label || e.path), ...await scanEmpty()])].filter(Boolean);
+    if (open.length) window.__jwNotify.show(`Auto-apply: Ashby did not accept it after ${round + 1} tries. These need you, then press Submit:`, "warning", { items: open });
+    else showOverlay(`⚠️ Auto-apply: Ashby did not accept the submission${said ? `: ${said}` : ""}. Check the form and press Submit.`, "warning");
     return autoReport("needs_attention", `Ashby did not accept the submission${said ? `: ${said}` : " (no message shown)"}`);
   }
 
@@ -1513,6 +1515,8 @@
         return execAshby("checkboxes", f.path, f.values);
       case "location":
         return execAshby("location", f.path, f.value, f.match, f.alternates || []);
+      case "education":
+        return execAshby("education", f.path, f.entries || []);
       case "date":
         if (dom.type !== "date") return execAshby("fillText", f.path, f.value);
         return execAshby("date", f.path, f.value);

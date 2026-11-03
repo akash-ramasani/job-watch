@@ -549,58 +549,83 @@
   function captchaVisible() {
     return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
   }
-  /** Submit when nothing is left for the person; enter the emailed security
-   *  code from Gmail when Greenhouse asks; wait for the confirmation; report. */
+  /** Auto-apply: press Submit even when a field is listed for the person.
+   *  The form says what it really wants; the AI fixes that and it goes again. */
   async function autoSubmitGreenhouse(needs, answersLog) {
-    if (needs.length) {
-      banner(`Auto-apply: ${needs.length === 1 ? "1 field needs" : `${needs.length} fields need`} you. Left open for you; the queue moves on.`, { items: needs });
-      return autoReport("needs_attention", `Needs you: ${needs.slice(0, 4).join("; ")}`);
-    }
-    const btn = ghSubmitButton();
-    if (!btn) return autoReport("needs_attention", "could not find Greenhouse's Submit button");
-    banner("Auto-apply: submitting…");
-    btn.scrollIntoView({ block: "center" });
-    await sleep(600);
-    const clickedAt = Date.now();
-    await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
-    btn.click();
-    let codeEntered = false;
-    for (let i = 0; i < 120; i++) {
-      await sleep(2000);
-      if (confirmed() && !codeInputs().length) {
-        await ledger("submitted", { answersLog });
-        banner("Auto-apply: submitted and recorded.");
-        return autoReport("submitted", "");
-      }
-      if (codeInputs().length && !codeEntered) {
-        banner("Auto-apply: Greenhouse emailed a security code. Reading it from Gmail…");
-        const r = await sendMsg({ type: "GET_GH_CODE", since: clickedAt });
-        if (!r?.ok || !r.code) {
-          banner(`Auto-apply: could not get the security code (${r?.error || "no email"}). Enter it and submit.`);
-          return autoReport("needs_attention", `security code: ${r?.error || "no email"}`);
+    const r = await submitAndRepair({ answersLog, auto: true, needs });
+    if (r.status === "submitted") return autoReport("submitted", "");
+    return autoReport("needs_attention", r.note);
+  }
+
+  /** Press Submit; enter the security code Greenhouse emails (read from
+   *  Gmail); when the form marks fields, hand each with the form's own words
+   *  to the AI, then press Submit again. Three repair rounds.
+   *  -> { status: "submitted" | "needs_attention", note } */
+  async function submitAndRepair({ answersLog = {}, auto = false, needs = [] } = {}) {
+    const say = (t, items) => banner(`${auto ? "Auto-apply" : "JobWatch"}: ${t}`, items ? { items, action: submitAction("", items) } : {});
+    const meta = { jobTitle: document.title || "", companyName: "" };
+    let codeTries = 0;
+    for (let round = 0; round <= 3; round++) {
+      const btn = ghSubmitButton();
+      if (!btn) { say("could not find the Submit button. Scroll down and press it."); return { status: "needs_attention", note: "could not find Greenhouse's Submit button" }; }
+      say(round ? `submitting again (try ${round + 1} of 4)…` : "submitting…");
+      btn.scrollIntoView({ block: "center" });
+      await sleep(600);
+      const clickedAt = Date.now();
+      await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
+      btn.click();
+      let flagged = [];
+      for (let i = 0; i < 60; i++) {
+        await sleep(2000);
+        if (confirmed() && !codeInputs().length) {
+          await ledger("submitted", { answersLog });
+          say("submitted and recorded.");
+          return { status: "submitted", note: "" };
         }
-        const put = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCode", value: r.code });
-        if (!put?.result?.ok) return autoReport("needs_attention", `security code: ${put?.result?.error || "could not enter it"}`);
-        codeEntered = true;
-        await sleep(800);
-        const again = ghSubmitButton();
-        if (again) { again.scrollIntoView({ block: "center" }); again.click(); }
-        banner("Auto-apply: security code entered, submitting…");
-        continue;
+        if (codeInputs().length) {
+          if (codeTries >= 2) { say("the security code was not accepted. Check your email, enter it and press Submit."); return { status: "needs_attention", note: "security code not accepted" }; }
+          codeTries++;
+          say("Greenhouse emailed a security code. Reading it from Gmail…");
+          const r = await sendMsg({ type: "GET_GH_CODE", since: clickedAt });
+          if (!r?.ok || !r.code) {
+            say(`could not get the security code (${r?.error || "no email yet"}). Enter it from your email and press Submit.`);
+            return { status: "needs_attention", note: `security code: ${r?.error || "no email"}` };
+          }
+          const put = await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCode", value: r.code });
+          if (!put?.result?.ok) { say("could not type the security code. Enter it and press Submit."); return { status: "needs_attention", note: `security code: ${put?.result?.error || "could not enter it"}` }; }
+          say("security code entered, submitting…");
+          await sleep(800);
+          const again = ghSubmitButton();
+          if (again) { again.scrollIntoView({ block: "center" }); again.click(); }
+          continue;
+        }
+        if (captchaVisible()) {
+          say("Greenhouse is showing a CAPTCHA. Solve it and press Submit.");
+          return { status: "needs_attention", note: "CAPTCHA challenge" };
+        }
+        if (i >= 3) { flagged = ghProblems(); if (flagged.length) break; }
       }
-      if (captchaVisible()) {
-        banner("Auto-apply: Greenhouse is showing a CAPTCHA. Solve it and press Submit; the queue moves on.");
-        return autoReport("needs_attention", "CAPTCHA challenge");
+      if (!flagged.length) {
+        if (confirmed()) { await ledger("submitted", { answersLog }); say("submitted and recorded."); return { status: "submitted", note: "" }; }
+        say("no confirmation from Greenhouse after 2 minutes. Check the form.");
+        return { status: "needs_attention", note: "no confirmation after 2 minutes" };
       }
-      // The board flagged a field: nothing more to do unattended.
-      if (i >= 15 && !codeInputs().length && ghProblems().length) {
-        const p = ghProblems().map((x) => x.label).filter(Boolean);
-        banner("Auto-apply: Greenhouse did not accept the submission. These need you:", { items: p });
-        return autoReport("needs_attention", `Greenhouse flagged: ${p.slice(0, 4).join("; ") || "the form"}`);
+      if (round === 3 || !window.__jwRescue) break;
+      // The form marked fields: the AI gets each with the form's own words.
+      let fixed = 0;
+      for (const p of flagged.slice(0, 8)) {
+        say(`asking AI to fix: ${p.label}`);
+        const r = await window.__jwRescue(p.label, { ...meta, error: p.error || "This field is required.", force: true }).catch(() => null);
+        log("repair:", p.label, p.error, r);
+        if (r?.ok) { fixed++; answersLog[`rescue:${p.label}`] = { label: p.label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
       }
+      if (!fixed) break;
     }
-    banner("Auto-apply: no confirmation from Greenhouse after 4 minutes. Check the form.");
-    return autoReport("needs_attention", "no confirmation after 4 minutes (CAPTCHA or a field the form rejected)");
+    const left = ghProblems().map((x) => x.label).filter(Boolean);
+    const list = left.length ? left : needs;
+    ledger("filled", { answersLog, needsAttention: list.map((l) => ({ path: "", label: l, note: "after Submit: the form still marks it" })) }).catch(() => {});
+    say("Greenhouse did not accept it. These need you, then press Submit:", list);
+    return { status: "needs_attention", note: `Greenhouse flagged: ${list.slice(0, 4).join("; ") || "the form"}` };
   }
 
   /** Tick every mandatory consent or acknowledgement box ("I acknowledge receipt
@@ -699,19 +724,7 @@
       || null;
   }
   function submitAction(message, items = null) {
-    return {
-      label: "Submit application",
-      onClick: async () => {
-        const btn = ghSubmitButton();
-        if (!btn) { banner("JobWatch: could not find the Submit button. Scroll down and click it yourself."); return; }
-        btn.scrollIntoView({ block: "center" });
-        btn.click();
-        banner("JobWatch: submitting…");
-        await sleep(3500);
-        const stillHere = !!document.querySelector("#application_form, form#application-form, input[id^='question_'], #first_name");
-        if (stillHere) banner("JobWatch: Greenhouse did not accept it yet. Solve the CAPTCHA or fix the field it marks, then press Submit again.", { action: submitAction(message, items), items });
-      },
-    };
+    return { label: "Submit application", onClick: () => submitAndRepair({ needs: items || [] }) };
   }
 
   // Greenhouse renders the form async; wait for the first name field, then

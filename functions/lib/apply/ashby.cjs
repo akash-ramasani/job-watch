@@ -468,6 +468,30 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     });
   }
 
+  // 5f. Education History (a repeatable School / Degree / Field / dates
+  //     block): every school on the resume, newest first.
+  const eduQ = all.find((q) => q.path === "_systemfield_education_history" || /^education ?history$/i.test(q.ashbyType || ""));
+  const schools = (resume.education || []).filter((e) => e.institution || e.school).slice(0, 3);
+  if (eduQ && schools.length) {
+    const MON = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+    const when = (v) => {
+      const t = String(v || "").trim();
+      if (!t || /present|current|now/i.test(t)) return null;
+      const y = t.match(/(19|20)\d{2}/)?.[0];
+      const iso = t.match(/^(\d{4})-(\d{1,2})/);
+      const word = t.match(/([A-Za-z]{3,})\.?\s+\d{4}/);
+      const m = iso ? Number(iso[2]) : word ? MON.findIndex((x) => x.startsWith(word[1].toLowerCase().slice(0, 3))) + 1 : 0;
+      return y ? { year: y, month: m > 0 ? m : null } : null;
+    };
+    const entries = schools.map((e) => {
+      const degree = String(e.degree || "").trim();
+      const field = String(e.field || e.major || degree.split(/,\s*| in /i)[1] || "").trim();
+      return { school: e.institution || e.school, degree: degree.split(/,\s*| in /i)[0].trim(), field, start: when(e.startDate), end: when(e.endDate), current: /present|current|now/i.test(String(e.endDate || "")) };
+    });
+    for (let i = fills.length - 1; i >= 0; i--) if (fills[i].path === eduQ.path) fills.splice(i, 1);
+    fills.push({ path: eduQ.path, label: eduQ.label, kind: "education", entries, source: "resume" });
+  }
+
   // What still needs the person: required questions with no answer, plus the
   // cover letter when it was asked for and could not be produced. A question
   // that has a fill after all (the generated cover letter) is not open.

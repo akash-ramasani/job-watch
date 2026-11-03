@@ -58,7 +58,12 @@
     let filled = false;
 
     const tel = wrap.querySelector("input[type=tel]");
-    if (yesno) {
+    if (path === "_systemfield_education_history" || wrap.querySelector("[class*='repeatableEducationEntry']")) {
+      // School / Degree / dates per school: answered once a school is picked.
+      type = "education";
+      filled = [...wrap.querySelectorAll("input[role=combobox]")].some((b) => !!b.value.trim());
+      return { id: path, label, description, required, type, options, filled, survey };
+    } else if (yesno) {
       type = "yesno";
       filled = !!yesno.querySelector("button[aria-pressed=true]");
     } else if (tel && radios.length) {
@@ -448,6 +453,82 @@
     return { ok: !!box.value?.trim(), picked: opt.textContent.trim(), actual: box.value };
   }
 
+  /** Education History: one block per school (newest first), "+ Add
+   *  Education" for more. School is a search box; Degree and Field of Study
+   *  are text; the dates are plain <select>s ("Month...", "Year...").
+   *  entries = [{ school, degree, field, start: {year, month}, end, current }] */
+  async function education(path, entries) {
+    const wrap = wrapperOf(path);
+    if (!wrap) return { ok: false, error: "education field not found" };
+    const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const blocks = () => [...wrap.querySelectorAll("[class*='repeatableEducationEntry'], [class*='EducationEntry']")];
+    const pickSelect = (sel, label) => {
+      if (!sel || !label) return false;
+      const o = [...sel.options].find((x) => nrm(x.textContent) === nrm(label));
+      if (!o) return false;
+      Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set.call(sel, o.value);
+      sel.dispatchEvent(new Event("input", { bubbles: true }));
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    };
+    const options = () => [...document.querySelectorAll("[role=listbox] [role=option], [role=option]")].filter((o) => o.offsetParent !== null && !/^no (results|matches|options)/i.test(o.textContent.trim()));
+    const log = [];
+    let schoolsDone = 0;
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      if (i >= blocks().length) {
+        const add = [...wrap.querySelectorAll("button")].find((b) => /add education/i.test(b.textContent || ""));
+        if (!add) break;
+        add.click();
+        for (let k = 0; k < 20 && blocks().length <= i; k++) await sleep(100);
+        if (blocks().length <= i) break;
+      }
+      const b = blocks()[i];
+      // School: type, then pick the closest name; shorter searches if none.
+      const box = b.querySelector("input[role=combobox]");
+      if (box && !box.value.trim() && e.school) {
+        const want = nrm(e.school);
+        const words = want.split(" ");
+        const score = (o) => { const have = new Set(nrm(o.querySelector("p, span, div")?.textContent || o.textContent).replace(/[^a-z0-9 ]/g, " ").split(/\s+/)); return words.filter((w) => have.has(w.replace(/[^a-z0-9]/g, ""))).length / words.length; };
+        let best = null;
+        for (const term of [e.school, words.slice(0, 3).join(" "), words.slice(0, 2).join(" ")]) {
+          box.focus(); box.click();
+          setNativeValue(box, "");
+          let typed = "";
+          for (const ch of term.slice(0, 40)) { typed += ch; setNativeValue(box, typed); await sleep(30); }
+          let opts = [];
+          for (let k = 0; k < 30 && !(opts = options()).length; k++) await sleep(100);
+          await sleep(300);
+          opts = options();
+          const ranked = opts.map((o) => ({ o, s: score(o), exact: nrm(o.textContent).startsWith(want) })).sort((a, z) => (z.exact - a.exact) || (z.s - a.s));
+          if (ranked[0] && (ranked[0].exact || ranked[0].s >= 0.75)) { best = ranked[0].o; break; }
+        }
+        if (best) {
+          best.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+          best.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+          best.click();
+          await sleep(300);
+        }
+        log.push(`school ${e.school}: ${box.value.trim() ? "picked " + box.value.trim() : "not in the list"}`);
+      }
+      if (box?.value.trim()) schoolsDone++;
+      // Degree is "...-degree" ("e.g. Bachelor of Science"), Field of Study "...-major".
+      const text = (re, v) => { const el = [...b.querySelectorAll("input[type=text], input:not([type])")].find((x) => x.getAttribute("role") !== "combobox" && re.test(`${x.id.split("-").pop()} ${x.placeholder}`)); if (el && v && !el.value.trim()) setNativeValue(el, v); };
+      text(/^degree\b|bachelor/i, e.degree);
+      text(/^major\b|field of study|computer science/i, e.field);
+      const sels = [...b.querySelectorAll("select")];
+      // A year alone makes Ashby put in the current month: with no month on
+      // the resume, the school year's own (start August, end May).
+      const date = (selM, selY, d, dflt) => { if (!d) return; pickSelect(selM, MON[(d.month || dflt) - 1]); pickSelect(selY, String(d.year)); };
+      date(sels[0], sels[1], e.start, 8);
+      const cur = b.querySelector("input[type=checkbox]");
+      if (e.current && cur && !cur.checked) cur.click();
+      else date(sels[2], sels[3], e.end, 5);
+      await sleep(200);
+    }
+    return { ok: schoolsDone > 0, log };
+  }
+
   /** Visible validation messages after a submit attempt (best effort). */
   /** What the board itself is complaining about, per field. Ashby renders
    *  field errors inside the field wrapper (hashed _error_ classes, role=alert)
@@ -521,5 +602,5 @@
       || /your application (was|has been) (successfully )?submitted|application submitted successfully|thank(s| you) for (applying|your application)/i.test((document.body?.innerText || "").slice(0, 6000));
   }
 
-  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, errors, submitted, afterSubmit, phone };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, education, errors, submitted, afterSubmit, phone };
 })();
