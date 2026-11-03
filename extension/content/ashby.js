@@ -1386,6 +1386,9 @@
     if (refill && round < 3) {
       const n = await refill();
       if (n) { showOverlay(`⏳ Auto-apply: Ashby refused it; fixed ${n} field${n === 1 ? "" : "s"}, submitting again (try ${round + 2} of 4)…`); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
+      // Nothing to fix: Ashby sometimes takes the same form on a second press
+      // (Applied Intuition, 2026-11-02). One more try after a pause.
+      if (round === 0) { showOverlay("⏳ Auto-apply: Ashby did not confirm; trying Submit once more…"); await sleep(5000); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
     }
     const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
     const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
