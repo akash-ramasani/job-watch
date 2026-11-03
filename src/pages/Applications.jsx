@@ -41,6 +41,9 @@ const TABS = [
 ];
 
 const toDate = (v) => (v?.toDate ? v.toDate() : v ? new Date(v) : null);
+// The daily count starts here (local midnight, the day tracking began).
+const DAILY_FROM = "2026-11-03T00:00:00";
+const BOARD_NAME = { ashby: "Ashby", greenhouse: "Greenhouse", lever: "Lever" };
 const when = (a) => toDate(a.updatedAt) || toDate(a.submittedAt) || toDate(a.appliedAt) || toDate(a.startedAt) || new Date(0);
 function fmt(v) {
   const d = toDate(v);
@@ -96,6 +99,25 @@ export default function Applications({ user }) {
     try { await setDoc(doc(db, "users", user.uid), { applicationsSince: new Date().toISOString() }, { merge: true }); showToast("Starting fresh from now", "success"); }
     catch (e) { console.error(e); showToast("Could not start fresh", "error"); }
   }
+
+  // Submitted per day (this browser's time zone), from DAILY_FROM on, newest
+  // first, each split by board.
+  const daily = useMemo(() => {
+    const from = new Date(DAILY_FROM).getTime();
+    const byDay = new Map();
+    for (const a of rows || []) {
+      if (a.status !== "submitted") continue;
+      const t = toDate(a.submittedAt) || toDate(a.appliedAt) || toDate(a.updatedAt);
+      if (!t || t.getTime() < from) continue;
+      const key = t.toLocaleDateString("en-CA");
+      const d = byDay.get(key) || { key, total: 0, boards: {} };
+      d.total++;
+      const b = String(a.source || "other").toLowerCase().replace("ashbyhq", "ashby");
+      d.boards[b] = (d.boards[b] || 0) + 1;
+      byDay.set(key, d);
+    }
+    return [...byDay.values()].sort((x, y) => y.key.localeCompare(x.key));
+  }, [rows]);
 
   const counts = useMemo(() => Object.fromEntries(TABS.map((t) => [t.key, shown.filter(t.match).length])), [shown]);
   const list = useMemo(() => {
@@ -337,6 +359,29 @@ export default function Applications({ user }) {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Submitted per day, from Nov 3 on. */}
+      <div className="mb-6 bg-white shadow-sm ring-1 ring-gray-200 rounded-2xl p-5">
+        <div className="flex items-baseline justify-between mb-3">
+          <h2 className="text-sm font-bold text-gray-900">Submitted per day</h2>
+          <span className="text-xs text-gray-500">{daily.reduce((n, d) => n + d.total, 0)} since Nov 3</span>
+        </div>
+        {daily.length === 0 ? (
+          <p className="text-sm text-gray-500">Nothing submitted since Nov 3 yet.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {daily.map((d) => (
+              <li key={d.key} className="flex items-center justify-between py-2 text-sm">
+                <span className="font-medium text-gray-800">{new Date(`${d.key}T12:00:00`).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</span>
+                <span className="flex items-center gap-3">
+                  <span className="text-xs text-gray-500">{Object.entries(d.boards).map(([b, n]) => `${BOARD_NAME[b] || b} ${n}`).join(" · ")}</span>
+                  <span className="min-w-[2.5rem] text-right font-bold text-indigo-600">{d.total}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <div className="p-4 mb-6 bg-white rounded-xl ring-1 ring-gray-200 shadow-sm">
