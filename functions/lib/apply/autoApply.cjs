@@ -1,6 +1,6 @@
 // autoApply.cjs — the queue behind the extension's unattended auto-apply.
 //
-// Every Ashby and Greenhouse job on the person's Jobs page (the same
+// Every Ashby, Greenhouse and Lever job on the person's Jobs page (the same
 // "related" rule the page uses: job types, AI/rule verdicts, visa
 // eligibility), newest day first and the best match first within a day, minus every job already applied to (by job id,
 // form key and company+title). No score floor and no daily cap: the person
@@ -108,19 +108,19 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   const seen = new Set();
   const out = [];
   // For the log: Ashby/Greenhouse jobs on the Jobs page, how many are applied to, how many are left.
-  const stats = { ashby: { total: 0, applied: 0 }, greenhouse: { total: 0, applied: 0 } };
+  const stats = { ashby: { total: 0, applied: 0 }, greenhouse: { total: 0, applied: 0 }, lever: { total: 0, applied: 0 } };
   const lists = [...(allSnap.exists ? allSnap.data()?.jobs || [] : []), ...(recentSnap.exists ? recentSnap.data()?.jobs || [] : [])];
   for (const j of lists) {
     if (!j?.id || seen.has(j.id)) continue;
     seen.add(j.id);
     const src = String(j.source || "").toLowerCase();
-    // Ashby and Greenhouse only (the person's choice, 2026-11-02).
-    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src)) continue;
+    // Ashby, Greenhouse and Lever (Lever back on after its 50-form test, 2026-11-02).
+    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
-    const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : "greenhouse"];
+    const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse"];
     st.total++;
     if (applied.ids.has(j.id)) { st.applied++; continue; }
     const applyUrl = applyUrlFor(j, feedSlugs);
@@ -146,6 +146,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   const list = out.slice(0, limit);
   stats.ashby.left = out.filter((j) => j.source === "ashby").length;
   stats.greenhouse.left = out.filter((j) => j.source === "greenhouse").length;
+  stats.lever.left = out.filter((j) => j.source === "lever").length;
   Object.defineProperty(list, "stats", { value: stats, enumerable: false });
   return list;
 }

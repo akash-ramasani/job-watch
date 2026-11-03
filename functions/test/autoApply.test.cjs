@@ -40,9 +40,9 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
     { id: "j7", source: "greenhouse", companyKey: "f1", externalId: "555", title: "Senior Software Engineer", companyName: "Roblox", jobUrl: "https://job-boards.greenhouse.io/roblox/jobs/555", sourceUpdatedTs: "2026-11-01T00:00:00Z", fam: ["software"] },
     { id: "j5", source: "workday", title: "Engineer", companyName: "NVIDIA", fam: ["software"] },
     { id: "j6", source: "greenhouse", companyKey: "f1", externalId: "444", title: "ML Engineer", companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: "2026-10-28T00:00:00Z", fam: ["software"], el: ["citizenship"] },
-    // Same day as j2, a better match: ahead of it. Lever is left out.
+    // j8: a better match, ahead of the same day's j9 (Lever, with no score).
     { id: "j8", source: "ashbyhq", companyKey: "f2", externalId: "1b5ad123-7c5b-4d88-b498-5a0262beb331", title: "Platform Engineer", companyName: "Notion", jobUrl: "https://jobs.ashbyhq.com/notion/1b5ad123-7c5b-4d88-b498-5a0262beb331", sourceUpdatedTs: "2026-10-31T20:00:00Z", fam: ["software"] },
-    { id: "j9", source: "lever", companyKey: "f3", externalId: "abc", title: "Software Engineer", companyName: "Plaid", jobUrl: "https://jobs.lever.co/plaid/abc", sourceUpdatedTs: "2026-11-01T00:00:00Z", fam: ["software"] },
+    { id: "j9", source: "lever", companyKey: "f3", externalId: "3c5ad123-7c5b-4d88-b498-5a0262beb331", title: "Software Engineer", companyName: "Plaid", jobUrl: "https://jobs.lever.co/plaid/3c5ad123-7c5b-4d88-b498-5a0262beb331", sourceUpdatedTs: "2026-11-01T00:00:00Z", fam: ["software"] },
     // Greenhouse moved its date on an edit; JobWatch saw it on Oct 29: that day counts.
     { id: "j10", source: "greenhouse", companyKey: "f1", externalId: "666", title: "Backend Engineer", companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: "2026-11-01T18:00:00Z", firstSeenAt: "2026-10-29T18:00:00Z", fam: ["software"] },
   ];
@@ -62,8 +62,10 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
   });
   const db = { collection: (c) => ref(c) };
   const q = await buildQueue(db, "U", { adminUid: "A" });
-  // Newest day first, best score first within it; j3 unrelated, j4 applied, j5 and j9 not Ashby/GH, j6 not open to visa holders, j7 a hidden company.
-  assert.deepEqual(q.map((j) => j.jobId), ["j8", "j2", "j1", "j10"]);
-  assert.equal(q[2].applyUrl, "https://job-boards.greenhouse.io/embed/job_app?for=stitchfix&token=111");
-  assert.equal(q[1].source, "ashby");
+  // Newest day first (Pacific), best score first within it; j3 unrelated, j4 applied, j5 not Ashby/GH/Lever, j6 not open to visa holders, j7 a hidden company.
+  assert.deepEqual(q.map((j) => j.jobId), ["j8", "j9", "j2", "j1", "j10"]);
+  assert.equal(q[1].applyUrl, "https://jobs.lever.co/plaid/3c5ad123-7c5b-4d88-b498-5a0262beb331/apply");
+  assert.equal(q[3].applyUrl, "https://job-boards.greenhouse.io/embed/job_app?for=stitchfix&token=111");
+  assert.equal(q[2].source, "ashby");
+  assert.equal(q[1].source, "lever");
 });

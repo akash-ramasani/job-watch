@@ -13,7 +13,7 @@
 // consent[marketing]. Fills are keyed by that name (`path`).
 
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
-const { aiContext, answerFreeText, pool } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption, pool } = require("./ai-text.cjs");
 
 const DEFAULT_FETCH = (...a) => fetch(...a);
 
@@ -149,6 +149,38 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
   const verdict = verifyFourTimes(mapped, questions, profile);
   fills.push(...fillsFrom(questions, mapped, fieldKind));
 
+  // 5b. Required choice questions no rule maps ("Language skills (check all
+  //     that apply)", "Do you have consistent internet access?", "Which state
+  //     would you work from?"): the AI picks the true option from the profile
+  //     and resume, as on Ashby. Private facts stay for the person.
+  const aiPicked = new Set();
+  const parked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] })).filter(({ q }) => q);
+  if (openai) {
+    await pool(parked.filter(({ q }) => ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length), 4, async ({ r, q }) => {
+      try {
+        const opts = q.fields[0].values;
+        const kind = fieldKind(q.fields[0]);
+        const p = await pickOption({ ...q, fields: [{ ...q.fields[0], type: kind === "multiselect" ? "multi" : "single" }] }, ctx, profile, aiDeps);
+        if (!p.values.length) { aiNotes.set(r.label, p.reason); return; }
+        const value = p.values[0];
+        fills.push({ path: q.path, label: q.label, source: "ai", note: `AI pick: ${p.why || ""}`.trim(), kind, ...(kind === "multiselect" ? { values: p.values } : { value: kind === "boolean" ? (/^y/i.test(value) ? "Yes" : /^n/i.test(value) ? "No" : value) : (opts.find((o) => o.label === value)?.label ?? value) }) });
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+    // 5c. Required text / number boxes no rule knows ("What university did
+    //     you attend?"): the AI answers in the box's own format.
+    await pool(parked.filter(({ r, q }) => !aiPicked.has(r.label) && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])) && !/needs a link|password|no referral|follow-up/i.test(r.note || "")), 4, async ({ r, q }) => {
+      try {
+        const num = fieldKind(q.fields[0]) === "number";
+        const a = await answerFreeText({ ...q, ashbyType: num ? "Number" : q.ashbyType, description: [q.description, num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" ") }, ctx, aiDeps);
+        const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;
+        if (!value) { aiNotes.set(r.label, a.reason || "AI gave no answer"); return; }
+        fills.push({ path: q.path, label: q.label, source: "ai", note: "AI answer", kind: num ? "number" : "text", value });
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+  }
+
   // 6. Resume bytes.
   let resumeB64 = null;
   const resumeUrl = user.resumeUrl || resume.resumeUrl;
@@ -156,7 +188,10 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     try { resumeB64 = Buffer.from(await (await fetchFn(resumeUrl)).arrayBuffer()).toString("base64"); } catch (_) { /* content script reports it */ }
   }
 
-  const review = mapped.review.map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path || "" }));
+  // Still open: parked questions the AI did not answer and nothing else filled.
+  const filledPaths = new Set(fills.map((f) => f.path));
+  const review = mapped.review.filter((r) => !aiPicked.has(r.label) && !filledPaths.has(questions[mapped.answers.indexOf(r)]?.path))
+    .map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path || "" }));
   const required = domFields.filter((f) => f.required);
   return {
     jobTitle: job.title,
@@ -164,7 +199,8 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     locationName: job.locationName,
     workplaceType: job.workplaceType,
     schemaSource: "dom",
-    ready: verdict.ok && review.length === 0,
+    // A completeness failure the AI answers cleared is not a failure.
+    ready: review.length === 0 && (verdict.ok || verdict.failures.every((f) => /completeness/i.test(String(f)))),
     reasons: verdict.failures,
     review,
     fills,

@@ -101,31 +101,62 @@
   function captchaVisible() {
     return [...document.querySelectorAll("iframe[src*='hcaptcha'][src*='challenge'], iframe[src*='recaptcha'][src*='bframe'], iframe[title*='challenge' i]")].some(onScreen);
   }
-  async function autoSubmitLever(manual, pendingJob, answersLog) {
-    if (manual.size) return autoReport("needs_attention", `Needs you: ${[...manual.keys()].slice(0, 4).join("; ")}`);
-    const btn = document.querySelector("#btn-submit, #application-form button[type=submit], button.postings-btn[type=submit]");
-    if (!btn) return autoReport("needs_attention", "could not find Lever's Submit button");
-    banner("Auto-apply: submitting.");
-    btn.scrollIntoView({ block: "center" });
-    await sleep(400);
-    btn.click();
-    const t0 = Date.now();
-    while (Date.now() - t0 < 4 * 60 * 1000) {
-      await sleep(2000);
-      let done = false;
-      try { done = (await lever("submitted")) === true; } catch { done = !document.getElementById("application-form"); }
-      if (done) {
-        await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
-        return autoReport("submitted", "");
-      }
-      if (captchaVisible()) {
-        banner("Auto-apply: Lever is showing a CAPTCHA. Solve it and press Submit; the queue moves on.");
-        return autoReport("needs_attention", "CAPTCHA challenge");
-      }
-      const errs = await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
-      if (errs.length && Date.now() - t0 > 8000) return autoReport("needs_attention", `Lever flagged: ${errs.slice(0, 4).map((e) => e.label || e.text).join("; ")}`);
+  /** Press Submit even when a field is listed for the person: the form says
+   *  what it really wants. Fields it marks go to the AI with the form's own
+   *  words, then Submit again; three repair rounds. Never in a test run
+   *  (jwNoSubmit), never without the resume. */
+  async function autoSubmitLever(manual, pendingJob, answersLog, header = {}) {
+    if ((await chrome.storage.local.get("jwNoSubmit").catch(() => ({}))).jwNoSubmit) return autoReport("needs_attention", "test run: not submitted");
+    const scanNow = async () => (await lever("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []));
+    const resume = (await scanNow()).find((d) => d.type === "file" && /resume|cv/i.test(`${d.id} ${d.label}`));
+    if (resume && !resume.filled) {
+      banner("Auto-apply: the resume would not attach. Attach it and press Submit.", { items: [resume.label] });
+      return autoReport("needs_attention", "resume would not attach");
     }
-    return autoReport("needs_attention", "no confirmation after 4 minutes (CAPTCHA or a field the form rejected)");
+    for (let round = 0; round <= 3; round++) {
+      const btn = document.querySelector("#btn-submit, #application-form button[type=submit], button.postings-btn[type=submit]");
+      if (!btn) return autoReport("needs_attention", "could not find Lever's Submit button");
+      banner(round ? `Auto-apply: submitting again (try ${round + 1} of 4)…` : "Auto-apply: submitting…");
+      btn.scrollIntoView({ block: "center" });
+      await sleep(400);
+      await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
+      await lever("touched").catch(() => {});
+      btn.click();
+      let errs = [];
+      const t0 = Date.now();
+      while (Date.now() - t0 < 60 * 1000) {
+        await sleep(2000);
+        let done = false;
+        try { done = (await lever("submitted")) === true; } catch { done = !document.getElementById("application-form"); }
+        if (done) {
+          await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
+          banner("Auto-apply: submitted and recorded.");
+          return autoReport("submitted", "");
+        }
+        if (captchaVisible()) {
+          banner("Auto-apply: Lever is showing a CAPTCHA. Solve it and press Submit.");
+          return autoReport("needs_attention", "CAPTCHA challenge");
+        }
+        errs = await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+        if (errs.length && Date.now() - t0 > 6000) break;
+      }
+      if (!errs.length) return autoReport("needs_attention", "no confirmation from Lever after a minute");
+      if (round === 3 || !window.__jwRescue) break;
+      let fixed = 0;
+      for (const e of errs.slice(0, 8)) {
+        const label = e.label || e.path;
+        if (!label) continue;
+        banner(`Auto-apply: asking AI to fix: ${label}`);
+        const r = await window.__jwRescue(label, { jobTitle: header.jobTitle || "", companyName: header.companyName || "", error: e.text || "This field is required.", force: true }).catch(() => null);
+        log("repair:", label, e.text, r);
+        if (r?.ok) { fixed++; answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      }
+      if (!fixed) break;
+    }
+    const left = (await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).map((e) => e.label || e.text).filter(Boolean);
+    const list = left.length ? left : [...manual.keys()];
+    banner("Auto-apply: Lever did not accept it. These need you, then press Submit:", { items: list });
+    return autoReport("needs_attention", `Lever flagged: ${list.slice(0, 4).join("; ") || "the form"}`);
   }
 
   // ── Main ──────────────────────────────────────────────────────────────────
@@ -254,29 +285,15 @@
       banner(`JobWatch filled ${filled}. These still need you, then solve the captcha and submit (saved to your Applications page):`, { items: [...manual.keys()] });
       warn("Needs you:", needsAttention);
     } else {
-      banner(`JobWatch filled all ${filled} fields. Review, solve the captcha, then click Submit application yourself.`);
+      banner(`JobWatch filled all ${filled} fields. Submitting…`);
     }
     ledger("filled", {
       ...jobMeta(pendingJob), answersLog, needsAttention,
       filledCount: filled, totalFields: domFields.length, requiredTotal: domFields.filter((d) => d.required).length,
       flow: "engine", schemaSource: "lever-dom", reasons: pkg.reasons || [],
     }).then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
-    if (AUTO) return autoSubmitLever(manual, pendingJob, answersLog);
-    watchForSubmit(pendingJob, answersLog);
-  }
-
-  // Lever shows a confirmation page after the person submits. Poll for 30
-  // minutes; never click Submit.
-  function watchForSubmit(pendingJob, answersLog) {
-    const t0 = Date.now();
-    const watch = setInterval(async () => {
-      let done = false;
-      try { done = (await lever("submitted")) === true; } catch { done = !document.getElementById("application-form"); }
-      if (done) {
-        clearInterval(watch);
-        ledger("submitted", { ...jobMeta(pendingJob), answersLog }).then(() => banner("JobWatch: application recorded as submitted."));
-      } else if (Date.now() - t0 > 30 * 60 * 1000) clearInterval(watch);
-    }, 2000);
+    // Submit, auto-apply or not (the person's call, 2026-11-02).
+    return autoSubmitLever(manual, pendingJob, answersLog, header);
   }
 
   // The JobWatch card, bottom right (content/notify.js).
