@@ -153,13 +153,15 @@ $("btn-fill-page").addEventListener("click", () => {
 function renderAuto(st) {
   if (!st) return;
   const pill = $("auto-pill");
-  pill.textContent = st.on ? (st.current ? "Applying" : st.idle ? "Waiting" : "On") : "Off";
+  pill.textContent = st.on ? (st.aiDownSince && !st.current ? "Paused" : st.current ? "Applying" : st.idle ? "Waiting" : "On") : "Off";
   pill.className = `auto-pill${st.on ? " on" : ""}`;
   const running = st.running || (st.current ? [st.current] : []);
-  $("auto-line").textContent = running.length
+  $("auto-line").textContent = st.aiDownSince && !running.length
+    ? `Paused since ${new Date(st.aiDownSince).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: the AI is out of credits, so there are no tailored resumes or AI answers. Add credits at console.anthropic.com; JobWatch checks every 15 minutes and carries on by itself.`
+    : running.length
     ? `Now applying to ${running.length}: ${running.map((j) => j.companyName).join(", ")}`
     : st.on && st.idle ? `All caught up. Watching for new jobs: each one starts within a minute of appearing.${st.retrying ? ` ${st.retrying} failed job${st.retrying === 1 ? "" : "s"} will retry on ${st.retrying === 1 ? "its" : "their"} own.` : ""}`
-    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby and Greenhouse job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.";
+    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse and Lever job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;

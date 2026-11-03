@@ -131,3 +131,8 @@ test("a citizenship tag in a title is a requirement", () => {
   assert.deepEqual(flagsOf("Systems Administrator (U.S. Citizenship Required)"), ["citizen"]);
   assert.deepEqual(flagsOf("Software Engineer (US)"), []);
 });
+
+test("export rules naming the only citizenships allowed are a bar (Rocket Lab ITAR)", () => {
+  assert.deepEqual(flagsOf("Under these Regulations, you may be ineligible for this role if you do not hold citizenship of Australia, Japan, New Zealand, Switzerland, the European Union, or a country that is part of NATO, or if you hold ineligible dual citizenship or nationality."), ["citizen"]);
+  assert.deepEqual(flagsOf("We welcome applicants regardless of citizenship of any country."), []);
+});

@@ -676,23 +676,32 @@
       return !String(el.value || "").trim();
     };
     for (const lab of document.querySelectorAll("label")) {
-      const label = labelText(lab);
+      let label = labelText(lab);
       if (!label) continue;
       const forId = lab.getAttribute("for");
       const el = (forId && document.getElementById(forId)) || lab.closest("div")?.querySelector("input, textarea, select, [role=combobox]");
       if (!el) continue;
+      // One option of a checkbox or radio group ("Top Secret", "Not
+      // Applicable"): the problem is the group's question, listed once.
+      let groupKey = "";
+      if (el.type === "checkbox" || el.type === "radio") {
+        const group = el.closest("fieldset, [role=group], [role=radiogroup]");
+        const legend = group?.querySelector("legend, [class*='legend'], [id$='-label']");
+        const q = legend && !legend.contains(el) ? labelText(legend) : "";
+        if (q) { groupKey = `group:${q}`; label = q; if (!/\*/.test(legend.textContent || "") && !group.querySelector("[aria-required='true'], [required]")) groupKey += ":optional"; }
+      }
       // A greyed-out box (End date when "Current role" is ticked) can't be filled and isn't asked for.
       if (el.disabled || el.closest("[aria-disabled='true'], [class*='is-disabled'], [class*='--disabled']")) continue;
       const wrap = lab.closest("div.field, div[class*='field'], fieldset, div") || lab.parentElement;
       // Mandatory = a "*" in the question or right after its <label>, or required markers.
       const next = lab.nextElementSibling;
-      const required = /\*/.test(lab.textContent || "") || el.required || el.getAttribute("aria-required") === "true"
+      const required = (groupKey ? !groupKey.endsWith(":optional") : /\*/.test(lab.textContent || "")) || el.required || el.getAttribute("aria-required") === "true"
         || (!!next && !next.matches("input, select, textarea, div") && /^\s*\*\s*$/.test(next.textContent || ""));
-      const errEl = [...(wrap?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
+      const errEl = [...((groupKey ? el.closest("fieldset, [role=group], [role=radiogroup]")?.parentElement : wrap)?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
       const error = errEl ? errEl.textContent.replace(/\s+/g, " ").trim().slice(0, 160) : (el.getAttribute("aria-invalid") === "true" ? "this field is not valid" : "");
       if ((required && isEmpty(el)) || error) {
         // Keyed by the box, not the label: two questions can share one wording.
-        const key = el.id || label;
+        const key = groupKey || el.id || label;
         if (seen.has(key)) continue;
         seen.add(key);
         out.push({ label, id: el.id || "", error, empty: isEmpty(el) });

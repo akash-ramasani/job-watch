@@ -634,7 +634,7 @@ async function tailoredResumeFor(ref) {
   const key = `tr:${ref.jobId || `${ref.source}|${ref.externalId}`}`;
   const { [key]: hit } = await chrome.storage.session.get(key);
   if (hit?.pdfBase64) return hit;
-  if (hit?.failedAt && Date.now() - hit.failedAt < 10 * 60 * 1000) return null;
+  if (hit?.failedAt && Date.now() - hit.failedAt < 10 * 60 * 1000) return { error: hit.error || "failed" };
   try {
     const r = await callFunction("tailoredResumeFile", ref);
     await chrome.storage.session.set({ [key]: { fileName: r.fileName, pdfBase64: r.pdfBase64, jobId: r.jobId } });
@@ -642,9 +642,13 @@ async function tailoredResumeFor(ref) {
   } catch (err) {
     console.warn("[JobWatch] tailored resume unavailable, using the saved resume:", err.message);
     await chrome.storage.session.set({ [key]: { failedAt: Date.now(), error: err.message } });
-    return null;
+    return { error: err.message };
   }
 }
+// The AI account is out of credits: nothing tailored, no AI answers. Auto-apply
+// waits instead of sending generic applications (2026-11-03: ran out at 9:30 AM).
+const AI_DOWN = /out of credits|credit balance|billing|resource-exhausted/i;
+const AI_DOWN_WAIT_MS = 15 * 60 * 1000;
 /** The auto-apply job this tab is working on, or null. */
 async function autoJobForTab(tabId) {
   const st = await autoState();
@@ -794,7 +798,27 @@ async function autoTick() {
       });
       if (!job) break;
       try {
-        await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
+        const tailored = await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
+        if (tailored?.error && AI_DOWN.test(tailored.error)) {
+          // Put the job back untouched (not a try) and look again in 15 minutes.
+          await chrome.storage.session.remove(`tr:${job.jobId}`);
+          const first = await withAutoLock(async () => {
+            const st = await autoState();
+            st.running = st.running.filter((x) => x.jobId !== job.jobId);
+            const was = st.aiDownSince;
+            st.aiDownSince = was || Date.now();
+            st.nextAt = Date.now() + AI_DOWN_WAIT_MS;
+            await saveAuto(st);
+            chrome.alarms.create("jwAutoKick", { when: st.nextAt });
+            return !was;
+          });
+          if (first) notify("Auto-apply paused: the AI is out of credits", "No tailored resumes or AI answers until credits are added (console.anthropic.com → Billing). JobWatch checks again every 15 minutes and carries on by itself.");
+          break;
+        }
+        if (tailored?.pdfBase64) await withAutoLock(async () => {
+          const st = await autoState();
+          if (st.aiDownSince) { delete st.aiDownSince; await saveAuto(st); notify("Auto-apply is back on", "The AI is answering again; applications carry on."); }
+        });
         const tab = await openJobTab(job.applyUrl);
         await withAutoLock(async () => {
           const st = await autoState();
@@ -888,7 +912,7 @@ async function autoStatus() {
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
   const stopped = results.filter((r) => ["needs_attention", "error"].includes(r.status) && r.at >= Date.now() - 864e5);
-  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────

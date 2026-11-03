@@ -1107,12 +1107,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
 
   // Security clearance status/level, from profile.clearanceStatus/clearanceLevel.
   if (key === "securityClearance") {
-    const status = norm(profile.clearanceStatus || "");
-    if (!status) return unanswered("clearance status not in profile");
+    // Not set on the Profile page = its default, "None".
+    const status = norm(profile.clearanceStatus || "None");
     if (status === "none") {
       if (isSelect) {
         const m = matchOption(primary, "No")
-          || findOnly(primary, [/^none\b/, /n\/?a/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/, /do not (have|hold|currently)|don't (have|hold)|not active|no (active )?clearance|not cleared|none held|i do not/]);
+          || findOnly(primary, [/^none\b/, /n\/?a/, /not applicable/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/, /do not (have|hold|currently)|don't (have|hold)|not active|no (active )?clearance|not cleared|none held|i do not/]);
         return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "no security clearance")
           : unanswered("no matching no-clearance option");
       }

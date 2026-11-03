@@ -87,6 +87,11 @@ const SOFT_BY_KIND = {
 // A citizenship line that also accepts visa holders doesn't rule them out.
 // Export-control rules that allow "or be eligible to obtain the required authorizations" (an export license) aren't a bar either.
 const VISA_ALTERNATIVE = /\b(or|and)\b[^.;]{0,80}\b(visa|f-?1|opt|cpt|h-?1b|work authori[sz]ation|authorized to work|eligible to work|employment authori[sz]ation|valid work)\b|\bor be eligible to obtain the required (?:export )?authori[sz]ations?\b|\bexport licen[sc]e\b/i;
+// Export rules that name the only citizenships allowed ("you may be
+// ineligible for this role if you do not hold citizenship of Australia,
+// Japan, ... or a country that is part of NATO", Rocket Lab ITAR): a bar for
+// a visa holder even though the line says "may".
+const NATIONALITY_ONLY = /\b(?:ineligible|not eligible)\b[^.;]{0,60}\bif you do not hold citizenship of\b|\bmust hold citizenship of\b[^.;]{0,120}\b(?:nato|european union|five eyes)\b/i;
 // Questions (from application forms pasted into descriptions) aren't statements.
 const QUESTION = /\?\s*$/;
 
@@ -107,7 +112,9 @@ function sentencesOf(description) {
 function eligibilityOf(description) {
   const evidence = {};
   for (const sentence of sentencesOf(description)) {
-    if (QUESTION.test(sentence) || SOFT.test(sentence) || HEDGES.test(sentence)) continue;
+    if (QUESTION.test(sentence)) continue;
+    if (!evidence.citizen && NATIONALITY_ONLY.test(sentence)) { evidence.citizen = sentence.slice(0, 300); continue; }
+    if (SOFT.test(sentence) || HEDGES.test(sentence)) continue;
     for (const [flag, patterns] of Object.entries(PHRASES)) {
       if (evidence[flag] || SOFT_BY_KIND[flag].test(sentence) || !patterns.some((p) => p.test(sentence))) continue;
       if (flag === "citizen" && VISA_ALTERNATIVE.test(sentence)) continue;

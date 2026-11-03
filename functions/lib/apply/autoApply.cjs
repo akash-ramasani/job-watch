@@ -120,6 +120,10 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
+    // Not scored yet (the AI is behind or down): only titles wholly in the
+    // person's job types. "GTM Systems Engineer" is software and sales;
+    // "Test & Launch Operations Engineer" is operations (2026-11-03).
+    if (!scores[j.id] && Array.isArray(jobTypes) && jobTypes.length && fam.length && !fam.every((f) => jobTypes.includes(f))) continue;
     const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse"];
     st.total++;
     if (applied.ids.has(j.id)) { st.applied++; continue; }
