@@ -575,9 +575,12 @@ async function autoDue(j, st) {
   if ((r.tries || 1) >= AUTO_MAX_TRIES || r.closed) return false;
   if (r.status === "error") return Date.now() >= (r.retryAt || 0);
   if (r.status === "needs_attention") {
-    // Waiting on the person: retried after they add an answer, once its tab is gone.
-    if (!(autoQueue.answersUpdatedAt > r.at)) return false;
-    if (r.tabId && await chrome.tabs.get(r.tabId).then(() => true).catch(() => false)) return false;
+    // Tried again on its own (30 min, then 2 h; three tries in all), or at
+    // once when the person saved a new answer. Its old tab is closed: the job
+    // reopens fresh as an auto-apply job.
+    const due = autoQueue.answersUpdatedAt > r.at || Date.now() >= r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]);
+    if (!due) return false;
+    if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
     return true;
   }
   return false;
@@ -704,7 +707,8 @@ async function autoTick() {
     const job = await autoNextJob(st);
     if (!job) {
       // Nothing due: wait for new jobs (or a retry's time) instead of stopping.
-      const retryAts = Object.values(st.results).filter((r) => r.status === "error" && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).map((r) => r.retryAt || 0);
+      const retryAts = Object.values(st.results).filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES)
+        .map((r) => (r.status === "error" ? r.retryAt || 0 : r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1])));
       st.nextAt = Math.min(Date.now() + AUTO_IDLE_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
       if (!st.idle) {
         const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
@@ -745,14 +749,14 @@ chrome.runtime.onStartup.addListener(() => { autoTick(); });
 // Reloaded with new code (selfUpdate, or the Reload button): carry on too.
 chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") requeueRefused().then(autoTick); });
 
-/** After an update: jobs Ashby or Greenhouse refused at Submit go back in the
- *  queue (1.11.20 fixed the Ashby Submit button that caused most of them),
- *  with their stale tabs closed so each reopens as an auto-apply job. */
+/** After an update: every job that stopped (needs you, or an error) goes back
+ *  in the queue so the new code gets its chance, with its stale tab closed
+ *  so it reopens as an auto-apply job. A closed posting stays out. */
 async function requeueRefused() {
   const st = await autoState();
   let n = 0;
   for (const [id, r] of Object.entries(st.results || {})) {
-    if (!["needs_attention", "error"].includes(r.status) || !/did not accept|no confirmation|still empty: resume|missing entry|resume would not attach/i.test(r.note || "")) continue;
+    if (!["needs_attention", "error"].includes(r.status) || r.closed) continue;
     if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
     delete st.results[id];
     n++;
@@ -792,7 +796,7 @@ async function autoStatus() {
   const results = Object.entries(st.results || {}).map(([jobId, r]) => ({ jobId, ...r })).sort((a, b) => b.at - a.at);
   const count = (s) => results.filter((r) => r.status === s).length;
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
-  const retrying = results.filter((r) => r.status === "error" && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
+  const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
   return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.current, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
