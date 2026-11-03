@@ -743,7 +743,22 @@ chrome.alarms.onAlarm.addListener((a) => {
 // The browser opened: carry on where it left off (a job whose tab is gone is retried later).
 chrome.runtime.onStartup.addListener(() => { autoTick(); });
 // Reloaded with new code (selfUpdate, or the Reload button): carry on too.
-chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") autoTick(); });
+chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") requeueRefused().then(autoTick); });
+
+/** After an update: jobs Ashby or Greenhouse refused at Submit go back in the
+ *  queue (1.11.20 fixed the Ashby Submit button that caused most of them),
+ *  with their stale tabs closed so each reopens as an auto-apply job. */
+async function requeueRefused() {
+  const st = await autoState();
+  let n = 0;
+  for (const [id, r] of Object.entries(st.results || {})) {
+    if (!["needs_attention", "error"].includes(r.status) || !/did not accept|no confirmation|still empty: resume|missing entry|resume would not attach/i.test(r.note || "")) continue;
+    if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
+    delete st.results[id];
+    n++;
+  }
+  if (n) { st.idle = false; st.nextAt = 0; autoQueue = { at: 0, list: [], answersUpdatedAt: 0 }; await saveAuto(st); console.log(`[JobWatch] re-queued ${n} refused job(s) after the update`); }
+}
 
 /** The extension is loaded unpacked, and Edge keeps running the old code when
  *  the files on disk change (until Reload on edge://extensions). Once a
@@ -949,7 +964,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Jobs that needed the person or failed go back in the queue (after a fix).
         const st = await autoState();
         let n = 0;
-        for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") { delete st.results[id]; n++; }
+        for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") {
+          // Its old tab would sit in manual mode; the job reopens fresh instead.
+          if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
+          delete st.results[id]; n++;
+        }
         st.idle = false; st.nextAt = 0;
         await saveAuto(st);
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
