@@ -1,8 +1,8 @@
 // autoApply.cjs — the queue behind the extension's unattended auto-apply.
 //
-// Every Ashby, Greenhouse and Lever job on the person's Jobs page (the same
+// Every Ashby and Greenhouse job on the person's Jobs page (the same
 // "related" rule the page uses: job types, AI/rule verdicts, visa
-// eligibility), newest first, minus every job already applied to (by job id,
+// eligibility), newest day first and the best match first within a day, minus every job already applied to (by job id,
 // form key and company+title). No score floor and no daily cap: the person
 // asked for all of them. Each entry carries the URL the runner opens: the
 // Ashby or Lever application page, or Greenhouse's own embedded form (a company's
@@ -112,7 +112,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (!j?.id || seen.has(j.id)) continue;
     seen.add(j.id);
     const src = String(j.source || "").toLowerCase();
-    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
+    // Ashby and Greenhouse only (the person's choice, 2026-11-02).
+    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src)) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
@@ -124,15 +125,20 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (key && applied.forms.has(key.formKey)) continue;
     const rk = ledger.roleKeyOf(j.companyName, j.title);
     if (rk && applied.roles.has(rk)) continue;
-    const ts = j.sourceUpdatedTs;
-    const postedAt = ts?.toMillis ? ts.toMillis() : ts?._seconds ? ts._seconds * 1000 : (Date.parse(ts) || 0);
+    // When the job came out: the board's date, or when JobWatch first saw it
+    // if that is earlier (Greenhouse's date moves on every edit).
+    const ms = (ts) => (ts?.toMillis ? ts.toMillis() : ts?._seconds ? ts._seconds * 1000 : (Date.parse(ts) || 0));
+    const postedAt = Math.min(...[ms(j.sourceUpdatedTs), ms(j.firstSeenAt)].filter((t) => t > 0)) || 0;
+    const score = typeof scores[j.id]?.score === "number" ? scores[j.id].score : -1;
     out.push({
       jobId: j.id, source: ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse", applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
-      locationName: j.locationName || "", postedAt,
+      locationName: j.locationName || "", postedAt, score,
     });
   }
-  out.sort((a, b) => b.postedAt - a.postedAt);
+  // Newest day first; within a day, the best match first; then the newest.
+  const day = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
+  out.sort((a, b) => day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
   return out.slice(0, limit);
 }
 

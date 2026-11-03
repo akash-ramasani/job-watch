@@ -187,7 +187,7 @@ function renderAuto(st) {
   $("auto-line").textContent = st.current
     ? `Now: ${st.current.companyName} · ${st.current.title}`
     : st.on && st.idle ? `All caught up. Next check for new jobs at ${new Date(st.nextAt || Date.now()).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.${st.retrying ? ` ${st.retrying} failed job${st.retrying === 1 ? "" : "s"} will retry on ${st.retrying === 1 ? "its" : "their"} own.` : ""}`
-    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse and Lever job on your Jobs page with a resume tailored to each role. Once on, it stays on: it keeps the computer awake and checks for new jobs every 15 minutes.";
+    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby and Greenhouse job on your Jobs page, newest first and best match first, with a resume tailored to each role. Once on, it stays on: it keeps the computer awake and checks for new jobs every 15 minutes.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
   $("btn-auto-clear").style.display = (st.submitted || st.needs || st.errors || st.skipped || (st.recent || []).length) ? "block" : "none";
