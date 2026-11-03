@@ -1841,7 +1841,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // an English city (2026-11-02).
           const want = nrm(matchPrefix || city);
           const cityN = nrm(city);
-          const state = want.includes(",") ? want.split(",").slice(1).join(",").trim() : "";
+          const state = want.includes(",") ? want.split(",").slice(1).join(",").trim().replace(/,?\s*(usa|us|united states)$/, "").trim() : "";
+          // "NY" and "New York" are the same state: the list spells it out
+          // ("New York, New York, United States"), the job may not (MongoDB).
+          const US = { al: "alabama", ak: "alaska", az: "arizona", ar: "arkansas", ca: "california", co: "colorado", ct: "connecticut", de: "delaware", fl: "florida", ga: "georgia", hi: "hawaii", id: "idaho", il: "illinois", in: "indiana", ia: "iowa", ks: "kansas", ky: "kentucky", la: "louisiana", me: "maine", md: "maryland", ma: "massachusetts", mi: "michigan", mn: "minnesota", ms: "mississippi", mo: "missouri", mt: "montana", ne: "nebraska", nv: "nevada", nh: "new hampshire", nj: "new jersey", nm: "new mexico", ny: "new york", nc: "north carolina", nd: "north dakota", oh: "ohio", ok: "oklahoma", or: "oregon", pa: "pennsylvania", ri: "rhode island", sc: "south carolina", sd: "south dakota", tn: "tennessee", tx: "texas", ut: "utah", vt: "vermont", va: "virginia", wa: "washington", wv: "west virginia", wi: "wisconsin", wy: "wyoming", dc: "district of columbia" };
+          const abbr = Object.fromEntries(Object.entries(US).map(([k, v]) => [v, k]));
+          const states = state ? [...new Set([state, US[state], abbr[state]].filter(Boolean))] : [];
+          const inState = (text) => states.some((st) => new RegExp(`(^|,\\s*)${st.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s*,|$)`).test(text));
           const type = (text) => {
             el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
             el.focus();
@@ -1863,9 +1869,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const choose = (opts) => {
             const t = (o) => nrm(o.textContent);
             if (state) {
-              // The right city in the right state, nothing else.
+              // The right city in the right state, nothing else: the city
+              // first ("New York, ..." not "West New York, ..."), then the state.
               return opts.find((o) => t(o).startsWith(want))
-                || opts.find((o) => t(o).startsWith(cityN) && t(o).includes(state))
+                || opts.find((o) => t(o).startsWith(cityN + ",") && inState(t(o).slice(cityN.length + 1)))
+                || opts.find((o) => t(o).startsWith(cityN) && inState(t(o)))
                 || null;
             }
             return opts.find((o) => t(o).startsWith(want)) || opts.find((o) => t(o).includes(want)) || null;

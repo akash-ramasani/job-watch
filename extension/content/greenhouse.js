@@ -327,6 +327,11 @@
             log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value);
             answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
           }
+          else if (res.error === "cover letter section not found") {
+            // This form has no cover letter box: nothing to fill.
+            f.absent = true;
+            log("no cover letter box on this form");
+          }
           else if (res.error === "no field for label" && pass === MAX_PASSES) {
             // The form has no such field (e.g. no "Discipline" in its education
             // section): nothing to fill, nothing for the person to do.
@@ -334,7 +339,8 @@
             stillFailing.push(f);
           } else {
             stillFailing.push(f);
-            warn(`fill failed (pass ${pass}):`, f.label, "—", res.error || "unknown", res.seen ? "| options seen: " + JSON.stringify(res.seen) : "");
+            // Earlier passes are retries (a list still loading): only the last one is an error.
+            (pass === MAX_PASSES ? warn : log)(`fill failed (pass ${pass}):`, f.label, "—", res.error || "unknown", res.seen ? "| options seen: " + JSON.stringify(res.seen) : "");
           }
         } catch (e) { stillFailing.push(f); warn(`fill error (pass ${pass}):`, f.label, e.message); }
         await sleep(120);
@@ -343,7 +349,7 @@
     }
     hl.hide();
 
-    if (pending.length) warn("STILL UNFILLED after all passes:", pending.map((f) => f.label));
+    if (pending.some((f) => !f.absent)) warn("STILL UNFILLED after all passes:", pending.filter((f) => !f.absent).map((f) => f.label));
 
     // The phone's Country picker: the number goes in without +1, so the country is set here.
     try {
