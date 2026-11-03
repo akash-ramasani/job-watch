@@ -217,6 +217,9 @@ test("required fields from the 2026-10-12 Virta form and the live-form sweep are
   assert.equal(answer(F("Do you have experience working in an early-stage startup?", "ValueSelect", { options: ["Yes", "No"] }), { profile: { ...p, startupCompanies: "Runn" } }), "Yes");
   // "Comfortable moving forward with the salary range posted?" (Pallet): Yes.
   assert.equal(answer(F("Are you comfortable moving forward with the salary range posted?", "ValueSelect", { options: ["Yes", "No"] })), "Yes");
+  // "Why Scale AI?" whose hint says "we'd love to hear about why..." is not "How did you hear about us?".
+  assert.match(answer({ ...F("Why Scale AI?", "LongText"), description: "We would love to hear about why you are interested in Scale AI!" }), /^PARKED|^$|free-text/i);
+  assert.equal(answer(F("How did you hear about this role?", "String")), p.heardAboutUs || "LinkedIn");
   // A major is the subject, not a sentence.
   assert.equal(answer(F("What was your major/minor?", "String"), { profile: { ...p, education: [{ degree: "Master of Science, Computer Science", institution: "CSU East Bay" }] } }), "Computer Science");
 });

@@ -378,7 +378,9 @@ function classify(label, kind = "") {
   // (this once routed "How did you hear about this opportunity?" to Apt 20).
   if (has("address", "line 2") || /\bapartment\b|\bapt\.?\b|\bunit\b|\bsuite\b/.test(l)) return "addressLine2";
   if (any("address line 1", "street address") || (l.includes("address") && !l.includes("email") && !l.includes("ip"))) return "addressLine1";
-  if (any("how did you hear", "how you hear", "hear about", "referral source")) return "heardAboutUs";
+  // "Hear about" only as the source of the application: "We would love to
+  // hear about why you are interested" (Scale AI) is a motivation question.
+  if (any("how did you hear", "how you hear", "referral source") || (/\bhear about (us|this|the|our|scale|[a-z]+ (role|job|position|opening|opportunity))\b/.test(l) && !/\bwhy\b/.test(l))) return "heardAboutUs";
   if (/(how many )?years of .{0,90}experience/.test(l)) return "yearsExperience";
   if (l.includes("linkedin")) return "linkedin";
   if (l.includes("github")) return "github";
@@ -588,7 +590,11 @@ export function classifyQuestion(q) {
   const primary = fields[0] || {};
   const kind = fieldKind(primary);
   let key = classify(q.label || primary.name || "", kind);
-  if (!key) {
+  // "Why Scale AI?", "Why do you want to join us?": a motivation question,
+  // written by the AI; its hint text ("we'd love to hear about why...") is
+  // never read for a profile field.
+  const motive = /^(why\b|what (draws|attracts|excites|interests|motivates) you|what makes you (want|interested))/.test(norm(q.label || ""));
+  if (!key && !motive) {
     const desc = stripHtml(q.description || "");
     if (desc) key = classify(desc, kind);
   }
