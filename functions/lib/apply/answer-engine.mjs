@@ -218,7 +218,7 @@ function classify(label, kind = "") {
   if (choice && /(working|employed|engaged|contracting) (with|for|by|at) any of the following|any of the following (companies|organizations|competitors)/.test(l)) return "conflictNone";
   if (choice && /full.?time or part.?time|part.?time or full.?time|interested in (a )?(full|part).?time/.test(l)) return "employmentType";
   if (choice && /perform (this|the) work (from|in|within) the (united states|us|u\.s\.)|work from (within )?the (united states|us|u\.s\.)|physically (located|present) in the (united states|us|u\.s\.)/.test(l)) return "worksFromUS";
-  if (choice && /salary range aligned|(comfortable|ok|okay|fine|aligned) with the (posted |listed |stated )?(salary|compensation|pay)( range)?|within (the|this) (posted |listed )?(salary|compensation|pay) range|range (meets?|aligns? with) your/.test(l)) return "salaryRangeOk";
+  if (choice && /salary range aligned|(comfortable|ok|okay|fine|aligned)\b.{0,25}\bwith the (posted |listed |stated )?(salary|compensation|pay)( range| band)?|within (the|this) (posted |listed )?(salary|compensation|pay) range|range (meets?|aligns? with) your/.test(l)) return "salaryRangeOk";
   if (choice && /month (you|that you) (will|would|can|could) (be able to )?start|which month .{0,20}start|start month/.test(l)) return "startMonth";
   if (/how did you (learn|find out|find) about|where did you (hear|learn|find out) about/.test(l)) return "heardAboutUs";
   if (/country (you are|are you|you're|you) (planning|plan|intend|expect)(ing)? to work (from|in)|country (will|would) you (be )?work(ing)? from|which country .{0,20}work from/.test(l)) return "country";
