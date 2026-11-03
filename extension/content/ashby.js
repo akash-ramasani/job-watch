@@ -1733,6 +1733,8 @@
           if (label && !targets.has(label)) targets.set(label, e.text);
         }
         for (const d of after2.filter((x) => x.required && !x.filled && !x.survey)) if (!targets.has(d.label)) targets.set(d.label, "");
+        // A file box is not the AI's to fill (the resume goes in from its bytes above).
+        for (const d of after2.filter((x) => x.type === "file" || x.id === "_systemfield_resume")) targets.delete(d.label);
         for (const [label, error] of [...targets].slice(0, 10)) {
           showOverlay(`🤖 JobWatch is asking AI to fix: ${label}`);
           const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "", error, force: !!error }).catch(() => null);

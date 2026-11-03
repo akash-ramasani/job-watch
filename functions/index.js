@@ -613,13 +613,13 @@ const NON_US_LOCATION_RE = /\b(afghanistan|albania|algeria|angola|argentina|arme
 
 /**
  * =====================================================================================
- * 1) SCHEDULED: Every 15 minutes sync
+ * 1) SCHEDULED: Every 5 minutes sync (a run still going makes the next one skip)
  * =====================================================================================
  */
 exports.syncRecentJobsHourly = onSchedule(
   {
     region: REGION,
-    schedule: "every 15 minutes",
+    schedule: "every 5 minutes",
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
     memory: "1GiB",
@@ -627,6 +627,23 @@ exports.syncRecentJobsHourly = onSchedule(
     secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
   async () => {
+    // One sync at a time: a run takes ~3 minutes, and a slow one must not
+    // overlap the next (two runs would score and write the same jobs twice).
+    const lockRef = db.collection("system").doc("syncLock");
+    const gotLock = await db.runTransaction(async (tx) => {
+      const lk = await tx.get(lockRef);
+      const until = lk.exists ? lk.data()?.lockedUntil?.toMillis?.() || 0 : 0;
+      if (until > Date.now()) return false;
+      tx.set(lockRef, { lockedUntil: admin.firestore.Timestamp.fromMillis(Date.now() + 9.5 * 60 * 1000), startedAt: admin.firestore.Timestamp.now() });
+      return true;
+    });
+    if (!gotLock) { logger.info("syncRecentJobsHourly: the previous run is still going; skipping this one"); return; }
+    try { await syncAllUsersNow(); } finally { await lockRef.set({ lockedUntil: admin.firestore.Timestamp.fromMillis(0) }, { merge: true }).catch(() => {}); }
+  }
+);
+
+async function syncAllUsersNow() {
+  {
     const now = admin.firestore.Timestamp.now();
     const recentCutoff = admin.firestore.Timestamp.fromDate(
       new Date(Date.now() - RECENT_WINDOW_MINUTES * 60 * 1000)
@@ -709,7 +726,7 @@ exports.syncRecentJobsHourly = onSchedule(
       }
     }
   }
-);
+}
 
 /**
  * =====================================================================================

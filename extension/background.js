@@ -494,7 +494,7 @@ async function ghConfirmationPage(tabId, url) {
     ...(job ? { jobId: job.jobId, jobTitle: job.title, companyName: job.companyName } : {}),
   }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
   // The runner's own job: finish it as submitted (autoThanksPage may have already).
-  if (job) { await autoFinish({ status: "submitted", note: "" }); return; }
+  if (job) { await autoFinish({ status: "submitted", note: "" }, tabId); return; }
   // A job the runner left for the person: the popup counts it as submitted now.
   const st = await autoState();
   const sameForm = (u) => { try { const q = new URL(u).searchParams; return q.get("for") === board && q.get("token") === token; } catch (_) { return false; } };
@@ -524,7 +524,7 @@ async function autoThanksPage(tabId, url) {
   const seen = frames.map((f) => f?.result).filter(Boolean);
   if (!seen.some((r) => r.thanks) || seen.some((r) => r.form)) return;
   await callFunction("recordApplication", { event: "submitted", applyUrl: job.applyUrl, jobId: job.jobId, jobTitle: job.title, companyName: job.companyName }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
-  await autoFinish({ status: "submitted", note: "" });
+  await autoFinish({ status: "submitted", note: "" }, tabId);
 }
 
 /** Lever leaves the form for a separate /thanks page after Submit: that is the submission. */
@@ -533,7 +533,7 @@ async function autoLeverThanks(tabId, url) {
   const job = await autoJobForTab(tabId);
   if (!job) return;
   await callFunction("recordApplication", { event: "submitted", applyUrl: job.applyUrl, jobId: job.jobId, jobTitle: job.title, companyName: job.companyName }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
-  await autoFinish({ status: "submitted", note: "" });
+  await autoFinish({ status: "submitted", note: "" }, tabId);
 }
 
 // ─── Unattended auto-apply (Ashby, Greenhouse, Lever) ──────────────────────────────
@@ -560,6 +560,7 @@ const AUTO_POLL_MS = 60 * 1000; // nothing to do: check whether the job list cha
 const AUTO_RETRY_MS = [30 * 60 * 1000, 2 * 60 * 60 * 1000]; // after the 1st and 2nd failure
 const AUTO_MAX_TRIES = 3;
 const AUTO_MAX_OPEN = 3; // "needs you" tabs left open at once
+const AUTO_PARALLEL = 3; // jobs applied to at the same time, each in its own tab
 const CLOSED_POSTING = /not found|no longer (accepting|available|open)|position (has been )?(filled|closed)|job (is )?closed|posting (was )?(removed|expired|closed)|\b404\b/i;
 let autoBusy = false;
 let autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
@@ -590,10 +591,21 @@ async function autoDue(j, st) {
 async function autoState() {
   const { [AUTO_KEY]: st } = await chrome.storage.local.get(AUTO_KEY);
   // Always on: while the browser is open (and the person signed in), it applies.
-  const out = st || { current: null, results: {}, startedAt: Date.now() };
+  const out = st || { running: [], results: {}, startedAt: Date.now() };
   out.on = true;
   out.results = out.results || {};
+  // Up to AUTO_PARALLEL jobs at once, each in its own tab (older state kept one in `current`).
+  out.running = Array.isArray(out.running) ? out.running : out.current ? [out.current] : [];
+  delete out.current;
   return out;
+}
+// One change to the runner's state at a time: jobs in parallel tabs finish
+// whenever they finish, and two read-modify-writes must not cross.
+let autoLock = Promise.resolve();
+function withAutoLock(fn) {
+  const run = autoLock.then(fn, fn);
+  autoLock = run.catch(() => {});
+  return run;
 }
 async function saveAuto(st) { await chrome.storage.local.set({ [AUTO_KEY]: st }); }
 
@@ -632,7 +644,7 @@ async function tailoredResumeFor(ref) {
 /** The auto-apply job this tab is working on, or null. */
 async function autoJobForTab(tabId) {
   const st = await autoState();
-  return st.on && st.current && st.current.tabId === tabId ? st.current : null;
+  return (st.on && st.running.find((j) => j.tabId != null && j.tabId === tabId)) || null;
 }
 /** Start making the job's tailored resume (runs alongside the answers). */
 async function startTailored(sender, ref) {
@@ -662,7 +674,7 @@ async function jobsStamp() {
   } catch (_) { return ""; }
 }
 
-async function autoNextJob(st) {
+async function autoNextJob(st, busy = new Set()) {
   const stamp = await jobsStamp();
   const changed = stamp && stamp !== jobsStampSeen;
   if (Date.now() - autoQueue.at > AUTO_IDLE_MS || !autoQueue.at || changed) {
@@ -670,13 +682,16 @@ async function autoNextJob(st) {
     autoQueue = { at: Date.now(), list: r.queue || [], answersUpdatedAt: Number(r.answersUpdatedAt) || 0 };
     if (stamp) jobsStampSeen = stamp;
   }
-  for (const j of autoQueue.list) if (await autoDue(j, st)) return j;
+  for (const j of autoQueue.list) if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
   return null;
 }
 
-async function autoFinish(result) {
+async function autoFinish(result, tabId, jobId = null) {
+  return withAutoLock(() => autoFinishNow(result, tabId, jobId));
+}
+async function autoFinishNow(result, tabId, jobId) {
   const st = await autoState();
-  const cur = st.current;
+  const cur = st.running.find((j) => (jobId ? j.jobId === jobId : j.tabId === tabId));
   if (!cur) return;
   const prev = st.results[cur.jobId];
   const tries = (prev?.tries || 0) + 1;
@@ -686,7 +701,7 @@ async function autoFinish(result) {
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
     ...(result.status === "needs_attention" ? { tabId: cur.tabId || null } : {}),
   };
-  st.current = null;
+  st.running = st.running.filter((j) => j !== cur);
   st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
   await saveAuto(st);
   // Submitted, skipped or failed: close the tab. Needs you: leave it open to
@@ -717,46 +732,69 @@ async function autoTick() {
   if (autoBusy) return;
   autoBusy = true;
   try {
-    const st = await autoState();
-    keepAwake(!!st.on);
-    if (!st.on) return;
-    if (st.current) {
-      const alive = st.current.tabId ? await chrome.tabs.get(st.current.tabId).then(() => true).catch(() => false) : true;
-      if (st.current.tabId && !alive) { autoBusy = false; return autoFinish({ status: "error", note: "the tab was closed" }); }
-      if (Date.now() - st.current.startedAt > AUTO_JOB_TIMEOUT_MS) { autoBusy = false; return autoFinish({ status: "error", note: "timed out after 15 minutes" }); }
-      return;
+    // 1. Jobs whose tab is gone or that ran too long end as errors.
+    const st0 = await autoState();
+    keepAwake(true);
+    for (const j of st0.running) {
+      const alive = j.tabId ? await chrome.tabs.get(j.tabId).then(() => true).catch(() => false) : true;
+      if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
+      else if (Date.now() - j.startedAt > AUTO_JOB_TIMEOUT_MS) await autoFinish({ status: "error", note: "timed out after 15 minutes" }, j.tabId, j.jobId);
     }
-    if (st.nextAt && Date.now() < st.nextAt) return;
-    const job = await autoNextJob(st);
-    if (!job) {
-      // Nothing due: wait for new jobs (or a retry's time) instead of stopping.
-      const retryAts = Object.values(st.results).filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES)
-        .map((r) => (r.status === "error" ? r.retryAt || 0 : r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1])));
-      // Look again in a minute: new jobs start the moment the list changes.
-      st.nextAt = Math.min(Date.now() + AUTO_POLL_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
-      if (!st.idle) {
-        const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
-        notify("Auto-apply is waiting for new jobs", `Every job so far is done (${n} submitted). A new job starts within a minute of appearing on your Jobs page.`);
+    // 2. Fill the free slots, one job at a time.
+    for (let slot = 0; slot < AUTO_PARALLEL; slot++) {
+      const job = await withAutoLock(async () => {
+        const st = await autoState();
+        if (st.running.length >= AUTO_PARALLEL) return null;
+        if (st.nextAt && Date.now() < st.nextAt) return null;
+        const busy = new Set(st.running.map((r) => r.jobId));
+        const next = await autoNextJob(st, busy);
+        if (!next) {
+          if (st.running.length) return null; // the others are still working
+          // Nothing due: wait for new jobs (or a retry's time) instead of stopping.
+          const retryAts = Object.values(st.results).filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES)
+            .map((r) => (r.status === "error" ? r.retryAt || 0 : r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1])));
+          // Look again in a minute: new jobs start the moment the list changes.
+          st.nextAt = Math.min(Date.now() + AUTO_POLL_MS, ...retryAts.map((t) => Math.max(t, Date.now() + 60000)));
+          if (!st.idle) {
+            const n = Object.values(st.results).filter((r) => r.status === "submitted").length;
+            notify("Auto-apply is waiting for new jobs", `Every job so far is done (${n} submitted). A new job starts within a minute of appearing on your Jobs page.`);
+          }
+          st.idle = true;
+          await saveAuto(st);
+          chrome.alarms.create("jwAutoKick", { when: st.nextAt });
+          return null;
+        }
+        st.idle = false;
+        st.running.push({ ...next, tabId: null, startedAt: Date.now() });
+        await saveAuto(st);
+        return next;
+      });
+      if (!job) break;
+      try {
+        await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
+        const tab = await chrome.tabs.create({ url: job.applyUrl, active: false });
+        await withAutoLock(async () => {
+          const st = await autoState();
+          const r = st.running.find((x) => x.jobId === job.jobId);
+          if (r) { r.tabId = tab.id; await saveAuto(st); }
+        });
+        // Make the next job's tailored resume while these fill, so it starts at once.
+        const stNow = await autoState();
+        const upcoming = autoQueue.list.find((j) => !stNow.results[j.jobId] && !stNow.running.some((r) => r.jobId === j.jobId));
+        if (upcoming) tailoredResumeFor({ jobId: upcoming.jobId }).catch(() => {});
+      } catch (err) {
+        console.warn("[JobWatch] auto-apply could not open a job:", err.message);
+        await withAutoLock(async () => {
+          const st = await autoState();
+          st.running = st.running.filter((x) => !(x.jobId === job.jobId && !x.tabId));
+          st.nextAt = Date.now() + 60000;
+          await saveAuto(st);
+        });
+        break;
       }
-      st.idle = true;
-      await saveAuto(st);
-      chrome.alarms.create("jwAutoKick", { when: st.nextAt });
-      return;
     }
-    st.idle = false;
-    st.current = { ...job, tabId: null, startedAt: Date.now() };
-    await saveAuto(st);
-    await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
-    const tab = await chrome.tabs.create({ url: job.applyUrl, active: false });
-    // Make the next job's tailored resume while this one fills, so it starts at once.
-    const upcoming = autoQueue.list.find((j) => !st.results[j.jobId] && j.jobId !== job.jobId);
-    if (upcoming) tailoredResumeFor({ jobId: upcoming.jobId }).catch(() => {});
-    const st2 = await autoState();
-    if (st2.current?.jobId === job.jobId) { st2.current.tabId = tab.id; await saveAuto(st2); }
   } catch (err) {
     console.warn("[JobWatch] auto-apply tick failed:", err.message);
-    const st = await autoState();
-    if (st.current && !st.current.tabId) { st.current = null; st.nextAt = Date.now() + 60000; await saveAuto(st); }
   } finally {
     autoBusy = false;
   }
@@ -768,7 +806,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick();
 });
 // The browser opened: carry on where it left off (a job whose tab is gone is retried later).
-chrome.runtime.onStartup.addListener(() => { autoTick(); });
+chrome.runtime.onStartup.addListener(() => { requeueRefused().then(autoTick); });
 // Reloaded with new code (selfUpdate, or the Reload button): carry on too.
 chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") requeueRefused().then(autoTick); });
 
@@ -776,8 +814,14 @@ chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") reque
  *  in the queue so the new code gets its chance, with its stale tab closed
  *  so it reopens as an auto-apply job. A closed posting stays out. */
 async function requeueRefused() {
+  return withAutoLock(requeueRefusedNow);
+}
+async function requeueRefusedNow() {
   const st = await autoState();
   let n = 0;
+  // Jobs that were mid-way lost their page script with the old code: restart them.
+  for (const j of st.running) { if (j.tabId) chrome.tabs.remove(j.tabId).catch(() => {}); n++; }
+  st.running = [];
   for (const [id, r] of Object.entries(st.results || {})) {
     if (!["needs_attention", "error"].includes(r.status) || r.closed) continue;
     if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
@@ -820,7 +864,7 @@ async function autoStatus() {
   const count = (s) => results.filter((r) => r.status === s).length;
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
-  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.current, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
@@ -956,7 +1000,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "AUTO_SUBMITTING") {
         const st = await autoState();
-        if (st.on && st.current && st.current.tabId === sender?.tab?.id) { st.current.submittingAt = Date.now(); await saveAuto(st); }
+        await withAutoLock(async () => {
+          const st = await autoState();
+          const job = st.running.find((j) => j.tabId === sender?.tab?.id);
+          if (job) { job.submittingAt = Date.now(); await saveAuto(st); }
+        });
         sendResponse({ ok: true });
         return;
       }
@@ -965,7 +1013,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // "Already applied" is the ledger saying this form WAS submitted
         // (often a retry of a job whose submit went unrecorded): count it so.
         const already = message.status === "skipped" && /already applied/i.test(message.note || "");
-        if (job) await autoFinish({ status: already ? "submitted" : message.status, note: already ? "already applied" : message.note });
+        if (job) await autoFinish({ status: already ? "submitted" : message.status, note: already ? "already applied" : message.note }, sender?.tab?.id);
         sendResponse({ ok: true });
         return;
       }
@@ -999,7 +1047,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Wipe the popup's counts and recent list; auto-apply carries on.
         // Submitted jobs stay skipped (the server keeps them in applications).
         const st = await autoState();
-        await saveAuto({ on: true, current: st.current, results: {}, startedAt: Date.now() });
+        await withAutoLock(async () => { const cur = await autoState(); await saveAuto({ on: true, running: cur.running, results: {}, startedAt: Date.now() }); });
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
         try { chrome.notifications.clear("jwNeeds"); } catch (_) { /* none */ }
         autoTick();
