@@ -732,6 +732,25 @@ async function autoFinishNow(result, tabId, jobId) {
   chrome.alarms.create("jwAutoKick", { when: Math.max(st.nextAt, Date.now() + 30000) });
 }
 
+/** Auto-apply's own minimized window: the jobs stay out of the person's tab
+ *  strip, and a person's browser does not grow three hidden tabs at a time.
+ *  Falls back to a background tab where a window cannot be made. */
+async function openJobTab(url) {
+  try {
+    const { jwJobWindow } = await chrome.storage.local.get("jwJobWindow");
+    let win = jwJobWindow ? await chrome.windows.get(jwJobWindow).catch(() => null) : null;
+    if (!win) {
+      win = await chrome.windows.create({ url, state: "minimized", focused: false });
+      await chrome.storage.local.set({ jwJobWindow: win.id });
+      return win.tabs[0];
+    }
+    return await chrome.tabs.create({ windowId: win.id, url, active: true });
+  } catch (err) {
+    console.warn("[JobWatch] job window unavailable, using a tab:", err.message);
+    return chrome.tabs.create({ url, active: false });
+  }
+}
+
 async function autoTick() {
   if (autoBusy) return;
   autoBusy = true;
@@ -776,7 +795,7 @@ async function autoTick() {
       if (!job) break;
       try {
         await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
-        const tab = await chrome.tabs.create({ url: job.applyUrl, active: false });
+        const tab = await openJobTab(job.applyUrl);
         await withAutoLock(async () => {
           const st = await autoState();
           const r = st.running.find((x) => x.jobId === job.jobId);
@@ -868,7 +887,8 @@ async function autoStatus() {
   const count = (s) => results.filter((r) => r.status === s).length;
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
-  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  const stopped = results.filter((r) => ["needs_attention", "error"].includes(r.status) && r.at >= Date.now() - 864e5);
+  return { on: !!st.on, idle: !!st.idle, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
@@ -962,6 +982,20 @@ async function scanApplicationMail() {
 }
 
 // ─── Daily summary (8 PM) ─────────────────────────────────────────────────────
+/** Stop notes grouped into a few plain reasons, most common first. */
+function stopReasons(rows) {
+  const KINDS = [
+    [/captcha/i, "CAPTCHA"], [/spam check|flagged as spam/i, "spam check"], [/resume would not attach|no resume/i, "resume upload"],
+    [/security code/i, "security code"], [/salary|compensation|pay expectation/i, "salary number"], [/closed|no longer|not found|404/i, "posting closed"],
+    [/timed out|the tab was closed/i, "timed out"], [/did not accept|no confirmation|flagged/i, "refused at Submit"], [/needs you:|still empty|could not/i, "a question only you can answer"],
+  ];
+  const count = new Map();
+  for (const r of rows) {
+    const kind = (KINDS.find(([re]) => re.test(r.note || "")) || [null, "other"])[1];
+    count.set(kind, (count.get(kind) || 0) + 1);
+  }
+  return [...count].sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, n]) => `${n} × ${k}`).join(", ");
+}
 function next8pm() {
   const d = new Date();
   d.setHours(20, 0, 0, 0);
@@ -982,7 +1016,10 @@ async function dailySummary() {
     m("offer") && `${m("offer")} offer${m("offer") === 1 ? "" : "s"}`, m("rejection") && `${m("rejection")} rejection${m("rejection") === 1 ? "" : "s"}`,
   ].filter(Boolean);
   if (!recent.length && !mail.length) return;
-  notify("JobWatch today", `${parts.join(", ")}.`);
+  // Why the rest stopped, most common first ("3 × salary number, 2 × CAPTCHA").
+  const reasons = stopReasons(recent.filter((r) => ["needs_attention", "error"].includes(r.status)));
+  notify("JobWatch today", `${parts.join(", ")}.${reasons ? ` Stopped by: ${reasons}.` : ""}`);
+  await chrome.storage.local.set({ jwDailyReport: { at: Date.now(), parts, reasons } });
 }
 
 chrome.alarms.get("jwMailScan", (a) => { if (!a) chrome.alarms.create("jwMailScan", { delayInMinutes: 2, periodInMinutes: 30 }); });

@@ -5,7 +5,7 @@
 // form (option LABELS for comboboxes so the script can pick them by text).
 
 const { buildProfileForJob, parsePlace, REMOTE_LOCATION_DEFAULT } = require("./ashby.cjs");
-const { aiContext, answerFreeText, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
 
 const GH_BASE = "https://boards-api.greenhouse.io/v1/boards";
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -108,13 +108,43 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     }
   }
 
+  // 5a. Parked questions the rules could not map ("I understand that working
+  //     with relatives ... is prohibited", "How would you rate your Go?"):
+  //     the AI picks the true option, or answers a short text / number box,
+  //     from the profile and resume, as on Ashby and Lever. Private facts
+  //     (a salary number, a link only the person has) stay for the person.
+  const aiPicked = new Set();
+  if (openai) {
+    const parkedQs = mapped.review.map((r) => ({ r, q: qByLabel0.get(r.label) })).filter(({ q }) => q && q.fields?.[0]);
+    await pool(parkedQs, 4, async ({ r, q }) => {
+      const kind = fieldKind(q.fields[0]);
+      const opts = q.fields[0].values || [];
+      try {
+        if (["select", "multiselect", "boolean"].includes(kind) && opts.length) {
+          const p = await pickOption({ label: q.label, description: stripHtml(q.description || ""), fields: [{ ...q.fields[0], type: kind === "multiselect" ? "multi" : "single", values: opts.map((o) => ({ label: o.label, value: o.label })) }] }, ctx, profileForJob, aiDeps);
+          if (!p.values.length) { aiNotes.set(r.label, p.reason); return; }
+          fills.push({ label: q.label, name: q.fields[0].name, kind, value: p.values[0], ...(kind === "multiselect" ? { values: p.values } : {}), required: !!q.required, source: "ai", note: `AI pick: ${p.why || ""}`.trim() });
+          aiPicked.add(r.label);
+        } else if (["text", "longtext", "number"].includes(kind) && !/needs a link|password|no referral|follow-up|salary|compensation/i.test(`${r.note || ""} ${q.label}`)) {
+          const num = kind === "number";
+          const a = await answerFreeText({ label: q.label, description: [stripHtml(q.description || ""), num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" "), ashbyType: num ? "Number" : kind === "longtext" ? "LongText" : "String" }, ctx, aiDeps);
+          const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;
+          if (!value) { aiNotes.set(r.label, a.reason || "AI gave no answer"); return; }
+          fills.push({ label: q.label, name: q.fields[0].name, kind: num ? "number" : "text", value, required: !!q.required, source: "ai", note: "AI answer" });
+          aiPicked.add(r.label);
+        }
+      } catch (e) { aiNotes.set(r.label, `AI failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+    for (let i = review.length - 1; i >= 0; i--) if (aiPicked.has(review[i].label)) review.splice(i, 1);
+  }
+
   // 5b. Candidate location typeahead — always the job's posted location.
   const locQ = (form.location_questions || []).find((q) => (q.fields || []).some((f) => f.name === "location"));
   const locName = ((form.location && form.location.name) || "").trim();
   // A remote posting (or one with no real city) gets the person's city for
   // remote roles, users/{uid}.remoteLocation, default San Francisco, CA.
   if (locQ) {
-    const place = parsePlace(locName) || parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
+    const place = parsePlace(locName, profile.city || profile.remoteLocation || REMOTE_LOCATION_DEFAULT) || parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
     if (place) {
       const stateFull = place.state || US_STATES[(place.abbr || "").toUpperCase()] || "";
       fills.push({ label: "Location", kind: "location", value: place.city, match: stateFull ? `${place.city}, ${stateFull}` : place.city, required: !!locQ.required });
@@ -154,10 +184,16 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     jobTitle: form.title,
     companyName: job.companyName,
     locationName: job.locationName,
-    ready: verdict.ok && review.length === 0,
+    // A completeness failure the AI answers cleared is not a failure.
+    ready: review.length === 0 && (verdict.ok || verdict.failures.every((f) => /completeness/i.test(String(f)))),
     reasons: verdict.failures,
     review,
     fills,
+    // The Employment section, filled on the page from the resume (the
+    // board's own resume parser only runs after a real upload, and leaves
+    // the job's place glued to the title).
+    employment: employmentEntries(resume),
+    education: (resume.education || []).filter((e) => e.institution || e.school).slice(0, 2).map((e) => ({ start: dateParts(e.startDate), end: dateParts(e.endDate) })),
     resumeB64,
     resumeName: profile.resumeFileName || resume.fileName || "resume.pdf",
     coverText,
@@ -240,6 +276,30 @@ async function educationFills(token, form, resume) {
   if (yr) out.push({ label: "End date year", kind: "text", value: yr[0] });
 
   return out;
+}
+
+/** Up to three roles, newest first: { company, title, start: {month, year}, end, current }. */
+/** "May 2023", "2023-05", "2021" -> { year, month|null }; "Present" -> null. */
+function dateParts(v) {
+  const MON = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const t = String(v || "").trim();
+  if (!t || /present|current|now/i.test(t)) return null;
+  const y = t.match(/(19|20)\d{2}/)?.[0];
+  const iso = t.match(/^(\d{4})-(\d{1,2})/);
+  const word = t.match(/([A-Za-z]{3,})\.?\s+\d{4}/);
+  const m = iso ? Number(iso[2]) : word ? MON.findIndex((x) => x.startsWith(word[1].toLowerCase().slice(0, 3))) + 1 : 0;
+  return y ? { year: y, month: m > 0 ? m : null } : null;
+}
+function employmentEntries(resume) {
+  const when = dateParts;
+  const roles = resume.roles || resume.experience || [];
+  return roles.filter((r) => (r.company || r.employer) && (r.title || r.role)).slice(0, 3).map((r) => ({
+    company: String(r.company || r.employer).trim(),
+    title: String(r.title || r.role).trim(),
+    start: when(r.startDate),
+    end: when(r.endDate),
+    current: !r.endDate || /present|current|now/i.test(String(r.endDate)),
+  }));
 }
 
 /** Greenhouse's phone box sits next to its own country picker (+1 already

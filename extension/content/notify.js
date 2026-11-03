@@ -84,7 +84,7 @@
   const SEND_ICON = '<svg viewBox="0 0 20 20" fill="currentColor"><path d="M3.105 2.288a.75.75 0 0 0-.826.95l1.414 4.926A1.5 1.5 0 0 0 5.135 9.25h6.115a.75.75 0 0 1 0 1.5H5.135a1.5 1.5 0 0 0-1.442 1.086l-1.414 4.926a.75.75 0 0 0 .826.95 28.897 28.897 0 0 0 15.293-7.155.75.75 0 0 0 0-1.114A28.897 28.897 0 0 0 3.105 2.288Z"/></svg>';
   const PILL = { working: "Working", info: "JobWatch", success: "Done", warning: "Needs you", error: "Error", idle: "Ready" };
 
-  let host = null, root = null, card = null, hideTimer = null;
+  let host = null, root = null, card = null, hideTimer = null, keeper = null;
   function ensure() {
     if (card && host?.isConnected) return;
     host = document.createElement("div");
@@ -99,7 +99,13 @@
       <div class="body"></div></div>`;
     card = root.querySelector(".card");
     root.querySelector(".x").addEventListener("click", hide);
-    (document.body || document.documentElement).appendChild(host);
+    // On <html>, not <body>: a board that re-renders its body after loading
+    // (React recovering from a hydration error: Lyft, Anthropic, Checkr)
+    // wiped the card with it. And if it is removed anyway, it goes back.
+    document.documentElement.appendChild(host);
+    // React can replace the whole <html> element, so a check every second
+    // (cheap) re-attaches the card to whichever <html> the page has now.
+    if (!keeper) keeper = setInterval(() => { if (host && card && !host.isConnected && document.documentElement) document.documentElement.appendChild(host); }, 1000);
     requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add("on")));
   }
 

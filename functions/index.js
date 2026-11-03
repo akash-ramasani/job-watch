@@ -5036,6 +5036,17 @@ exports.recordApplication = onCall({ region: REGION, maxInstances: 10 }, async (
     // The content scripts put their resume trace in `reasons` ("trace: ..."), which the background forwards.
     const trace = (Array.isArray(d.reasons) ? d.reasons : []).filter((t) => /^trace:/.test(String(t))).slice(0, 12).map((t) => String(t).slice(6, 166).trim());
     logger.info(`recordApplication: uid=${uid} ${event} ${formKey} -> ${r.status}${r.duplicate ? " (duplicate)" : ""} attempts=${r.attempts ?? ""}${d.extensionVersion ? ` ext=${String(d.extensionVersion).slice(0, 12)}` : ""}${needs.length ? ` needs=${JSON.stringify(needs)}` : ""}${trace.length ? ` trace=${JSON.stringify(trace)}` : ""}`);
+    // Every question a stopped application left open goes on the Profile
+    // page's "Needs your answer" list: answered once there, it fills the next
+    // form and the stopped jobs are tried again. Form-level notes, uploads
+    // and the board's own messages are not questions.
+    if (r.status === "needs_attention" && Array.isArray(d.needsAttention) && d.needsAttention.length) {
+      const missing = d.needsAttention
+        .filter((n) => n?.label && !/^(form|resume|cv|resume\/cv|cover letter)$/i.test(String(n.label).trim()) && !/^after submit: (your form needs|ashby replied|missing entry)/i.test(String(n.note || "")))
+        .slice(0, 10)
+        .map((n) => ({ question: String(n.label), why: String(n.note || "").slice(0, 300), companyName: d.companyName || "", jobTitle: d.jobTitle || "" }));
+      if (missing.length) await savedAnswers.learn(db, uid, { missing }, { FieldValue: admin.firestore.FieldValue }).catch((e) => logger.warn("missing answers:", e.message));
+    }
     return r;
   } catch (e) {
     logger.error("recordApplication failed", e);

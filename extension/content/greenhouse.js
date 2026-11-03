@@ -392,6 +392,56 @@
         }
       }
     } catch (e) { warn("education extras:", e.message); }
+    // Education dates (start-month--0, end-year--0, ...): by id, so they
+    // never land in Employment's boxes of the same name. With no month on
+    // the resume, the school year's own (start August, end May).
+    try {
+      const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const eds = Array.isArray(data.education) ? data.education : [];
+      for (let i = 0; i < eds.length; i++) {
+        const e = eds[i];
+        const box = (id) => document.getElementById(`${id}--${i}`);
+        const empty = (el) => el && !String(el.value || "").trim() && !el.closest("[class*='select__control']")?.querySelector("[class*='single-value']");
+        const put = async (id, v) => { const el = box(id); if (!el || !empty(el) || !v) return; if (isCombobox(el)) await fillCombobox(el, v); else await fillText(el, v); };
+        if (e.start) { await put("start-month", MONTHS[(e.start.month || 8) - 1]); await put("start-year", String(e.start.year)); }
+        if (e.end) { await put("end-month", MONTHS[(e.end.month || 5) - 1]); await put("end-year", String(e.end.year)); }
+      }
+    } catch (err) { warn("education dates:", err.message); }
+    // Employment blocks (company, title, dates, "Current role"), from the
+    // resume: the board's own parser only fills them after an upload it
+    // could read. Only empty boxes are touched; "Add another" for more roles.
+    try {
+      const MON = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+      const entries = Array.isArray(data.employment) ? data.employment : [];
+      const blocks = () => [...document.querySelectorAll(".employment-form")];
+      if (blocks().length && entries.length) {
+        for (let i = 0; i < entries.length; i++) {
+          if (i >= blocks().length) {
+            // The section's own "Add another" (Education has one too).
+            const inEmployment = (b) => { for (let n = b.parentElement, k = 0; n && k < 4; n = n.parentElement, k++) if (n.querySelector(".employment-form")) return !n.querySelector(".education--form"); return false; };
+            const add = [...document.querySelectorAll("button")].find((b) => /add another/i.test(b.textContent || "") && inEmployment(b));
+            if (!add) break;
+            add.click();
+            await sleep(500);
+            if (i >= blocks().length) break;
+          }
+          const e = entries[i];
+          const box = (id) => document.getElementById(`${id}-${i}`);
+          const empty = (el) => el && !String(el.value || "").trim() && !el.closest("[class*='select__control']")?.querySelector("[class*='single-value']");
+          if (empty(box("company-name"))) await fillText(box("company-name"), e.company);
+          if (empty(box("title"))) await fillText(box("title"), e.title);
+          if (e.start?.month && empty(box("start-date-month"))) await fillCombobox(box("start-date-month"), MON[e.start.month - 1]);
+          if (e.start?.year && empty(box("start-date-year"))) await fillText(box("start-date-year"), String(e.start.year));
+          const cur = document.getElementById(`current-role-${i}_1`) || blocks()[i]?.querySelector("input[type=checkbox]");
+          if (e.current && cur) { if (!cur.checked) await checkBox(cur); }
+          else if (e.end) {
+            if (e.end.month && empty(box("end-date-month"))) await fillCombobox(box("end-date-month"), MON[e.end.month - 1]);
+            if (empty(box("end-date-year"))) await fillText(box("end-date-year"), String(e.end.year));
+          }
+          log("employment", i, e.company, e.title);
+        }
+      }
+    } catch (err) { warn("employment:", err.message); }
     // The board's resume parser fills Employment blocks from the resume and
     // glues the job's place onto the title ("Senior Software Engineer
     // Remote", "... San Jose, California"). Keep the title only.
@@ -568,7 +618,7 @@
       if (!btn) { say("could not find the Submit button. Scroll down and press it."); return { status: "needs_attention", note: "could not find Greenhouse's Submit button" }; }
       say(round ? `submitting again (try ${round + 1} of 4)…` : "submitting…");
       btn.scrollIntoView({ block: "center" });
-      await sleep(600);
+      await sleep(3000 + Math.random() * 5000); // a person reads the form over before Submit
       const clickedAt = Date.now();
       await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
       btn.click();

@@ -165,25 +165,59 @@ function metroTerms(city) {
 }
 
 /** Parse "San Francisco, CA" / "New York City" / "Remote - US" into parts. */
-function parsePlace(locationName) {
-  // "New York, NY; Remote" / "SF | NYC": the first segment that is a real place.
-  const segs = String(locationName || "").split(/\s*(?:;|\||\bor\b|\/)\s*/).filter(Boolean);
-  if (segs.length > 1) { for (const seg of segs) { const p = parsePlace(seg); if (p) return p; } return null; }
-  // "Hybrid - San Francisco", "San Francisco (Hybrid)", "On-site: Austin, TX": the place without the work mode.
+// Short names postings use for big cities.
+const CITY_ALIAS = { sf: "San Francisco", nyc: "New York", "new york city": "New York", sea: "Seattle", la: "Los Angeles", atx: "Austin", chi: "Chicago", dc: "Washington", "washington dc": "Washington", "washington d.c.": "Washington", bos: "Boston", den: "Denver", pdx: "Portland", sj: "San Jose", "bay area": "San Francisco", "sf bay area": "San Francisco" };
+const isState = (s) => { const t = String(s || "").trim(); return (t.length === 2 && !!STATE_FULL[t.toUpperCase()]) || !!STATE_ABBR[t.toLowerCase()]; };
+
+/** One place from one piece of text: "San Francisco, CA", "CA - San Francisco", "NYC". */
+function placeOf(text) {
   const MODE = "(?:hybrid|on[- ]?site|in[- ]office|office[- ]based|in[- ]person)";
-  const raw = String(locationName || "").replace(/\s*[-–]\s*US$/i, "")
+  let raw = String(text || "").replace(/\s*[-–]\s*US$/i, "")
     .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-–:|]|\\bin\\b)\\s*`, "i"), "")
     .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
+    .replace(/\s*\((?:[^)]*)\)\s*$/, "")
     .trim();
   if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
   if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
-  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
-  const city = parts[0];
+  // "CA - San Francisco": state first.
+  const st = raw.match(/^([A-Za-z]{2})\s*[-–]\s*(.+)$/);
+  if (st && isState(st[1])) raw = `${st[2]}, ${st[1]}`;
+  const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  // "San Francisco Bay Area", "Greater Boston Area", "Seattle Metro": the metro's main city.
+  const areaOf = (c) => { const bare = c.replace(/^greater\s+/i, "").replace(/\s+(bay area|metro(politan)?( area)?|area|region)$/i, "").trim(); const m = bare !== c ? metroOf(bare) || metroOf(c) : null; return m ? m.display.split(",")[0] : bare !== c ? bare : ""; };
+  const city = CITY_ALIAS[parts[0].toLowerCase()] || areaOf(parts[0]) || parts[0];
   let state = parts[1] || "";
-  if (/^(united states|usa|us)$/i.test(state)) state = "";
+  if (/^(united states|usa|us)$/i.test(state) || !isState(state)) state = "";
   if (!state) { const m = metroOf(city); if (m) state = m.state; }
   const abbr = state.length === 2 ? state.toUpperCase() : STATE_ABBR[state.toLowerCase()] || "";
   return { city, state: STATE_FULL[abbr] || state, abbr };
+}
+
+/** Every place a posting lists: "San Francisco, Seattle, New York",
+ *  "San Francisco, CA • New York, NY", "CA - San Francisco; WA - Seattle". */
+function parsePlaces(locationName) {
+  const segs = String(locationName || "").split(/\s*(?:;|\||•|·|\bor\b|\band\b|&|\/)\s*/).filter(Boolean);
+  const out = [];
+  for (const seg of segs) {
+    // A comma list of cities ("San Francisco, Seattle, New York") or "City, ST, City, ST".
+    const parts = seg.split(",").map((x) => x.trim()).filter(Boolean);
+    const pieces = [];
+    for (let k = 0; k < parts.length; k++) {
+      if (k + 1 < parts.length && isState(parts[k + 1])) { pieces.push(`${parts[k]}, ${parts[k + 1]}`); k++; }
+      else pieces.push(parts[k]);
+    }
+    for (const piece of pieces) { const p = placeOf(piece); if (p && !out.some((o) => o.city === p.city && o.state === p.state)) out.push(p); }
+  }
+  return out;
+}
+
+/** The place to apply from: of the places a posting lists, the one in the
+ *  person's own metro when it is there, else the first. */
+function parsePlace(locationName, prefer = "") {
+  const all = parsePlaces(locationName);
+  if (!all.length) return null;
+  const want = prefer ? metroOf(placeOf(prefer)?.city || prefer) : null;
+  return (want && all.find((p) => metroOf(p.city) === want)) || all[0];
 }
 
 /** Value + match string for Ashby's location autocomplete. Suggestions read
@@ -209,7 +243,8 @@ function locationFill(path, jobLocationName, profile) {
   const remote = parsePlace(profile.remoteLocation || REMOTE_LOCATION_DEFAULT);
   // users/{uid}.locationStrategy = "profile" switches the widget to the
   // applicant's own city on every form (the engine's text answers already are).
-  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName) || remote) : (parsePlace(jobLocationName) || remote || own);
+  const prefer = profile.city || profile.remoteLocation || REMOTE_LOCATION_DEFAULT;
+  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName, prefer) || remote) : (parsePlace(jobLocationName, prefer) || remote || own);
   if (!place) return null;
   // Queries to try when the typeahead finds nothing for the bare city
   // (Virta's widget had "No results" for "Hayward"): city + state code, city +

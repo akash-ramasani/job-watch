@@ -163,6 +163,8 @@ function renderAuto(st) {
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
+  $("auto-reasons").style.display = st.reasons ? "block" : "none";
+  $("auto-reasons").textContent = st.reasons ? `Stopped today by: ${st.reasons}.` : "";
   $("auto-stats").innerHTML = [["Submitted (24 h)", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
     .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
 }

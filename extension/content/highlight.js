@@ -66,7 +66,8 @@
 
   function ensure() {
     if (box && box.isConnected) return true;
-    const host = document.body || document.documentElement;
+    // On <html>: a board that re-renders its <body> would wipe the frame.
+    const host = document.documentElement;
     if (!host) return false;
     if (!document.getElementById(STYLE_ID)) {
       const s = document.createElement("style");

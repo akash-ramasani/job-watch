@@ -23,7 +23,49 @@
   const valueHere = (q) => { try { return window.__jwRescueDom?.valueOf(q) || ""; } catch { return ""; } };
   const learn = (saved, missing) => send({ type: "LEARN_ANSWERS", saved, missing }).then((r) => { if (!r?.ok) console.warn("[JobWatch/Rescue] learn failed:", r?.error); });
 
-  async function rescueOnce(question, { jobTitle = "", companyName = "", force = false, error = "" } = {}) {
+  // Steps that finished a question before, per board and question: tried
+  // first next time (no AI call); the AI only when they no longer work.
+  const MEMO_KEY = "jwRescueMemo";
+  const memoId = (q) => `${location.host}|${String(q || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().slice(0, 160)}`;
+  async function memoGet(q) { try { return (await chrome.storage.local.get(MEMO_KEY))[MEMO_KEY]?.[memoId(q)] || null; } catch { return null; } }
+  async function memoPut(q, entry) {
+    try {
+      const all = (await chrome.storage.local.get(MEMO_KEY))[MEMO_KEY] || {};
+      all[memoId(q)] = { ...entry, at: Date.now() };
+      const keys = Object.keys(all).sort((a, b) => (all[b].at || 0) - (all[a].at || 0));
+      for (const k of keys.slice(400)) delete all[k];
+      await chrome.storage.local.set({ [MEMO_KEY]: all });
+    } catch { /* memory is a nicety */ }
+  }
+  async function memoDrop(q) {
+    try { const all = (await chrome.storage.local.get(MEMO_KEY))[MEMO_KEY] || {}; delete all[memoId(q)]; await chrome.storage.local.set({ [MEMO_KEY]: all }); } catch { /* nicety */ }
+  }
+
+  async function rescueOnce(question, opts = {}) {
+    const { force = false } = opts;
+    // A remembered fix first: same board, same question, same steps.
+    const memo = await memoGet(question);
+    if (memo?.steps?.length) {
+      const snap = await dom("snapshot", question);
+      if (snap?.ok && (snap.required || force) && !snap.filled) {
+        const done = await dom("act", memo.steps);
+        await sleep(500);
+        const after = await dom("snapshot", question);
+        if (after?.filled) { console.log("[JobWatch/Rescue]", question, "remembered steps", memo.steps, done?.log); return { ok: true, filled: true, answer: memo.answer || "", required: !!snap.required, remembered: true }; }
+        await memoDrop(question); // the page changed: ask the AI
+      }
+    }
+    const r = await rescueAi(question, opts);
+    // Remember only fixes that carry over: picks and clicks, or a short typed
+    // value; never written prose or a question naming this company.
+    const company = String(opts.companyName || "").trim().toLowerCase();
+    const reusable = r.ok && r.steps?.length && r.steps.every((st) => st.op !== "type" || String(st.text || "").length <= 40)
+      && !(company && String(question).toLowerCase().includes(company));
+    if (reusable) memoPut(question, { steps: r.steps, answer: r.answer || "" });
+    return r;
+  }
+
+  async function rescueAi(question, { jobTitle = "", companyName = "", force = false, error = "" } = {}) {
     // The board's own complaint ("Enter a valid URL") rides in history, which
     // the background passes to rescueField untouched.
     const history = error ? [{ round: 0, boardError: String(error).slice(0, 300) }] : [];
@@ -34,7 +76,7 @@
       if (!snap?.ok) return { ok: false, filled: false, why: snap?.error || "field not found" };
       required = snap.required;
       if (!snap.required && !force) return { ok: false, filled: snap.filled, why: "optional (no *)" };
-      if (round > 1 && snap.filled && history[history.length - 1]?.done) return { ok: true, filled: true, answer, required };
+      if (round > 1 && snap.filled && history[history.length - 1]?.done) return { ok: true, filled: true, answer, required, steps: history.flatMap((h) => h.steps || []) };
       const r = await send({ type: "RESCUE_FIELD", question, html: snap.html, required: snap.required, round, history, jobTitle, companyName });
       if (!r?.ok) return { ok: false, filled: snap.filled, why: r?.error || "rescue failed", required };
       const plan = r.plan || {};
@@ -49,7 +91,7 @@
     const last = await dom("snapshot", question);
     // A field with a board error counts as done once the AI's last plan said so.
     const fixed = error ? !!last?.filled && !!history[history.length - 1]?.done : !!last?.filled;
-    return { ok: fixed, filled: !!last?.filled, answer, why: fixed ? "" : error ? `the form still says: ${error}` : "still empty after three rounds", required };
+    return { ok: fixed, filled: !!last?.filled, answer, why: fixed ? "" : error ? `the form still says: ${error}` : "still empty after three rounds", required, steps: fixed ? history.flatMap((h) => h.steps || []) : [] };
   }
 
   window.__jwRescue = async function rescue(question, opts = {}) {

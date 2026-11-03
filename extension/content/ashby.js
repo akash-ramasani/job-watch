@@ -1345,7 +1345,7 @@
       fileTrace.push(`before submit ${round + 1}: resume ${res ? (res.filled ? "shown" : "EMPTY") : "field absent"}`);
     } catch (_) { /* trace only */ }
     btn.scrollIntoView({ block: "center" });
-    await sleep(600);
+    await sleep(3000 + Math.random() * 5000); // a person reads the form over before Submit
     await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for a thank-you page
     btn.click();
     // Ten seconds for Ashby to confirm; longer only while the application is

@@ -118,7 +118,7 @@
       if (!btn) return autoReport("needs_attention", "could not find Lever's Submit button");
       banner(round ? `Auto-apply: submitting again (try ${round + 1} of 4)…` : "Auto-apply: submitting…");
       btn.scrollIntoView({ block: "center" });
-      await sleep(400);
+      await sleep(3000 + Math.random() * 5000); // a person reads the form over before Submit
       await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
       await lever("touched").catch(() => {});
       btn.click();

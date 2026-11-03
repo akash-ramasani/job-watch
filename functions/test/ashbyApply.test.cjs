@@ -512,3 +512,15 @@ test("corpus: Ashby forms fully answerable with AI for free text", { skip: !fs.e
   console.log(`corpus: ${full}/${forms.length} Ashby forms fully answerable; blockers:\n  ${blockers.join("\n  ")}`);
   assert.ok(full >= Math.floor(forms.length * 0.8), `only ${full}/${forms.length} fully answerable`);
 });
+
+test("parsePlace reads city lists, ST - City, short names, and prefers the person's metro", () => {
+  const { parsePlace } = require("../lib/apply/ashby.cjs");
+  const city = (l, pref) => { const p = parsePlace(l, pref); return p ? `${p.city}, ${p.abbr}` : null; };
+  assert.equal(city("San Francisco, Seattle, New York"), "San Francisco, CA"); // Stripe
+  assert.equal(city("San Francisco, CA • New York, NY", "New York, NY"), "New York, NY"); // Figma
+  assert.equal(city("CA - San Francisco; WA - Seattle; UT - Cottonwood Heights"), "San Francisco, CA"); // SoFi
+  assert.equal(city("Hybrid - San Francisco, New York City"), "San Francisco, CA"); // Vercel
+  assert.equal(city("SF, NYC, SEA"), "San Francisco, CA");
+  assert.equal(city("Mountain View, CA (Hybrid)"), "Mountain View, CA");
+  assert.equal(city("Remote - US"), null);
+});

@@ -55,3 +55,6 @@ private/
 # Vercel CLI link
 .vercel
 .env*
+
+# Nightly self-test output
+worker/selftest/reports/
