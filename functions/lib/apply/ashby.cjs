@@ -255,6 +255,9 @@ function locationFill(path, jobLocationName, profile) {
     place.state ? `${place.city}, ${place.state}` : "",
     metro?.display || "",
     place.state || "",
+    // Last: the country, for boards whose Location box lists only countries
+    // (Docker, DualEntry: "San Francisco" finds nothing, "United States" does).
+    profile.country || "United States",
   ].filter((s) => s && s !== place.city))];
   return { path, kind: "location", label: "Location", value: place.city, match: place.state ? `${place.city}, ${place.state}` : place.city, alternates, source: "rule" };
 }
@@ -404,6 +407,12 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     if (q.path === "_systemfield_email") fills.push({ path: q.path, kind: "text", label: q.label, value: user.email || "", source: "profile" });
     if (q.path === "_systemfield_resume") fills.push({ path: q.path, kind: "file", label: q.label, file: "resume", source: "profile" });
     if (q.path === "_systemfield_location" || q.ashbyType === "Location") {
+      // "Location — Country you're currently residing in" (ElevenLabs,
+      // Docker): a country list, not a city search. The person's country.
+      if (/\bcountry\b/i.test(`${q.label} ${q.description || ""}`) && !/\bcity\b/i.test(`${q.label} ${q.description || ""}`)) {
+        fills.push({ path: q.path, kind: "select", label: q.label, value: profile.country || "United States", source: "profile" });
+        continue;
+      }
       const f = locationFill(q.path, job.locationName, profile);
       if (f) fills.push({ ...f, label: q.label });
     }

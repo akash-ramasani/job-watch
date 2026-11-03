@@ -376,7 +376,9 @@
     const queries = [...new Set([String(city), ...(Array.isArray(alternates) ? alternates : [])].filter(Boolean))];
     let opts = [];
     let typed = "";
+    let used = "";
     for (const q of queries) {
+      used = q;
       box.focus();
       box.click();
       await sleep(120);
@@ -400,6 +402,8 @@
     if (!opts.length) return { ok: false, error: "no suggestions appeared", typed, tried: queries };
     const texts = opts.map((o) => nrm(o.textContent));
     // "San Francisco, California" first, then city + state anywhere, then city.
+    // A fallback search (the state, the country) picks its own name exactly.
+    if (used !== String(city)) { const exact = texts.findIndex((t) => t === nrm(used) || t.startsWith(nrm(used) + ",")); if (exact >= 0 && !texts.some((t) => t.startsWith(wantCity))) { const o = opts[exact]; o.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); o.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); o.click(); await sleep(300); return { ok: !!box.value?.trim(), picked: o.textContent.trim(), actual: box.value, via: used }; } }
     let idx = texts.findIndex((t) => t.startsWith(want));
     if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity) && (!match || t.includes(nrm(match).split(",").pop().trim())));
     if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity));
