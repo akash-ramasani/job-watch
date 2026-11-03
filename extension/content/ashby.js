@@ -1372,6 +1372,15 @@
       showOverlay("✅ Auto-apply: submitted and recorded.", "success");
       return autoReport("submitted", "");
     }
+    const look = await execAshby("afterSubmit").catch(() => "");
+    if (typeof look === "string" && look) fileTrace.push(`after submit ${round + 1}: ${look}`);
+    // Ashby's bot check turned it away: pressing Submit again won't change that.
+    const formSaid = (await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((e) => !e.path && e.label === "form")?.text || "";
+    if (/spam|flagged|bot|suspicious/i.test(formSaid)) {
+      ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: [{ label: "form", path: "", note: `after Submit: ${formSaid}` }], reasons: traceNow() }).catch(() => {});
+      showOverlay(`⚠️ Auto-apply: Ashby's spam check turned this one away: "${formSaid}". Press Submit yourself.`, "warning");
+      return autoReport("needs_attention", `Ashby spam check: ${formSaid}`);
+    }
     // Refused: refill what went missing (a dropped resume), let the AI fix
     // every field the board flags, and press Submit again. Three rounds.
     if (refill && round < 3) {
@@ -1700,6 +1709,7 @@
         const after2 = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => now);
         const targets = new Map(); // label -> error text
         for (const e of errs) {
+          if (!e.path && e.label === "form") continue; // the whole form's message, not a field
           const d = after2.find((x) => x.id === e.path);
           const label = d?.label || e.label;
           if (label && !targets.has(label)) targets.set(label, e.text);

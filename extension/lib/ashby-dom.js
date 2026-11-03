@@ -468,16 +468,58 @@
       seen.add(key);
       out.push({ path, label: wrap ? (wrap.querySelector("label")?.textContent || "").replace(/\*|\s+/g, " ").trim() : "", text: text.slice(0, 160) });
     }
+    // The browser's own check ("Please fill out this field") shows a bubble
+    // that is not in the page: read it from the box itself.
+    // A box the page already shows as answered (an uploaded resume whose
+    // input was emptied after the upload) is not a problem.
+    const form = document.querySelector(".ashby-application-form-container") || document;
+    let filled = new Set();
+    try { filled = new Set(scan().filter((d) => d.filled).map((d) => d.id)); } catch (_) { /* keep all */ }
+    for (const el of form.querySelectorAll("input:invalid, textarea:invalid, select:invalid")) {
+      if (el.type === "hidden") continue;
+      const wrap = el.closest("[data-field-path]");
+      const path = wrap?.dataset.fieldPath || null;
+      if (!path || filled.has(path)) continue;
+      const text = (el.validationMessage || "this field is not valid").slice(0, 160);
+      if (seen.has(path + "|" + text) || out.some((o) => o.path && o.path === path)) continue;
+      seen.add(path + "|" + text);
+      out.push({ path, label: wrap ? (wrap.querySelector("label")?.textContent || "").replace(/\*|\s+/g, " ").trim() : el.name || "", text });
+    }
+    // A message for the whole form, right before or after the Submit button
+    // ("Something went wrong", "flagged as spam", "try again").
+    const text = nearSubmit();
+    const m = text.match(/[^.!]*(went wrong|try again|could not|couldn't|unable to|failed|flagged|spam|not accepted|error)[^.!]*[.!]?/i);
+    if (m && m[0].length < 240) out.push({ path: null, label: "form", text: m[0].trim().slice(0, 200) });
     return out;
+  }
+
+  // The text of the few elements around the Submit button that are not questions.
+  function nearSubmit() {
+    const btn = [...document.querySelectorAll("button")].find((b) => /submit application|^submit$/i.test((b.textContent || "").trim()));
+    if (!btn) return "";
+    const parts = [];
+    const take = (n) => { if (n && !n.matches("[data-field-path]") && !n.querySelector("[data-field-path]")) parts.push(n.innerText || ""); };
+    for (let n = btn.previousElementSibling, k = 0; n && k < 3; n = n.previousElementSibling, k++) take(n);
+    for (let n = btn.nextElementSibling, k = 0; n && k < 3; n = n.nextElementSibling, k++) take(n);
+    for (const a of document.querySelectorAll("[role=alert], [role=status], [class*='toast' i]")) if (!a.closest("[data-field-path]")) parts.push(a.innerText || "");
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  // What the page looks like after a refused Submit, for the log.
+  function afterSubmit() {
+    const btn = [...document.querySelectorAll("button")].find((b) => /submit|submitting/i.test((b.textContent || "").trim()));
+    const invalid = [...document.querySelectorAll("input:invalid, textarea:invalid, select:invalid")].filter((e) => e.type !== "hidden").map((e) => e.closest("[data-field-path]")?.dataset.fieldPath || e.name || e.id || e.type);
+    const near = nearSubmit().slice(0, 200);
+    return `button "${(btn?.textContent || "none").trim().slice(0, 30)}"${btn?.disabled ? " disabled" : ""}; invalid boxes: ${invalid.length ? invalid.slice(0, 5).join(", ") : "none"}; near button: ${near || "(nothing)"}; url ${window.location.pathname.slice(-40)}`;
   }
 
   function submitted() {
     return !document.querySelector(".ashby-application-form-container")
-      || /success|submitted|thank/i.test(location.href)
+      || /success|submitted|thank/i.test(window.location.href)
       || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']")
       // The green banner some boards show in place of the form (Harvey, 2026-11-02).
       || /your application (was|has been) (successfully )?submitted|application submitted successfully|thank(s| you) for (applying|your application)/i.test((document.body?.innerText || "").slice(0, 6000));
   }
 
-  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, errors, submitted, phone };
+  window.__jwAshby = { scan, scrollTo, fillText, validate, setFile, yesNo, radio, checkboxes, date, location, choose, errors, submitted, afterSubmit, phone };
 })();
