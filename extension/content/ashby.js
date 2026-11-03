@@ -1308,99 +1308,43 @@
   let AUTO = null;
   try { AUTO = (await sendMsg({ type: "AUTO_JOB" })).job || null; } catch { AUTO = null; }
   async function autoReport(status, note) { try { await sendMsg({ type: "AUTO_RESULT", status, note }); } catch { /* the runner times out instead */ } }
-  // A challenge counts only when a person could see it: reCAPTCHA keeps its
-  // challenge frame on the page all the time, hidden or parked off screen.
-  function onScreen(el) {
-    for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
-      const cs = getComputedStyle(n);
-      if (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity) === 0) return false;
-    }
-    const r = el.getBoundingClientRect();
-    return r.width > 100 && r.height > 100 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
-  }
-  function captchaVisible() {
-    return [...document.querySelectorAll("iframe[src*='recaptcha'][src*='bframe'], iframe[src*='hcaptcha'][src*='challenge'], iframe[title*='challenge' i]")].some(onScreen);
-  }
-  /** Submit when nothing is left for the person, wait for Ashby's confirmation, report. */
-  async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, round = 0) {
-    // Test runs set jwNoSubmit: fill, never send.
-    if ((await chrome.storage.local.get("jwNoSubmit").catch(() => ({}))).jwNoSubmit) return autoReport("needs_attention", "test run: not submitted");
-    // Last look before Submit: every required field filled (the resume included).
-    const scanEmpty = async () => (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).filter((d) => (d.required || d.id === "_systemfield_resume") && !d.filled && !d.survey).map((d) => d.label);
-    let empty = await scanEmpty();
-    if (empty.length && refill && await refill()) empty = await scanEmpty();
-    // A field still open does not stop the attempt: Submit, and the form
-    // says what it really wants; the repair rounds below hand that to the AI.
-    // Only the resume is a hard stop (Ashby never takes an application without it).
-    if (empty.includes("Resume") || empty.some((l) => /^resume\b/i.test(l))) {
-      window.__jwNotify.show("Auto-apply: the resume would not attach. Left open for you; the queue moves on.", "warning", { items: empty });
-      return autoReport("needs_attention", `still empty: ${empty.slice(0, 4).join("; ")}`);
-    }
-    if (manual.size || empty.length) console.log("[JobWatch] submitting with open fields; the form will say what it needs:", [...manual.keys(), ...empty]);
-    const btn = ashbySubmitButton();
-    if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
-    showOverlay(`⏳ Auto-apply: submitting${round ? ` (try ${round + 1})` : ""}…`);
-    try {
-      const res = (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((d) => d.id === "_systemfield_resume");
-      fileTrace.push(`before submit ${round + 1}: resume ${res ? (res.filled ? "shown" : "EMPTY") : "field absent"}`);
-    } catch (_) { /* trace only */ }
-    btn.scrollIntoView({ block: "center" });
-    await sleep(3000 + Math.random() * 5000); // a person reads the form over before Submit
-    await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for a thank-you page
-    btn.click();
-    // Ten seconds for Ashby to confirm; longer only while the application is
-    // still on its way (a second press then could send it twice).
-    for (let i = 0; i < 45; i++) {
-      await sleep(2000);
-      let done = false;
-      try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
-      if (done) {
-        await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
-        showOverlay("✅ Auto-apply: submitted and recorded.", "success");
-        return autoReport("submitted", "");
-      }
-      if (captchaVisible()) {
-        showOverlay("⚠️ Auto-apply: Ashby is showing a CAPTCHA. Solve it and press Submit; the queue moves on.", "warning");
-        return autoReport("needs_attention", "CAPTCHA challenge");
-      }
-      if (i >= 4 && (await execAshby("sending").catch(() => false)) !== true) break;
-      // The board flagged fields and the form is still here: fix them now.
-      if (i >= 3 && refill && round < 3) {
-        const flagged = await execAshby("errors").then((x) => (Array.isArray(x) ? x.filter((e) => e.path) : [])).catch(() => []);
-        if (flagged.length) break;
-      }
-    }
-    // A success that showed up just after the last look is still a success.
-    if ((await execAshby("submitted").catch(() => false)) === true) {
-      await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
-      showOverlay("✅ Auto-apply: submitted and recorded.", "success");
-      return autoReport("submitted", "");
-    }
-    const look = await execAshby("afterSubmit").catch(() => "");
-    if (typeof look === "string" && look) fileTrace.push(`after submit ${round + 1}: ${look}`);
-    // Ashby's bot check turned it away: pressing Submit again won't change that.
-    const formSaid = (await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((e) => !e.path && e.label === "form")?.text || "";
-    if (/spam|flagged|bot|suspicious/i.test(formSaid)) {
-      ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: [{ label: "form", path: "", note: `after Submit: ${formSaid}` }], reasons: traceNow() }).catch(() => {});
-      showOverlay(`⚠️ Auto-apply: Ashby's spam check turned this one away: "${formSaid}". Press Submit yourself.`, "warning");
-      return autoReport("needs_attention", `Ashby spam check: ${formSaid}`);
-    }
-    // Refused: refill what went missing (a dropped resume), let the AI fix
-    // every field the board flags, and press Submit again. Three rounds.
-    if (refill && round < 3) {
-      const n = await refill();
-      if (n) { showOverlay(`⏳ Auto-apply: Ashby refused it; fixed ${n} field${n === 1 ? "" : "s"}, submitting again (try ${round + 2} of 4)…`); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
-      // Nothing to fix: Ashby sometimes takes the same form on a second press
-      // (Applied Intuition, 2026-11-02). One more try after a pause.
-      if (round === 0) { showOverlay("⏳ Auto-apply: Ashby did not confirm; trying Submit once more…"); await sleep(1500); return autoSubmitAshby(manual, pendingJob, answersLog, refill, round + 1); }
-    }
-    const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
-    const said = errs.map((e) => e.text).filter(Boolean).slice(0, 2).join("; ");
-    ledger("filled", { ...jobMeta(pendingJob), answersLog, needsAttention: errs.slice(0, 8).map((e) => ({ label: e.label || e.path || "form", path: e.path || "", note: `after Submit: ${e.text}` })), reasons: traceNow() }).catch(() => {});
-    const open = [...new Set([...errs.filter((e) => e.path).map((e) => e.label || e.path), ...await scanEmpty()])].filter(Boolean);
-    if (open.length) window.__jwNotify.show(`Auto-apply: Ashby did not accept it after ${round + 1} tries. These need you, then press Submit:`, "warning", { items: open });
-    else showOverlay(`⚠️ Auto-apply: Ashby did not accept the submission${said ? `: ${said}` : ""}. Check the form and press Submit.`, "warning");
-    return autoReport("needs_attention", `Ashby did not accept the submission${said ? `: ${said}` : " (no message shown)"}`);
+  /** Submit through the shared flow (content/submit-flow.js): Submit even
+   *  with a field still open (the form says what it really wants), put back
+   *  what Ashby dropped (the resume), hand every flagged field to the AI with
+   *  the form's own words, Submit again. The resume is the one hard stop. */
+  async function autoSubmitAshby(manual, pendingJob, answersLog, refill = null, meta = {}) {
+    const scanNow = () => execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+    const r = await window.__jwSubmit({
+      name: "Ashby",
+      prefix: "Auto-apply",
+      say: (t, items) => (items ? window.__jwNotify.show(t, "warning", { items }) : showOverlay(t)),
+      button: ashbySubmitButton,
+      submitted: async () => { try { return (await execAshby("submitted")) === true; } catch { return !document.querySelector(".ashby-application-form-container"); } },
+      errors: async () => {
+        const now = await scanNow();
+        return (await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []))
+          .map((e) => ({ label: now.find((d) => d.id === e.path)?.label || e.label || "", text: e.text || "", path: e.path || "", form: !e.path }))
+          .filter((e) => e.form || e.label);
+      },
+      empty: async () => (await scanNow()).filter((d) => d.required && !d.filled && !d.survey && d.type !== "file").map((d) => d.label),
+      resumeMissing: async () => { const d = (await scanNow()).find((x) => x.id === "_systemfield_resume"); return d && !d.filled ? "Resume" : null; },
+      isFile: (label) => /^resume\b/i.test(label),
+      sending: async () => (await execAshby("sending").catch(() => false)) === true,
+      refill,
+      afterWatch: async (round) => {
+        const look = await execAshby("afterSubmit").catch(() => "");
+        if (typeof look === "string" && look) fileTrace.push(`after submit ${round + 1}: ${look}`);
+      },
+      reasons: traceNow,
+      ledger: (event, extra) => ledger(event, { ...jobMeta(pendingJob), ...extra }),
+      answersLog,
+      meta,
+      needs: [...manual.keys()],
+      // Ten seconds for Ashby to confirm; longer only while the application is
+      // still on its way (a second press then could send it twice).
+      quietMs: 10000,
+    });
+    return autoReport(r.status, r.note);
   }
 
   // ─── Overlay UI: the shared JobWatch card (content/notify.js) ─────────────
@@ -1708,12 +1652,10 @@
     // JobWatch filled goes in on its own, with the same repair rounds.
     {
       // After a refused Submit: fill again whatever the form has lost (Ashby
-      // can drop an uploaded resume), from the same computed answers.
-      // Then every field the board flags (or left empty) goes to the AI with
-      // its HTML and the board's own error text, which says what to change.
+      // can drop an uploaded resume), from the same computed answers. The
+      // shared flow then hands every flagged field to the AI.
       const refill = async () => {
         const now = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
-        const errs = await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
         const byPath = new Map(now.map((d) => [d.id, d]));
         let n = 0;
         // The resume always goes in, also where the form calls it optional.
@@ -1723,27 +1665,9 @@
           const r = await applyFill(f, pkg, byPath).catch(() => null);
           if (r?.ok) n++;
         }
-        if (!window.__jwRescue) return n;
-        const after2 = await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => now);
-        const targets = new Map(); // label -> error text
-        for (const e of errs) {
-          if (!e.path && e.label === "form") continue; // the whole form's message, not a field
-          const d = after2.find((x) => x.id === e.path);
-          const label = d?.label || e.label;
-          if (label && !targets.has(label)) targets.set(label, e.text);
-        }
-        for (const d of after2.filter((x) => x.required && !x.filled && !x.survey)) if (!targets.has(d.label)) targets.set(d.label, "");
-        // A file box is not the AI's to fill (the resume goes in from its bytes above).
-        for (const d of after2.filter((x) => x.type === "file" || x.id === "_systemfield_resume")) targets.delete(d.label);
-        for (const [label, error] of [...targets].slice(0, 10)) {
-          showOverlay(`🤖 JobWatch is asking AI to fix: ${label}`);
-          const r = await window.__jwRescue(label, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "", error, force: !!error }).catch(() => null);
-          console.log("[JobWatch] repair:", label, error, r);
-          if (r?.ok) { n++; answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
-        }
         return n;
       };
-      await autoSubmitAshby(manual, pendingJob, answersLog, refill);
+      await autoSubmitAshby(manual, pendingJob, answersLog, refill, { jobTitle: pkg.jobTitle || "", companyName: pkg.companyName || "" });
       return true;
     }
     // Otherwise never auto-submit. Watch for the person's own submission (30

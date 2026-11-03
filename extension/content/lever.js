@@ -93,70 +93,29 @@
   // ── Unattended auto-apply ─────────────────────────────────────────────────
   let AUTO = null;
   const autoReport = (status, note) => sendMsg({ type: "AUTO_RESULT", status, note }).catch(() => {});
-  function onScreen(el) {
-    const r = el.getBoundingClientRect();
-    const cs = getComputedStyle(el);
-    return r.width > 40 && r.height > 40 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity || 1) > 0.1 && r.bottom > 0 && r.top < innerHeight;
-  }
-  function captchaVisible() {
-    return [...document.querySelectorAll("iframe[src*='hcaptcha'][src*='challenge'], iframe[src*='recaptcha'][src*='bframe'], iframe[title*='challenge' i]")].some(onScreen);
-  }
-  /** Press Submit even when a field is listed for the person: the form says
-   *  what it really wants. Fields it marks go to the AI with the form's own
-   *  words, then Submit again; three repair rounds. Never in a test run
-   *  (jwNoSubmit), never without the resume. */
+  /** Submit through the shared flow (content/submit-flow.js): press Submit
+   *  even when a field is listed for the person (the form says what it really
+   *  wants); fields it marks go to the AI with the form's own words, then
+   *  Submit again. Never in a test run (jwNoSubmit), never without the resume. */
   async function autoSubmitLever(manual, pendingJob, answersLog, header = {}) {
-    if ((await chrome.storage.local.get("jwNoSubmit").catch(() => ({}))).jwNoSubmit) return autoReport("needs_attention", "test run: not submitted");
-    const scanNow = async () => (await lever("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []));
-    const resume = (await scanNow()).find((d) => d.type === "file" && /resume|cv/i.test(`${d.id} ${d.label}`));
-    if (resume && !resume.filled) {
-      banner("Auto-apply: the resume would not attach. Attach it and press Submit.", { items: [resume.label] });
-      return autoReport("needs_attention", "resume would not attach");
-    }
-    for (let round = 0; round <= 3; round++) {
-      const btn = document.querySelector("#btn-submit, #application-form button[type=submit], button.postings-btn[type=submit]");
-      if (!btn) return autoReport("needs_attention", "could not find Lever's Submit button");
-      banner(round ? `Auto-apply: submitting again (try ${round + 1} of 4)…` : "Auto-apply: submitting…");
-      btn.scrollIntoView({ block: "center" });
-      await sleep(3000 + Math.random() * 5000); // a person reads the form over before Submit
-      await sendMsg({ type: "AUTO_SUBMITTING" }).catch(() => {}); // the runner watches for the thank-you page
-      await lever("touched").catch(() => {});
-      btn.click();
-      let errs = [];
-      const t0 = Date.now();
-      while (Date.now() - t0 < 60 * 1000) {
-        await sleep(2000);
-        let done = false;
-        try { done = (await lever("submitted")) === true; } catch { done = !document.getElementById("application-form"); }
-        if (done) {
-          await ledger("submitted", { ...jobMeta(pendingJob), answersLog });
-          banner("Auto-apply: submitted and recorded.");
-          return autoReport("submitted", "");
-        }
-        if (captchaVisible()) {
-          banner("Auto-apply: Lever is showing a CAPTCHA. Solve it and press Submit.");
-          return autoReport("needs_attention", "CAPTCHA challenge");
-        }
-        errs = await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
-        if (errs.length && Date.now() - t0 > 6000) break;
-      }
-      if (!errs.length) return autoReport("needs_attention", "no confirmation from Lever after a minute");
-      if (round === 3 || !window.__jwRescue) break;
-      let fixed = 0;
-      for (const e of errs.slice(0, 8)) {
-        const label = e.label || e.path;
-        if (!label) continue;
-        banner(`Auto-apply: asking AI to fix: ${label}`);
-        const r = await window.__jwRescue(label, { jobTitle: header.jobTitle || "", companyName: header.companyName || "", error: e.text || "This field is required.", force: true }).catch(() => null);
-        log("repair:", label, e.text, r);
-        if (r?.ok) { fixed++; answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
-      }
-      if (!fixed) break;
-    }
-    const left = (await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).map((e) => e.label || e.text).filter(Boolean);
-    const list = left.length ? left : [...manual.keys()];
-    banner("Auto-apply: Lever did not accept it. These need you, then press Submit:", { items: list });
-    return autoReport("needs_attention", `Lever flagged: ${list.slice(0, 4).join("; ") || "the form"}`);
+    const scanNow = () => lever("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => []);
+    const r = await window.__jwSubmit({
+      name: "Lever",
+      prefix: "Auto-apply",
+      say: (t, items) => banner(t, items ? { items } : {}),
+      button: () => document.querySelector("#btn-submit, #application-form button[type=submit], button.postings-btn[type=submit]"),
+      submitted: async () => { try { return (await lever("submitted")) === true; } catch { return !document.getElementById("application-form"); } },
+      errors: async () => (await lever("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).map((e) => ({ label: e.label || e.path || "", text: e.text || "", path: e.path || "", form: !e.label && !e.path })),
+      empty: async () => (await scanNow()).filter((d) => d.required && !d.filled && d.type !== "file").map((d) => d.label),
+      resumeMissing: async () => { const d = (await scanNow()).find((x) => x.type === "file" && /resume|cv/i.test(`${x.id} ${x.label}`)); return d && !d.filled ? d.label : null; },
+      beforeClick: () => lever("touched").catch(() => {}),
+      ledger: (event, extra) => ledger(event, { ...jobMeta(pendingJob), ...extra }),
+      answersLog,
+      meta: { jobTitle: header.jobTitle || "", companyName: header.companyName || "" },
+      needs: [...manual.keys()],
+      quietMs: 30000,
+    });
+    return autoReport(r.status, r.note);
   }
 
   // ── Main ──────────────────────────────────────────────────────────────────
