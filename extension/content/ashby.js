@@ -1413,10 +1413,16 @@
   // The person presses the JobWatch button; it clicks Ashby's own Submit.
   // Nothing submits without that press. The existing submission watchers
   // record the application once Ashby shows its success page.
+  // By its words, never by type: every Ashby button is type=submit (the
+  // resume's Delete, "Upload file"), and clicking the first of those deleted
+  // the resume (Applied Intuition) or did nothing (Reducto), 2026-11-02.
   function ashbySubmitButton() {
-    const inForm = [...document.querySelectorAll(".ashby-application-form-container button, form button")];
-    return inForm.find((b) => b.type === "submit" || /submit application|^submit$/i.test((b.textContent || "").trim()))
-      || [...document.querySelectorAll("button")].find((b) => /submit application/i.test((b.textContent || "").trim()))
+    const ok = (b) => b.offsetParent !== null && !b.closest("[data-field-path]") && !b.closest("[class*='autofill' i]");
+    const all = [...document.querySelectorAll("button, input[type=submit]")].filter(ok);
+    const words = (b) => (b.textContent || b.value || "").replace(/\s+/g, " ").trim();
+    return all.find((b) => /^submit application$/i.test(words(b)))
+      || all.find((b) => /^(submit|submit your application|apply|send application)$/i.test(words(b)))
+      || all.find((b) => /\bsubmit application\b/i.test(words(b)))
       || null;
   }
   function submitAction(message, type) {
