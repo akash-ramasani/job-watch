@@ -4888,8 +4888,10 @@ exports.getAutoApplyQueue = onCall(
     // When the person last added a saved answer: jobs that waited on them are retried after it.
     const at = userSnap.exists ? userSnap.data()?.answersUpdatedAt : null;
     const answersUpdatedAt = at?.toMillis ? at.toMillis() : (Date.parse(at) || 0);
-    logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length}`);
-    return { queue, count: queue.length, answersUpdatedAt };
+    const st = queue.stats || {};
+    const line = (k) => (st[k] ? `${k} ${st[k].applied}/${st[k].total} applied, ${st[k].left} left` : `${k} ?`);
+    logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length} | ${line("ashby")} | ${line("greenhouse")}`);
+    return { queue, count: queue.length, answersUpdatedAt, stats: st };
   }
 );
 

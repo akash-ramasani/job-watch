@@ -107,6 +107,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
 
   const seen = new Set();
   const out = [];
+  // For the log: Ashby/Greenhouse jobs on the Jobs page, how many are applied to, how many are left.
+  const stats = { ashby: { total: 0, applied: 0 }, greenhouse: { total: 0, applied: 0 } };
   const lists = [...(allSnap.exists ? allSnap.data()?.jobs || [] : []), ...(recentSnap.exists ? recentSnap.data()?.jobs || [] : [])];
   for (const j of lists) {
     if (!j?.id || seen.has(j.id)) continue;
@@ -118,13 +120,15 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
-    if (applied.ids.has(j.id)) continue;
+    const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : "greenhouse"];
+    st.total++;
+    if (applied.ids.has(j.id)) { st.applied++; continue; }
     const applyUrl = applyUrlFor(j, feedSlugs);
     if (!applyUrl) continue;
     const key = ledger.formKeyFromUrl(applyUrl);
-    if (key && applied.forms.has(key.formKey)) continue;
+    if (key && applied.forms.has(key.formKey)) { st.applied++; continue; }
     const rk = ledger.roleKeyOf(j.companyName, j.title);
-    if (rk && applied.roles.has(rk)) continue;
+    if (rk && applied.roles.has(rk)) { st.applied++; continue; }
     // When the job came out: the board's date, or when JobWatch first saw it
     // if that is earlier (Greenhouse's date moves on every edit).
     const ms = (ts) => (ts?.toMillis ? ts.toMillis() : ts?._seconds ? ts._seconds * 1000 : (Date.parse(ts) || 0));
@@ -139,7 +143,11 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
   // Newest day first; within a day, the best match first; then the newest.
   const day = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
   out.sort((a, b) => day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
-  return out.slice(0, limit);
+  const list = out.slice(0, limit);
+  stats.ashby.left = out.filter((j) => j.source === "ashby").length;
+  stats.greenhouse.left = out.filter((j) => j.source === "greenhouse").length;
+  Object.defineProperty(list, "stats", { value: stats, enumerable: false });
+  return list;
 }
 
 module.exports = { buildQueue, applyUrlFor, feedSlug, resumeFileName };
