@@ -5,7 +5,7 @@
 // not in the person's profile. The extension runs the steps, looks again, and
 // asks for the next round (at most three).
 
-const PROFILE_KEYS = ["firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1",
+const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1",
   "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
   "clearanceStatus", "clearanceLevel", "usPersonExportControl", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];

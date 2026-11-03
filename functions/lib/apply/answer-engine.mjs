@@ -274,6 +274,10 @@ function classify(label, kind = "") {
   if (/record(ing|ed)\b.{0,60}(consent|interview)|interview recording|notetak|ai note|transcri(be|bing|ption)/.test(l)) return "recordingConsent";
   if (/\bon.?call\b/.test(l)) return "onCall";
   if (/previously worked in a remote|remote or hybrid environment|worked remotely before/.test(l)) return "remoteExperience";
+  // "Have you worked at a startup?" / "Do you have early-stage experience?"
+  if (choice && /\b(worked|work experience|experience|been)\b.{0,30}\b(start-?ups?|early[- ]stage (company|startup)|seed[- ]stage)\b/.test(l) && !/\b(want|would you|interested|open to|why)\b/.test(l)) return "startupExperience";
+  // "What was your major/minor?" / "Field of study": the subject, not a sentence.
+  if (text && /^(what (was|is|were) your |your )?(major|minor|major\/minor|field of study|area of study|course of study|concentration)\b|what did you (study|major in)/.test(l)) return "major";
   if (/have you heard of .{0,40} before/.test(l)) return "heardBefore";
   if (/student or new grad|are you (currently )?a student\b|^are you a new grad|current (senior|junior|student) graduating|graduating (between|in|by) .{0,30}\d{4}|expected graduation/.test(l)) return "studentOrNewGrad";
   // Willingness, not history: "Do you want to work 100% remote long-term?"
@@ -805,6 +809,19 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return q.required ? unanswered(why) : out([], SOURCE.NONE, 0, `left blank: ${why}`);
   }
   // Questions only the applicant can answer; a profile value unlocks them.
+  // Startups: the person's own list on the Profile page; without it the AI decides.
+  if (key === "startupExperience") {
+    if (!String(profile.startupCompanies || "").trim()) return unanswered("startup experience needs your input (set Startups on the Profile page)");
+    if (isSelect) { const m = matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/]); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `startups: ${profile.startupCompanies}`) : unanswered('no "Yes" option'); }
+    return out([{ name, value: "Yes" }], SOURCE.PROFILE, 1);
+  }
+  if (key === "major") {
+    const ed = (profile.education || [])[0] || {};
+    const deg = String(ed.degree || "");
+    const field = String(ed.field || ed.major || deg.split(/,\s*| in /i)[1] || "").trim();
+    if (!field) return q.required ? unanswered("no field of study on the resume") : out([], SOURCE.NONE, 0, "optional, skipped");
+    return out([{ name, value: field }], SOURCE.PROFILE, 1);
+  }
   if (key === "heardBefore" || key === "remoteExperience") {
     const v = key === "heardBefore" ? profile.heardOfCompanyBefore : profile.remoteExperience;
     if (v == null) return q.required ? unanswered(`${key} needs your input (set profile.${key === "heardBefore" ? "heardOfCompanyBefore" : "remoteExperience"})`) : out([], SOURCE.NONE, 0, "optional, skipped");

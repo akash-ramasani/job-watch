@@ -568,6 +568,9 @@
     }
     // A message for the whole form, right before or after the Submit button
     // ("Something went wrong", "flagged as spam", "try again").
+    // Ashby's server turned the last Submit away (content/ashby-net.js).
+    const last = (window.__jwNet?.submits || []).slice(-1)[0];
+    if (last && !last.ok && Date.now() - last.at < 5 * 60 * 1000) out.push({ path: null, label: "form", text: `Ashby replied ${last.status || "with no answer"}: ${last.errors.join("; ") || "no reason given"}`.slice(0, 240) });
     const text = nearSubmit();
     const m = text.match(/[^.!]*(went wrong|try again|could not|couldn't|unable to|failed|flagged|spam|not accepted|error)[^.!]*[.!]?/i);
     if (m && m[0].length < 240) out.push({ path: null, label: "form", text: m[0].trim().slice(0, 200) });
@@ -591,7 +594,8 @@
     const btn = [...document.querySelectorAll("button")].find((b) => /submit|submitting/i.test((b.textContent || "").trim()));
     const invalid = [...document.querySelectorAll("input:invalid, textarea:invalid, select:invalid")].filter((e) => e.type !== "hidden").map((e) => e.closest("[data-field-path]")?.dataset.fieldPath || e.name || e.id || e.type);
     const near = nearSubmit().slice(0, 200);
-    return `button "${(btn?.textContent || "none").trim().slice(0, 30)}"${btn?.disabled ? " disabled" : ""}; invalid boxes: ${invalid.length ? invalid.slice(0, 5).join(", ") : "none"}; near button: ${near || "(nothing)"}; url ${window.location.pathname.slice(-40)}`;
+    const subs = (window.__jwNet?.submits || []).map((x) => `${x.op || "?"} ${x.status}${x.ok ? " ok" : ""}${x.errors.length ? " " + x.errors.join(" | ") : ""} [${x.snippet.slice(0, 160)}]`);
+    return `submit replies: ${window.__jwNet ? (subs.length ? subs.join("; ").slice(0, 300) : "none sent") : "not watched"}; button "${(btn?.textContent || "none").trim().slice(0, 30)}"${btn?.disabled ? " disabled" : ""}; invalid boxes: ${invalid.length ? invalid.slice(0, 5).join(", ") : "none"}; near button: ${near || "(nothing)"}; url ${window.location.pathname.slice(-40)}`;
   }
 
   function submitted() {

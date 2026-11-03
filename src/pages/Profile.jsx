@@ -96,7 +96,7 @@ export default function Profile({ user, userMeta }) {
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "", gpa: "", satScore: "", actScore: "",
+    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
@@ -185,6 +185,7 @@ export default function Profile({ user, userMeta }) {
         hourlyRate: userMeta.hourlyRate || "",
         visaType: userMeta.visaType || "H-1B",
         citizenshipCountry: userMeta.citizenshipCountry || "",
+        startupCompanies: userMeta.startupCompanies || "",
         gpa: userMeta.gpa || "",
         satScore: userMeta.satScore || "",
         actScore: userMeta.actScore || "",
@@ -574,6 +575,10 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="citizenshipCountry" className="caps-label block mb-2">Citizenship</label>
                 <input id="citizenshipCountry" name="citizenshipCountry" type="text" value={formData.citizenshipCountry} onChange={handleChange} className="input-standard" placeholder="India" />
+              </div>
+              <div>
+                <label htmlFor="startupCompanies" className="caps-label block mb-2">Startups You Worked At</label>
+                <input id="startupCompanies" name="startupCompanies" type="text" value={formData.startupCompanies} onChange={handleChange} className="input-standard" placeholder="Runn Technologies" />
               </div>
               <div>
                 <label htmlFor="gpa" className="caps-label block mb-2">GPA</label>

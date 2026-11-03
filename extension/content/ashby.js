@@ -1337,7 +1337,7 @@
     if (manual.size || empty.length) console.log("[JobWatch] submitting with open fields; the form will say what it needs:", [...manual.keys(), ...empty]);
     const btn = ashbySubmitButton();
     if (!btn) return autoReport("needs_attention", "could not find Ashby's Submit button");
-    showOverlay("⏳ Auto-apply: submitting…");
+    showOverlay(`⏳ Auto-apply: submitting${round ? ` (try ${round + 1})` : ""}… Ashby can take up to 90 seconds to confirm.`);
     try {
       const res = (await execAshby("scan").then((x) => (Array.isArray(x) ? x : [])).catch(() => [])).find((d) => d.id === "_systemfield_resume");
       fileTrace.push(`before submit ${round + 1}: resume ${res ? (res.filled ? "shown" : "EMPTY") : "field absent"}`);

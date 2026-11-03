@@ -211,6 +211,12 @@ test("required fields from the 2026-10-12 Virta form and the live-form sweep are
   assert.deepEqual(buildProfileForJob(USER, RESUME, job({ descriptionHtml: "<p>Salary Range $114.5K – $148K</p>" }), { now: NOW }).jobSalaryRange, { lo: 114500, hi: 148000 });
   const remote = buildProfileForJob(USER, { ...RESUME, roles: [{ ...RESUME.roles[0], location: "Remote" }, RESUME.roles[1]] }, job(), { now: NOW });
   assert.equal(answer(F("Have you previously worked in a remote or hybrid environment?", "ValueSelect", { options: ["Yes, fully remote", "Yes, hybrid", "No"] }), { profile: remote }), "Yes, fully remote");
+  // Startups: the person's own list (Profile page); without it, the AI decides.
+  assert.match(answer(F("Have you worked at a startup?", "Boolean")), /^PARKED/);
+  assert.equal(answer(F("Have you worked at a startup?", "Boolean"), { profile: { ...p, startupCompanies: "Runn Technologies" } }), "Yes");
+  assert.equal(answer(F("Do you have experience working in an early-stage startup?", "ValueSelect", { options: ["Yes", "No"] }), { profile: { ...p, startupCompanies: "Runn" } }), "Yes");
+  // A major is the subject, not a sentence.
+  assert.equal(answer(F("What was your major/minor?", "String"), { profile: { ...p, education: [{ degree: "Master of Science, Computer Science", institution: "CSU East Bay" }] } }), "Computer Science");
 });
 
 test("live-form sweep (2026-10-12, 800 Ashby + Greenhouse forms): required fields that used to park", () => {
