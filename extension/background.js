@@ -588,7 +588,11 @@ async function autoDue(j, st) {
 
 async function autoState() {
   const { [AUTO_KEY]: st } = await chrome.storage.local.get(AUTO_KEY);
-  return st || { on: false, current: null, results: {}, startedAt: null };
+  // Always on: while the browser is open (and the person signed in), it applies.
+  const out = st || { current: null, results: {}, startedAt: Date.now() };
+  out.on = true;
+  out.results = out.results || {};
+  return out;
 }
 async function saveAuto(st) { await chrome.storage.local.set({ [AUTO_KEY]: st }); }
 
@@ -911,7 +915,7 @@ async function dailySummary() {
     m("offer") && `${m("offer")} offer${m("offer") === 1 ? "" : "s"}`, m("rejection") && `${m("rejection")} rejection${m("rejection") === 1 ? "" : "s"}`,
   ].filter(Boolean);
   if (!recent.length && !mail.length) return;
-  notify("JobWatch today", `${parts.join(", ")}.${st.on ? "" : " Auto-apply is off."}`);
+  notify("JobWatch today", `${parts.join(", ")}.`);
 }
 
 chrome.alarms.get("jwMailScan", (a) => { if (!a) chrome.alarms.create("jwMailScan", { delayInMinutes: 2, periodInMinutes: 30 }); });
@@ -956,14 +960,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         return;
       }
-      if (message.type === "AUTO_STOP") {
-        const st = await autoState();
-        st.on = false; st.idle = false; st.current = null;
-        await saveAuto(st);
-        keepAwake(false);
-        sendResponse({ ok: true });
-        return;
-      }
       if (message.type === "AUTO_RETRY") {
         // Jobs that needed the person or failed go back in the queue (after a fix).
         const st = await autoState();
@@ -981,14 +977,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       if (message.type === "AUTO_CLEAR") {
-        // Wipe the popup's counts and recent list. Auto-apply stops so nothing
-        // re-runs until the person starts it again; submitted jobs stay
-        // skipped (the server keeps them in applications).
+        // Wipe the popup's counts and recent list; auto-apply carries on.
+        // Submitted jobs stay skipped (the server keeps them in applications).
         const st = await autoState();
-        await saveAuto({ on: false, current: null, results: {}, startedAt: null });
+        await saveAuto({ on: true, current: st.current, results: {}, startedAt: Date.now() });
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
-        keepAwake(false);
         try { chrome.notifications.clear("jwNeeds"); } catch (_) { /* none */ }
+        autoTick();
         sendResponse({ ok: true, cleared: Object.keys(st.results || {}).length });
         return;
       }
