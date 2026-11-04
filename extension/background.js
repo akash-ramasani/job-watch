@@ -966,7 +966,10 @@ async function greenhouseCode(sinceMs) {
     const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, auth).then((r) => r.json());
     if (Number(msg.internalDate) < sinceMs - 120000) continue;
     const text = `${msg.snippet || ""} ${mailText(msg.payload)}`;
-    const hit = text.match(/(?:security|verification) code(?: field)?[^A-Za-z0-9]{0,80}?(?:application|below|is)?[:\s]+([A-Za-z0-9]{6,10})\b/i)
+    // "…into the security code field on your application: 92997866" (Stitch Fix:
+    // digits only), "Your security code is: aB3dE9fG", "…code below: …".
+    const hit = text.match(/(?:security|verification) code\b[^:.\n]{0,60}:\s*([A-Za-z0-9]{6,10})\b/i)
+      || text.match(/(?:security|verification) code(?: field)?[^A-Za-z0-9]{0,80}?(?:application|below|is)?[:\s]+([A-Za-z0-9]{6,10})\b/i)
       || text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])([A-Za-z0-9]{8})\b/);
     if (hit) return hit[1];
   }
