@@ -6,10 +6,17 @@
 // extension's auto-apply.
 // users/{uid}.savedAnswers: answers learned from the AI rescue ("learned") and
 // from what you typed on a form ("yours"); edit or delete any of them.
+// "Answer with AI" (draftMissingAnswers, functions/lib/apply/draftAnswers.cjs):
+// merges the questions that ask the same thing, answers what the background
+// note, Profile and resume say, and leaves the rest here for you.
 // Written by functions/lib/apply/savedAnswers.cjs; read by the answer engine.
 import React, { useEffect, useMemo, useState } from "react";
 import { doc, onSnapshot, updateDoc, deleteField, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../firebase";
+
+// Prefilled once; what you write here is saved with your account (users/{uid}.answerContext).
+const DEFAULT_ABOUT = "I am an F-1 OPT student from India, currently in the USA. I completed my Master's in Computer Science (MS CS) at California State University, East Bay (CSU East Bay).";
 
 const toMs = (v) => (v?.toMillis ? v.toMillis() : v ? Date.parse(v) || 0 : 0);
 
@@ -18,12 +25,15 @@ export default function SavedAnswersCard({ uid, notify }) {
   const [drafts, setDrafts] = useState({});
   const [editing, setEditing] = useState(null);
   const [busy, setBusy] = useState("");
+  const [about, setAbout] = useState(null); // null until the account's note loads
+  const [drafting, setDrafting] = useState(false);
 
   useEffect(() => {
     if (!uid) return undefined;
     return onSnapshot(doc(db, "users", uid), (snap) => {
       const d = snap.data() || {};
       setData({ saved: d.savedAnswers || {}, missing: d.missingAnswers || {} });
+      setAbout((a) => (a === null ? (d.answerContext || DEFAULT_ABOUT) : a));
     });
   }, [uid]);
 
@@ -49,6 +59,19 @@ export default function SavedAnswersCard({ uid, notify }) {
       setBusy("");
     }
   }
+  async function answerWithAi() {
+    setDrafting(true);
+    try {
+      const draft = httpsCallable(functions, "draftMissingAnswers", { timeout: 180000 });
+      const { data: r } = await draft({ about: String(about || "").trim() });
+      const parts = [`${r.answered} answered`, r.merged ? `${r.merged} duplicates merged` : "", r.waiting ? `${r.waiting} still need you` : ""].filter(Boolean);
+      notify?.(`${parts.join(", ")}. Check the answers under Saved answers.`, "success");
+    } catch (e) {
+      notify?.(`Could not answer with AI: ${e.message}`, "error");
+    } finally {
+      setDrafting(false);
+    }
+  }
   async function remove(field, key) {
     setBusy(key);
     try { await updateDoc(doc(db, "users", uid), { [`${field}.${key}`]: deleteField() }); }
@@ -62,6 +85,19 @@ export default function SavedAnswersCard({ uid, notify }) {
         <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">
           Needs your answer {missing.length > 0 && <span className="ml-1 rounded-full bg-amber-50 px-2 py-0.5 text-amber-700">{missing.length}</span>}
         </p>
+        {missing.length > 0 && (
+          <div className="mb-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+            <label className="text-sm font-semibold text-gray-900" htmlFor="answer-context">About you, for the AI</label>
+            <p className="mt-0.5 text-xs text-gray-500">The AI answers from this, your Profile and your resume. Questions it can't answer honestly stay here for you.</p>
+            <textarea
+              id="answer-context" rows={3} className="input-standard mt-2 w-full"
+              value={about ?? ""} onChange={(e) => setAbout(e.target.value)}
+            />
+            <button type="button" className="btn-primary mt-2" disabled={drafting || about === null} onClick={answerWithAi}>
+              {drafting ? "Answering…" : `Answer ${missing.length} with AI`}
+            </button>
+          </div>
+        )}
         {missing.length === 0 ? (
           <p className="text-sm text-gray-500">Nothing waiting. Questions no one could answer show up here.</p>
         ) : (

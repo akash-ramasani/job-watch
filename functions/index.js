@@ -136,6 +136,7 @@ const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
+const { draftAnswers, applyDrafts } = require("./lib/apply/draftAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
@@ -4999,6 +5000,36 @@ exports.learnAnswers = onCall({ region: REGION, maxInstances: 10 }, async (reque
   logger.info(`learnAnswers: uid=${uid} saved=${r.saved} missing=${r.missing}`);
   return r;
 });
+
+// "Answer with AI" on the Profile page: the open questions, grouped and
+// answered from the person's background note, profile and resume; the rest
+// stay for the person, one copy each (lib/apply/draftAnswers.cjs).
+exports.draftMissingAnswers = onCall(
+  { region: REGION, maxInstances: 5, memory: "512MiB", timeoutSeconds: 180, secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const about = String(request.data?.about ?? "").trim().slice(0, 2000);
+    const ref = db.collection("users").doc(uid);
+    if (request.data?.about !== undefined) await ref.set({ answerContext: about }, { merge: true });
+    const [userSnap, resumeSnap] = await Promise.all([ref.get(), ref.collection("resume").doc("profile").get()]);
+    const user = userSnap.data() || {};
+    const missing = user.missingAnswers || {};
+    if (!Object.keys(missing).length) return { answered: 0, waiting: 0, merged: 0 };
+    let groups;
+    try {
+      ({ groups } = await draftAnswers({ client: requireOpenAI(), model: RESUME_MODEL }, { missing, user, resume: resumeSnap.data() || {}, about: about || user.answerContext || "" }));
+    } catch (err) {
+      logger.error("draftMissingAnswers failed:", err);
+      if (isOutOfCredits(err)) throw new HttpsError("resource-exhausted", "The AI service is out of credits right now. Try again later.");
+      throw new HttpsError("internal", `Could not draft answers: ${err.message}`);
+    }
+    const r = applyDrafts(missing, groups, { FieldValue: admin.firestore.FieldValue });
+    if (Object.keys(r.update).length) await ref.update(r.update);
+    logger.info(`draftMissingAnswers: uid=${uid} questions=${Object.keys(missing).length} answered=${r.answered} waiting=${r.waiting} merged=${r.merged}`);
+    return { answered: r.answered, waiting: r.waiting, merged: r.merged };
+  }
+);
 
 // What companies wrote back: the extension sends recent Gmail messages
 // (sender, subject, snippet); matched ones are sorted by Claude and recorded
