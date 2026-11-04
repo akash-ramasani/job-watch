@@ -527,3 +527,16 @@ test("parsePlace reads city lists, ST - City, short names, and prefers the perso
   assert.equal(city("Mountain View, CA (Hybrid)"), "Mountain View, CA");
   assert.equal(city("Remote - US"), null);
 });
+
+test("office hubs listed in the details or the options; which job board brought you", () => {
+  const p = { city: "San Francisco", region: "California", country: "United States", heardAboutUs: "LinkedIn" };
+  const sel = (label, opts, description) => ({ label, required: true, description, fields: [{ name: "f", type: "multi_value_single_select", values: opts.map((o) => ({ label: o, value: o })) }] });
+  const hubs = "Are you located within 50 miles of one of the following office hubs";
+  const val = (q) => engine.answerQuestion(q, p, null).answers.map((a) => a.value);
+  assert.deepEqual(val(sel(hubs, ["Yes", "No"], "<p>San Francisco, New York, London</p>")), ["Yes"]);
+  assert.deepEqual(val(sel(hubs, ["Yes", "No"], "<p>New York, London</p>")), ["No"]);
+  assert.deepEqual(val(sel(hubs, ["Yes, New York", "Yes, San Francisco", "No"])), ["Yes, San Francisco"]);
+  assert.deepEqual(val(sel(hubs, ["Yes", "No"])), [], "hubs nowhere on the form: no guess");
+  const board = { label: "Please specify which job board brought you to Horizon3.", required: true, fields: [{ name: "t", type: "input_text" }] };
+  assert.deepEqual(val(board), ["LinkedIn"]);
+});

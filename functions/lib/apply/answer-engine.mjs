@@ -221,6 +221,8 @@ function classify(label, kind = "") {
   if (choice && /salary range aligned|(comfortable|ok|okay|fine|aligned)\b.{0,25}\bwith the (posted |listed |stated )?(salary|compensation|pay)( range| band)?|within (the|this) (posted |listed )?(salary|compensation|pay) range|range (meets?|aligns? with) your/.test(l)) return "salaryRangeOk";
   if (choice && /month (you|that you) (will|would|can|could) (be able to )?start|which month .{0,20}start|start month/.test(l)) return "startMonth";
   if (/how did you (learn|find out|find) about|where did you (hear|learn|find out) about/.test(l)) return "heardAboutUs";
+  // "Please specify which job board brought you to Horizon3."
+  if (/\bwhich (job ?board|website|site|platform|source)\b.{0,30}\b(brought|led|referred|directed) you\b/.test(l)) return "heardAboutUs";
   if (/country (you are|are you|you're|you) (planning|plan|intend|expect)(ing)? to work (from|in)|country (will|would) you (be )?work(ing)? from|which country .{0,20}work from/.test(l)) return "country";
   if (choice && /physically based in the office|which of the following best describes your (location|situation|proximity|relationship to the office)/.test(l)) return "willingToRelocate";
   if (choice && /^are you (able|willing|open) to work (from|in|out of|at) [a-z]/.test(l) && !/remote/.test(l)) return "locationComfortable";
@@ -284,6 +286,9 @@ function classify(label, kind = "") {
   if (choice && /(want|like|open|willing|comfortable|happy) .{0,25}\b(work|working|being) .{0,20}(100% |fully |entirely )?remote/.test(l) && !/previously|before|have you (ever )?worked/.test(l)) return "remoteOk";
   // "Do you currently live in the SF Bay Area OR Chicago Metro?" — a fact about the person.
   if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) (in|near|within) /.test(l) && (/:\s*\S/.test(l) || !/following|below|listed|these|one of/.test(l))) return "livesIn";
+  // "Are you located within 50 miles of one of the following office hubs" (Writer):
+  // the hubs are after a colon, in the details, or in the options.
+  if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) within \d+ ?(miles|mi|km|kilometers)\b/.test(l)) return "livesIn";
   // "Where are you located?" as a pick list (Montreal | Other).
   if (choice && /^where (are you|do you) (currently )?(located|based|live|reside)/.test(l)) return "whereLocated";
   // Procurement / contract-award involvement for this company: a conflict-of-interest check.
@@ -1601,9 +1606,19 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // named place is the applicant's own; otherwise No, which is simply true.
   if (key === "livesIn") {
     const body = norm(label);
-    const listed = body.includes(":") ? body.split(":").slice(1).join(":") : body.replace(/^.*?\b(in|near|within)\s+/, "");
-    const places = listed.replace(/[?.]/g, "").split(/\s*(?:\bor\b|\/|,|;|\bthe\b)\s*/).map((s) => s.trim()).filter((s) => s.length > 1);
     const mine = cityTerms(profile);
+    // An option naming the person's city ("Yes, San Francisco") is the answer.
+    if (isSelect) {
+      const city = findOnly(primary, mine.map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)));
+      if (city && !/^no\b/.test(norm(city.label))) return out([{ name, value: city.value }], SOURCE.PROFILE, 0.95, "lives there");
+    }
+    // The places: after a colon, else in the details ("following office hubs"), else the question itself.
+    const details = norm(String(q.description || "").replace(/<[^>]+>/g, " "));
+    const listed = body.includes(":") ? body.split(":").slice(1).join(":")
+      : /following|below|listed|these|one of/.test(body) ? details
+      : body.replace(/^.*?\b(in|near|within)\s+/, "");
+    if (!listed.trim()) return unanswered("the places this question lists are not on the form");
+    const places = listed.replace(/[?.]/g, "").split(/\s*(?:\bor\b|\/|,|;|\bthe\b)\s*/).map((s) => s.trim()).filter((s) => s.length > 1);
     const yes = places.some((p) => mine.some((t) => placeHit(p, t)) || /\b(united states|usa|us)\b/.test(p) && norm(profile.country || "") === "united states");
     const ans = yes ? "Yes" : "No";
     if (isSelect) { const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + ans.toLowerCase() + "\\b")]); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 0.95, yes ? "lives there" : "lives elsewhere") : unanswered(`no "${ans}" option`); }
