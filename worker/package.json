@@ -18,5 +18,6 @@
     "openai": "^6.49.0",
     "pdfkit": "^0.15.2",
     "playwright-core": "1.59"
-  }
+  },
+  "license": "UNLICENSED"
 }

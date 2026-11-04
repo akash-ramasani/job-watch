@@ -67,4 +67,4 @@ For developers, a standalone MCP server is included in `mcp-server/`. Connect it
 ---
 
 ## 📄 License
-MIT
+Proprietary. Copyright (c) 2026 Akash Ramasani. All rights reserved. See [LICENSE](LICENSE).
