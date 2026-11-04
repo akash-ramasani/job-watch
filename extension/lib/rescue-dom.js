@@ -43,21 +43,30 @@
       || e.closest?.("[role=option], [role=radio], [role=checkbox]"));
     const rank = (e) => (isOption(e) ? 2 : 0) + (nrm(e.textContent) === want ? 0 : 1);
     heads.sort((a, b) => rank(a) - rank(b));
-    for (const h of heads) {
-      let node = h;
-      for (let k = 0; node && k < 6 && node !== document.body; k++, node = node.parentElement) {
-        const controls = [...node.querySelectorAll(CONTROL)].filter((c) => visible(c) || c.type === "radio" || c.type === "checkbox");
-        if (!controls.length) continue;
-        // One question per block: stop before swallowing the next questions.
-        // (Option labels wrapping a checkbox or radio are answers, not questions.)
-        const questions = [...node.querySelectorAll("label, legend")].filter((l) => !l.querySelector("input, select, textarea")
-          && !(l.htmlFor && document.getElementById(l.htmlFor)?.matches?.("input[type=radio], input[type=checkbox]"))).length;
-        // A long <select>'s options are not the block's own text.
-        let textLen = node.textContent.length;
-        for (const sel of node.querySelectorAll("select")) textLen -= sel.textContent.length;
-        if (textLen > 4000 || questions > 12) break;
-        return node;
-      }
+    // The same question can sit on the page more than once ("End date month"
+    // in each Employment block and in Education): the one still empty and
+    // not greyed out is the one to fix.
+    const blocks = [];
+    for (const h of heads) { const b = blockOf(h); if (b && !blocks.includes(b)) blocks.push(b); }
+    const open = (b) => !filledOf(b) && [...b.querySelectorAll("input, select, textarea")].some((c) => !c.disabled && !c.closest("[aria-disabled='true'], [class*='is-disabled']"));
+    return blocks.find(open) || blocks[0] || null;
+  }
+
+  /** The smallest block around a question heading that holds its controls. */
+  function blockOf(h) {
+    let node = h;
+    for (let k = 0; node && k < 6 && node !== document.body; k++, node = node.parentElement) {
+      const controls = [...node.querySelectorAll(CONTROL)].filter((c) => visible(c) || c.type === "radio" || c.type === "checkbox");
+      if (!controls.length) continue;
+      // One question per block: stop before swallowing the next questions.
+      // (Option labels wrapping a checkbox or radio are answers, not questions.)
+      const questions = [...node.querySelectorAll("label, legend")].filter((l) => !l.querySelector("input, select, textarea")
+        && !(l.htmlFor && document.getElementById(l.htmlFor)?.matches?.("input[type=radio], input[type=checkbox]"))).length;
+      // A long <select>'s options are not the block's own text.
+      let textLen = node.textContent.length;
+      for (const sel of node.querySelectorAll("select")) textLen -= sel.textContent.length;
+      if (textLen > 4000 || questions > 12) break;
+      return node;
     }
     return null;
   }

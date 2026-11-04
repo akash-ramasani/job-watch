@@ -957,11 +957,17 @@ function mailText(payload) {
   return out.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
 }
 /** The code from the newest Greenhouse security-code email received after `sinceMs`, or "". */
-async function greenhouseCode(sinceMs) {
+async function greenhouseCode(sinceMs, retried = false) {
   const token = await gmailToken(false);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   const q = encodeURIComponent('from:greenhouse newer_than:1d (security code OR verification code)');
   const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=5`, auth).then((r) => r.json());
+  // An expired or revoked sign-in is an answer, not "no email yet" for three minutes.
+  if (list.error) {
+    // A stale sign-in: drop it and get a fresh one without asking, once.
+    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return greenhouseCode(sinceMs, true); }
+    throw new Error(`Gmail: ${list.error.message || list.error.code} (reconnect Gmail in the JobWatch popup)`);
+  }
   for (const m of list.messages || []) {
     const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, auth).then((r) => r.json());
     if (Number(msg.internalDate) < sinceMs - 120000) continue;
