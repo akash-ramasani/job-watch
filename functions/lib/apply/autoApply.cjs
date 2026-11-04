@@ -4,7 +4,7 @@
 // "related" rule the page uses: job types, AI/rule verdicts, visa
 // eligibility), newest day first and the best match first within a day, minus every job already applied to (by job id,
 // form key and company+title). Only matching jobs: a fit score of at least
-// MIN_SCORE (Good Match on the Jobs page; settings/preferences.autoApplyMinScore
+// MIN_SCORE (Partial Match on the Jobs page; settings/preferences.autoApplyMinScore
 // changes it, 0 takes every job), each sent with its tailored resume
 // (2026-11-03). No daily cap. Each entry carries the URL the runner opens: the
 // Ashby or Lever application page, or Greenhouse's own embedded form (a company's
@@ -12,7 +12,7 @@
 
 const { createAssistantContext, isRelatedJob } = require("../assistantTools.cjs");
 const { classifyTitle } = require("../jobFamilies.cjs");
-const MIN_SCORE = 60; // "Good Match" and up on the Jobs page
+const MIN_SCORE = 40; // "Partial Match" and up on the Jobs page
 const ledger = require("./ledger.cjs");
 
 const GH_SOURCES = new Set(["greenhouse"]);
