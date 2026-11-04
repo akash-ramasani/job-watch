@@ -62,3 +62,11 @@ test("tool calls: tool_use out, tool_result back, Claude's blocks replayed verba
   assert.deepEqual(sent[1], { role: "assistant", content: turn1 }, "thinking + tool_use replayed unchanged");
   assert.deepEqual(sent[2], { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "[3 jobs]" }] });
 });
+
+test("cache_system: the system part goes as one cached block; without it, a plain string", () => {
+  const { toMessagesParams } = require("../lib/claudeClient.cjs");
+  const cached = toMessagesParams({ cache_system: true, messages: [{ role: "system", content: "Rules" }, { role: "system", content: "Profile" }, { role: "user", content: "Job" }] }).params;
+  assert.deepEqual(cached.system, [{ type: "text", text: "Rules\n\nProfile", cache_control: { type: "ephemeral" } }]);
+  assert.deepEqual(cached.messages, [{ role: "user", content: [{ type: "text", text: "Job" }] }]);
+  assert.equal(toMessagesParams({ messages: [{ role: "system", content: "Rules" }, { role: "user", content: "Job" }] }).params.system, "Rules");
+});

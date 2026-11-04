@@ -71,6 +71,9 @@ const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "claude-haiku-5-5";
 const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "claude-opus-5-5";
 const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "claude-opus-5-5";
+// Tailored resumes run on every auto-applied job: Sonnet (half Opus's price)
+// writes them, and its draft-then-verify pair caches the profile part.
+const RESUME_MODEL = process.env.RESUME_MODEL || "claude-sonnet-5-5";
 const ASSISTANT_HISTORY_TURNS = 30; // messages of conversation the model sees
 const ASSISTANT_MESSAGE_MAX_CHARS = 6000;
 const ASSISTANT_TOOL_RESULT_MAX_CHARS = 60000;
@@ -129,7 +132,8 @@ const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
-const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-opus-5-5";
+// A stuck field: one small JSON plan per field, many per application. Haiku.
+const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");
@@ -193,7 +197,7 @@ function auditPick(userId, jobId) {
   return nodeCrypto.createHash("sha1").update(`${userId}|${jobId}`).digest()[0] % 100 < AUDIT_PERCENT;
 }
 // OpenAI: insufficient_quota. Anthropic: 400 "Your credit balance is too low".
-const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota|credit balance is too low/i.test(err?.message || "");
+const isOutOfCredits = (err) => err?.code === "insufficient_quota" || /no credits remaining|insufficient_quota|exceeded your current quota|credit balance is too low|reached your specified API usage limits?/i.test(err?.message || "");
 
 // ID-tracked sources (Workday, Oracle Recruiting Cloud): new jobs are detected
 // by req ID against users/{uid}/feedState/{feedId} instead of by the
@@ -4088,22 +4092,25 @@ Hard rules — violating any of them makes the output unusable:
   "projects": [{ "index": 0, "bullets": [{ "points": [0], "text": "..." }] }]
 }`;
 
-    const userPrompt = `## Job: ${jobTitle} at ${companyName}
-${jobDesc}
-
-## Candidate profile (JSON)
+    // The profile is the same for every job: it goes in the cached system
+    // part, the job after it.
+    const profilePrompt = `## Candidate profile (JSON)
 ${JSON.stringify(promptProfile)}`;
+    const userPrompt = `## Job: ${jobTitle} at ${companyName}
+${jobDesc}`;
 
     let draft;
     try {
       const completion = await client.chat.completions.create(
         {
-          model: OPENAI_SMART_MODEL,
+          model: RESUME_MODEL,
           temperature: 0.2,
           max_tokens: 8000,
           response_format: { type: "json_object" },
+          cache_system: true,
           messages: [
             { role: "system", content: systemPrompt },
+            { role: "system", content: profilePrompt },
             { role: "user", content: userPrompt },
           ],
         },
@@ -4210,7 +4217,7 @@ ${JSON.stringify(promptProfile)}`;
       try {
         const verify = await client.chat.completions.create(
           {
-            model: OPENAI_SMART_MODEL,
+            model: RESUME_MODEL,
             temperature: 0,
             max_tokens: 3000,
             response_format: { type: "json_object" },
@@ -4361,7 +4368,7 @@ Return ONLY JSON: { "unsupported": [ { "id": "r0:2", "reason": "short reason", "
       companyName,
       resume,
       matchReport,
-      model: OPENAI_SMART_MODEL,
+      model: RESUME_MODEL,
       createdAt: admin.firestore.Timestamp.now(),
     });
 

@@ -1011,7 +1011,9 @@ function stopReasons(rows) {
   const KINDS = [
     [/captcha/i, "CAPTCHA"], [/spam check|flagged as spam/i, "spam check"], [/resume would not attach|no resume/i, "resume upload"],
     [/security code/i, "security code"], [/salary|compensation|pay expectation/i, "salary number"], [/closed|no longer|not found|404/i, "posting closed"],
-    [/timed out|the tab was closed/i, "timed out"], [/did not accept|no confirmation|flagged/i, "refused at Submit"], [/needs you:|still empty|could not/i, "a question only you can answer"],
+    [/timed out|the tab was closed/i, "timed out"],
+    [/ flagged: /i, "fields the form marked after Submit"], [/no message shown|no confirmation/i, "no answer after Submit"],
+    [/did not accept/i, "refused at Submit"], [/Submit button/i, "no Submit button"], [/needs you:|still empty|could not/i, "a question only you can answer"],
   ];
   const count = new Map();
   for (const r of rows) {

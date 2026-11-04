@@ -62,7 +62,9 @@ function toMessagesParams(req) {
   const wantsJson = ["json_object", "json_schema"].includes(req.response_format?.type);
   if (wantsJson) system.push("Respond with only a valid JSON object: no markdown fences, no text before or after it.");
   const params = { messages };
-  if (system.length) params.system = system.join("\n\n");
+  // cache_system: the system part repeats across calls (instructions, a
+  // profile); one cache breakpoint at its end, the varying part after it.
+  if (system.length) params.system = req.cache_system ? [{ type: "text", text: system.join("\n\n"), cache_control: { type: "ephemeral" } }] : system.join("\n\n");
   if (Array.isArray(req.tools) && req.tools.length) {
     params.tools = req.tools.filter((t) => t?.type === "function" && t.function?.name).map((t) => ({
       name: t.function.name,
