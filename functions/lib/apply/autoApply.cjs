@@ -3,13 +3,16 @@
 // Every Ashby, Greenhouse and Lever job on the person's Jobs page (the same
 // "related" rule the page uses: job types, AI/rule verdicts, visa
 // eligibility), newest day first and the best match first within a day, minus every job already applied to (by job id,
-// form key and company+title). No score floor and no daily cap: the person
-// asked for all of them. Each entry carries the URL the runner opens: the
+// form key and company+title). Only matching jobs: a fit score of at least
+// MIN_SCORE (Good Match on the Jobs page; settings/preferences.autoApplyMinScore
+// changes it, 0 takes every job), each sent with its tailored resume
+// (2026-11-03). No daily cap. Each entry carries the URL the runner opens: the
 // Ashby or Lever application page, or Greenhouse's own embedded form (a company's
 // careers site may wrap it in an iframe the runner cannot drive).
 
 const { createAssistantContext, isRelatedJob } = require("../assistantTools.cjs");
 const { classifyTitle } = require("../jobFamilies.cjs");
+const MIN_SCORE = 60; // "Good Match" and up on the Jobs page
 const ledger = require("./ledger.cjs");
 
 const GH_SOURCES = new Set(["greenhouse"]);
@@ -89,6 +92,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     ctx.scores(), ctx.jobTypes(), ctx.sponsorship(), ctx.prefs(),
   ]);
   // Companies the person hid on the Jobs page (settings/preferences.excludedCompanies).
+  const minScore = Number.isFinite(Number(prefs?.autoApplyMinScore)) ? Number(prefs.autoApplyMinScore) : MIN_SCORE;
   const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
   const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
@@ -124,6 +128,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     // person's job types. "GTM Systems Engineer" is software and sales;
     // "Test & Launch Operations Engineer" is operations (2026-11-03).
     if (!scores[j.id] && Array.isArray(jobTypes) && jobTypes.length && fam.length && !fam.every((f) => jobTypes.includes(f))) continue;
+    // A matching job only; an unscored one waits for its score.
+    if (minScore > 0 && !(typeof scores[j.id]?.score === "number" && scores[j.id].score >= minScore)) continue;
     const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse"];
     st.total++;
     if (applied.ids.has(j.id)) { st.applied++; continue; }

@@ -48,7 +48,7 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
   ];
   const data = {
     "users/A/aggregations/allJobs": { jobs }, "users/A/aggregations/recentJobs": { jobs: [] },
-    "users/U/aggregations/myJobScores": { scores: { j2: { score: 60 }, j8: { score: 90 } } }, "users/U/settings/preferences": { jobTypes: ["software"], excludedCompanies: ["Roblox"] },
+    "users/U/aggregations/myJobScores": { scores: { j2: { score: 60 }, j8: { score: 90 } } }, "users/U/settings/preferences": { jobTypes: ["software"], excludedCompanies: ["Roblox"], autoApplyMinScore: 0 },
     "users/U": { requiresSponsorship: "Yes" }, "users/U/resume/profile": {},
   };
   const coll = {
@@ -68,4 +68,9 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
   assert.equal(q[3].applyUrl, "https://job-boards.greenhouse.io/embed/job_app?for=stitchfix&token=111");
   assert.equal(q[2].source, "ashby");
   assert.equal(q[1].source, "lever");
+  // By default only matching jobs: a score of 60 (Good Match) or more; unscored ones wait.
+  delete data["users/U/settings/preferences"].autoApplyMinScore;
+  assert.deepEqual((await buildQueue(db, "U", { adminUid: "A" })).map((j) => j.jobId), ["j8", "j2"]);
+  data["users/U/aggregations/myJobScores"].scores.j2 = { score: 59 };
+  assert.deepEqual((await buildQueue(db, "U", { adminUid: "A" })).map((j) => j.jobId), ["j8"]);
 });

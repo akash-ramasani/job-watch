@@ -815,7 +815,13 @@ async function autoTick() {
           if (first) notify("Auto-apply paused: the AI is out of credits", "No tailored resumes or AI answers until credits are added (console.anthropic.com → Billing). JobWatch checks again every 15 minutes and carries on by itself.");
           break;
         }
-        if (tailored?.pdfBase64) await withAutoLock(async () => {
+        // Only with its tailored resume: no generic applications. The job
+        // stops as an error and is tried again later (AUTO_RETRY_MS).
+        if (!tailored?.pdfBase64) {
+          await autoFinish({ status: "error", note: `no tailored resume: ${String(tailored?.error || "not made").slice(0, 200)}` }, null, job.jobId);
+          continue;
+        }
+        await withAutoLock(async () => {
           const st = await autoState();
           if (st.aiDownSince) { delete st.aiDownSince; await saveAuto(st); notify("Auto-apply is back on", "The AI is answering again; applications carry on."); }
         });
@@ -1009,7 +1015,7 @@ async function scanApplicationMail() {
 /** Stop notes grouped into a few plain reasons, most common first. */
 function stopReasons(rows) {
   const KINDS = [
-    [/captcha/i, "CAPTCHA"], [/spam check|flagged as spam/i, "spam check"], [/resume would not attach|no resume/i, "resume upload"],
+    [/captcha/i, "CAPTCHA"], [/no tailored resume/i, "tailored resume not made"], [/spam check|flagged as spam/i, "spam check"], [/resume would not attach|no resume/i, "resume upload"],
     [/security code/i, "security code"], [/salary|compensation|pay expectation/i, "salary number"], [/closed|no longer|not found|404/i, "posting closed"],
     [/timed out|the tab was closed/i, "timed out"],
     [/ flagged: /i, "fields the form marked after Submit"], [/no message shown|no confirmation/i, "no answer after Submit"],
