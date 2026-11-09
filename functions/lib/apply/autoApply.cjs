@@ -81,7 +81,7 @@ function resumeFileName(fullName, jobTitle) {
  * companyName, externalId, locationName, postedAt }]; source is "ashby",
  * "greenhouse" or "lever".
  */
-async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
+async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null } = {}) {
   const ctx = createAssistantContext(db, uid, { adminUid });
   const aggs = db.collection("users").doc(adminUid).collection("aggregations");
   const [allSnap, recentSnap, feedsSnap, appsSnap, scores, jobTypes, sponsorship, prefs] = await Promise.all([
@@ -122,6 +122,9 @@ async function buildQueue(db, uid, { adminUid, limit = 2000 } = {}) {
     if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
+    // The US filter again, as it reads today: jobs saved under an older one
+    // ("-REMOTE, BULGARIA-" passed on its bare "REMOTE") are left out.
+    if (typeof locationOk === "function" && j.locationName && !locationOk(j.locationName)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
     // Not scored yet (the AI is behind or down): only titles wholly in the

@@ -35,3 +35,11 @@ test("mixed US + foreign location lists are kept", () => {
     assert.equal(keeps(loc), true, loc);
   }
 });
+
+test("remote in another country is not US remote (Smartsheet Bulgaria)", () => {
+  assert.equal(keeps("-REMOTE, BULGARIA-"), false);
+  assert.equal(keeps("Remote, Poland"), false);
+  assert.equal(keeps("-REMOTE, USA-"), true);
+  assert.equal(keeps("Remote"), true);
+  assert.equal(keeps("Remote US or Bulgaria"), true);
+});

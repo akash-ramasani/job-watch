@@ -2764,17 +2764,19 @@ function jobMatchesLocationFilter(job) {
   const cityState = foreign ? null : String(tokens[0] || "").match(/,\s*([A-Z]{2})\s*(?:$|[,;|/(])/);
   if (cityState && ALL_STATE_CODES.has(cityState[1])) return true;
   for (const t of tokens) {
-    if (locationTokenMatches(t, { codes: !foreign })) return true;
+    // A bare "Remote" piece of "-REMOTE, BULGARIA-" or "Remote, Poland" is
+    // remote in that country, not in the US (Smartsheet, 2026-11-09).
+    if (locationTokenMatches(t, { codes: !foreign, remote: !foreign })) return true;
   }
   return false;
 }
 
-function locationTokenMatches(token, { codes = true } = {}) {
+function locationTokenMatches(token, { codes = true, remote = true } = {}) {
   const raw = String(token || "");
   if (!raw) return false;
   const n = normalizeText(raw);
 
-  if (NORM.remote.has(n)) return true;
+  if (remote && NORM.remote.has(n)) return true;
 
   for (const city of NORM.cities) {
     if (n.includes(city)) return true;
@@ -2795,7 +2797,7 @@ function locationTokenMatches(token, { codes = true } = {}) {
   // remote ("Remote - Canada"), but not over an explicit US ("US or Canada").
   const text = raw.replace(/[-–—_]+/g, " ");
   if (US_SIGNAL_RE.test(text)) return true;
-  if (ANYWHERE_RE.test(text) && !NON_US_LOCATION_RE.test(text) && !NON_US_REMOTE_RE.test(text)) return true;
+  if (remote && ANYWHERE_RE.test(text) && !NON_US_LOCATION_RE.test(text) && !NON_US_REMOTE_RE.test(text)) return true;
 
   return false;
 }
@@ -4912,7 +4914,7 @@ exports.getAutoApplyQueue = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const [queue, userSnap] = await Promise.all([buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID }), db.collection("users").doc(uid).get()]);
+    const [queue, userSnap] = await Promise.all([buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID, locationOk: (name) => jobMatchesLocationFilter({ locationTokens: extractLocationTokens(name) }) }), db.collection("users").doc(uid).get()]);
     // When the person last added a saved answer: jobs that waited on them are retried after it.
     const at = userSnap.exists ? userSnap.data()?.answersUpdatedAt : null;
     const answersUpdatedAt = at?.toMillis ? at.toMillis() : (Date.parse(at) || 0);

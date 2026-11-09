@@ -766,7 +766,15 @@ async function autoFinishNow(result, tabId, jobId) {
 /** Auto-apply's own minimized window: the jobs stay out of the person's tab
  *  strip, and a person's browser does not grow three hidden tabs at a time.
  *  Falls back to a background tab where a window cannot be made. */
-async function openJobTab(url) {
+let jobWindowLock = Promise.resolve();
+/** One at a time: three jobs start together, and each used to find no job
+ *  window yet and make its own (three windows of one tab each). */
+function openJobTab(url) {
+  const run = jobWindowLock.then(() => openJobTabNow(url));
+  jobWindowLock = run.catch(() => {});
+  return run;
+}
+async function openJobTabNow(url) {
   try {
     // Session storage, not local: window ids restart at 1 when the browser
     // restarts, so a remembered id could name the person's own window and jobs
@@ -774,14 +782,15 @@ async function openJobTab(url) {
     chrome.storage.local.remove("jwJobWindow").catch(() => {});
     const { jwJobWindow } = await chrome.storage.session.get("jwJobWindow");
     let win = jwJobWindow ? await chrome.windows.get(jwJobWindow).catch(() => null) : null;
-    // The person is using the job window (finishing a "needs you"): leave it
-    // alone and start a fresh minimized one rather than switch their tab.
-    if (win && (win.focused || win.type !== "normal")) win = null;
+    if (win && win.type !== "normal") win = null;
     if (!win) {
       win = await chrome.windows.create({ url, state: "minimized", focused: false });
       await chrome.storage.session.set({ jwJobWindow: win.id });
       return win.tabs[0];
     }
+    // The person is looking at the job window (finishing a "needs you"): the
+    // new job opens as a background tab there, so their tab does not switch.
+    if (win.focused) return await chrome.tabs.create({ windowId: win.id, url, active: false });
     // Restored but in the background: tuck it away again before adding a job.
     if (win.state !== "minimized") await chrome.windows.update(win.id, { state: "minimized" }).catch(() => {});
     return await chrome.tabs.create({ windowId: win.id, url, active: true });
