@@ -992,8 +992,13 @@ function mailText(payload) {
   walk(payload);
   return out.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
 }
-/** The code from the newest Greenhouse security-code email received after `sinceMs`, or "". */
-async function greenhouseCode(sinceMs, retried = false) {
+/** The code from the newest Greenhouse security-code email received after
+ *  `sinceMs` that no tab was given before, or "". Two applications to the same
+ *  company minutes apart (three run at once) each get their own email's code:
+ *  a code is handed out once (a second ask from the same tab means the first
+ *  was wrong), and an email naming the tab's company comes first (Smartsheet,
+ *  2026-11-09: one form took the other's code twice). */
+async function greenhouseCode(sinceMs, retried = false, { tabId = null, company = "" } = {}) {
   const token = await gmailToken(false);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   const q = encodeURIComponent('from:greenhouse newer_than:1d (security code OR verification code)');
@@ -1001,9 +1006,14 @@ async function greenhouseCode(sinceMs, retried = false) {
   // An expired or revoked sign-in is an answer, not "no email yet" for three minutes.
   if (list.error) {
     // A stale sign-in: drop it and get a fresh one without asking, once.
-    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return greenhouseCode(sinceMs, true); }
+    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return greenhouseCode(sinceMs, true, { tabId, company }); }
     throw new Error(`Gmail: ${list.error.message || list.error.code} (reconnect Gmail in the JobWatch popup)`);
   }
+  const { jwGhCodes = {} } = await chrome.storage.local.get("jwGhCodes");
+  const day = Date.now() - 864e5;
+  for (const k of Object.keys(jwGhCodes)) if (jwGhCodes[k].at < day) delete jwGhCodes[k];
+  const co = String(company || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const found = [];
   for (const m of list.messages || []) {
     const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, auth).then((r) => r.json());
     if (Number(msg.internalDate) < sinceMs - 120000) continue;
@@ -1013,9 +1023,17 @@ async function greenhouseCode(sinceMs, retried = false) {
     const hit = text.match(/(?:security|verification) code\b[^:.\n]{0,60}:\s*([A-Za-z0-9]{6,10})\b/i)
       || text.match(/(?:security|verification) code(?: field)?[^A-Za-z0-9]{0,80}?(?:application|below|is)?[:\s]+([A-Za-z0-9]{6,10})\b/i)
       || text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])([A-Za-z0-9]{8})\b/);
-    if (hit) return hit[1];
+    if (!hit || jwGhCodes[hit[1]]) continue; // handed out before: another form's, or this one's wrong one
+    const subject = (msg.payload?.headers || []).find((h) => /^subject$/i.test(h.name))?.value || "";
+    const names = co && ` ${`${subject} ${text}`.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `.includes(` ${co} `);
+    found.push({ code: hit[1], at: Number(msg.internalDate), names });
   }
-  return "";
+  // Newest first, the company's own email before any other.
+  const pick = found.find((f) => f.names) || found[0];
+  if (!pick) return "";
+  jwGhCodes[pick.code] = { tabId, at: Date.now() };
+  await chrome.storage.local.set({ jwGhCodes });
+  return pick.code;
 }
 
 // ─── Replies from companies (Gmail) ──────────────────────────────────────────
@@ -1212,7 +1230,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const t0 = Date.now();
           let code = "";
           while (!code && Date.now() - t0 < 3 * 60 * 1000) {
-            code = await greenhouseCode(Number(message.since) || t0);
+            code = await greenhouseCode(Number(message.since) || t0, false, { tabId: sender?.tab?.id ?? null, company: (await autoJobForTab(sender?.tab?.id))?.companyName || message.company || "" });
             if (!code) await new Promise((r) => setTimeout(r, 10000));
           }
           sendResponse(code ? { ok: true, code } : { ok: false, error: "no security code email arrived in 3 minutes" });

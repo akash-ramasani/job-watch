@@ -642,7 +642,7 @@
       quietMs: 30000,
       code: {
         needed: () => codeInputs().length > 0,
-        fetch: (since) => sendMsg({ type: "GET_GH_CODE", since }),
+        fetch: (since) => sendMsg({ type: "GET_GH_CODE", since, company: new URLSearchParams(location.search).get("for") || location.pathname.split("/")[1] || "" }),
         enter: async (code) => (await sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghCode", value: code }))?.result || { ok: false },
       },
     });
