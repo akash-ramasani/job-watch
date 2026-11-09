@@ -218,5 +218,43 @@
     return [...new Set(out.filter(Boolean))].join("; ").slice(0, 300);
   }
 
-  window.__jwRescueDom = { snapshot, act, valueOf };
+  /** Every question on the page with the answer it holds now, in page order:
+   *  [{ question, answer, required }] for the review before Submit. File
+   *  boxes, option labels and hidden blocks are left out. */
+  function formAnswers() {
+    const out = [];
+    const seen = new Set();
+    const heads = [...document.querySelectorAll("label, legend")].filter((h) => !h.querySelector("input, select, textarea")
+      && !(h.htmlFor && document.getElementById(h.htmlFor)?.matches?.("input[type=radio], input[type=checkbox], input[type=file]")));
+    for (const h of heads) {
+      const question = String(h.textContent || "").replace(/[*✱]/g, " ").replace(/\s+/g, " ").trim();
+      if (!question || question.length > 1200) continue;
+      const own = h.htmlFor && document.getElementById(h.htmlFor);
+      const block = blockOf(h);
+      if (!block || seen.has(block) || !visible(block)) continue;
+      if (own && own.type === "file") continue;
+      if (block.querySelector("input[type=file]") && !block.querySelector("textarea, select, input[type=text]")) continue;
+      seen.add(block);
+      out.push({ question: question.slice(0, 600), answer: valueIn(block), required: requiredOf(block, question) });
+      if (out.length >= 120) break;
+    }
+    return out;
+  }
+  /** The answer a block holds (like valueOf, for a block already found, and
+   *  not cut at 300 characters: the review must see a long answer whole). */
+  function valueIn(block) {
+    const vals = [];
+    for (const el of block.querySelectorAll("input, select, textarea")) {
+      if (["hidden", "file", "submit", "button", "password"].includes(el.type)) continue;
+      if (el.type === "radio" || el.type === "checkbox") { if (el.checked) vals.push((el.labels?.[0]?.textContent || el.value || "").trim()); continue; }
+      if (el.tagName === "SELECT") { const t = el.options[el.selectedIndex]?.textContent?.trim() || ""; if (el.value && !PLACEHOLDER.test(t)) vals.push(t); continue; }
+      // A picker's search box holds typing, not the choice.
+      if (el.getAttribute("role") === "combobox" || el.closest("[class*=select__] , [class*=Select]")) continue;
+      if (el.value?.trim()) vals.push(el.value.trim());
+    }
+    for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) vals.push(el.textContent.replace(/\s+/g, " ").trim());
+    return [...new Set(vals.filter(Boolean))].join("; ").slice(0, 1500);
+  }
+
+  window.__jwRescueDom = { snapshot, act, valueOf, formAnswers };
 })();

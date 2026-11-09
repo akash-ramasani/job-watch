@@ -106,6 +106,28 @@
     return r;
   };
 
+  // The check of the whole form before Submit (functions/lib/apply/review.cjs):
+  // every question with its answer goes to Claude once; each answer it calls
+  // wrong goes to the rescue above with the problem as the field's error.
+  //   await __jwReview(meta, say) -> { ok, issues, fixed: [issue], left: [issue] }
+  window.__jwReview = async function review(meta = {}, say = () => {}) {
+    let items = [];
+    try { items = window.__jwRescueDom?.formAnswers() || []; } catch (e) { console.warn("[JobWatch/Review] read failed:", e.message); }
+    if (!items.length) return { ok: true, issues: [], fixed: [], left: [] };
+    const r = await send({ type: "REVIEW_FORM", items, jobTitle: meta.jobTitle || "", companyName: meta.companyName || "" });
+    if (!r?.ok) return { ok: false, error: r?.error || "review failed", issues: [], fixed: [], left: [] };
+    const issues = Array.isArray(r.issues) ? r.issues : [];
+    const fixed = [];
+    const left = [];
+    for (const i of issues) {
+      say(`fixing before Submit: ${String(i.question).slice(0, 90)}`);
+      const res = await window.__jwRescue(i.question, { ...meta, force: true, error: `${i.problem}${i.fix ? ` The right answer: ${i.fix}` : ""}` });
+      console.log("[JobWatch/Review]", i, res);
+      (res?.ok ? fixed : left).push({ ...i, answer: res?.answer || "", why: res?.why || "" });
+    }
+    return { ok: true, issues, fixed, left };
+  };
+
   window.__jwLearnManual = function learnManual(questions, meta = {}) {
     const list = [...new Set((questions || []).filter(Boolean))].slice(0, 30);
     if (!list.length) return;

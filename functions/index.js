@@ -132,8 +132,11 @@ const { prepareAshbyApplication } = require("./lib/apply/ashby.cjs");
 const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
+const { reviewForm } = require("./lib/apply/review.cjs");
 // A stuck field: one small JSON plan per field, many per application. Haiku.
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
+// The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
+const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-sonnet-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
 const { draftAnswers, applyDrafts } = require("./lib/apply/draftAnswers.cjs");
@@ -4986,6 +4989,32 @@ exports.rescueField = onCall(
       userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
     logger.info(`rescueField: uid=${uid} round=${d.round || 1} q="${String(d.question).slice(0, 80)}" steps=${plan.steps.length} done=${plan.done} cannot="${plan.cannot}" ms=${Date.now() - t0}`);
     return plan;
+  }
+);
+
+// The whole filled form, right before Submit: Claude lists the answers that
+// are wrong (a code in a question box, an empty signing date, a follow-up
+// that contradicts the answer before it); the extension fixes each one with
+// the AI rescue before pressing Submit (lib/apply/review.cjs).
+exports.reviewApplication = onCall(
+  { region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 90, secrets: [ANTHROPIC_API_KEY] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    const d = request.data || {};
+    if (!Array.isArray(d.items)) throw new HttpsError("invalid-argument", "items is required.");
+    const key = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
+    if (!/^sk-ant-/.test(key)) throw new HttpsError("failed-precondition", "The Anthropic key is not configured.");
+    if (!Anthropic) Anthropic = require("@anthropic-ai/sdk");
+    const [userSnap, resumeSnap] = await Promise.all([
+      db.collection("users").doc(uid).get(),
+      db.collection("users").doc(uid).collection("resume").doc("profile").get(),
+    ]);
+    const t0 = Date.now();
+    const r = await reviewForm({ anthropic: new Anthropic({ apiKey: key, maxRetries: 2 }), model: REVIEW_MODEL }, d,
+      userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
+    logger.info(`reviewApplication: uid=${uid} company="${String(d.companyName || "").slice(0, 60)}" items=${d.items.length} issues=${r.issues.length} ${r.issues.map((i) => `[${i.severity}] ${i.question.slice(0, 50)}: ${i.problem.slice(0, 80)}`).join(" | ")} ms=${Date.now() - t0}`);
+    return r;
   }
 );
 

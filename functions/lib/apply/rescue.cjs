@@ -128,4 +128,4 @@ async function rescueField(deps, input, user, resume) {
   return cleanPlan(plan, html);
 }
 
-module.exports = { rescueField, cleanPlan, profileSummary, SCHEMA };
+module.exports = { rescueField, cleanPlan, profileSummary, todayFor, SCHEMA };

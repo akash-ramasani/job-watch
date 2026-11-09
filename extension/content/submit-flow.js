@@ -31,6 +31,7 @@
 //   isFile(label)        a file box (never the AI's)
 //   code                 { needed(), fetch(since), enter(code) } emailed security code
 //   quietMs              no answer for this long (and not sending): look again (default 30 s)
+//   noReview             skip the AI check of the whole form before the first press
 (function () {
   "use strict";
   if (window.__jwSubmit) return;
@@ -68,6 +69,25 @@
     if (noResume) { say("the resume would not attach. Attach it and press Submit.", [noResume]); return { status: "needs_attention", note: "resume would not attach" }; }
     // A required field went empty since the fill: put it back before the first press.
     if (b.refill && (await safe(() => b.empty(), [])).length) await safe(() => b.refill(), 0);
+
+    // One look at the whole form before the first press: answers that are
+    // wrong next to the rest (a code in a question box, an empty signing date,
+    // "details" after a No) are fixed by the AI first. One still wrong stops
+    // here for the person rather than going in wrong.
+    if (window.__jwReview && !b.noReview) {
+      say("checking every answer before Submit…");
+      const rv = await safe(() => window.__jwReview(meta, (t) => say(t)), null);
+      log("review:", rv);
+      for (const f of rv?.fixed || []) answersLog[`review:${f.question}`] = { label: f.question, answer: f.answer || f.fix || "(fixed by review)", type: "ai-review", source: "ai" };
+      const wrong = (rv?.left || []).filter((i) => i.severity === "wrong");
+      if (wrong.length) {
+        const needsAttention = wrong.map((i) => ({ label: i.question.slice(0, 200), path: "", note: `review before Submit: ${i.problem}${i.fix ? ` (should be: ${i.fix})` : ""}` }));
+        b.ledger("filled", { answersLog, needsAttention, reasons: await safe(() => b.reasons?.(), []) }).catch?.(() => {});
+        if (window.__jwLearnManual) window.__jwLearnManual(wrong.map((i) => i.question), meta);
+        say("these answers look wrong and could not be fixed. Check them, then press Submit:", wrong.map((i) => `${i.question.slice(0, 80)}: ${i.problem}`));
+        return { status: "needs_attention", note: `review: ${wrong.map((i) => `${i.question.slice(0, 50)}: ${i.problem}`).slice(0, 3).join("; ")}` };
+      }
+    }
 
     let codeTries = 0;
     let extraPress = false;

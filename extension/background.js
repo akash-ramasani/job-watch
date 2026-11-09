@@ -1498,6 +1498,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      // ── The whole filled form, checked before Submit (content/rescue.js) ──
+      if (message.type === "REVIEW_FORM") {
+        try {
+          const job = await autoJobForTab(sender?.tab?.id);
+          const r = await callFunction("reviewApplication", {
+            items: message.items || [], jobTitle: message.jobTitle || job?.title || "", companyName: message.companyName || job?.companyName || "",
+          });
+          sendResponse({ ok: true, issues: r?.issues || [] });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
+        return;
+      }
+
       // ── Any other board: run a lib/generic-dom.js helper in the MAIN world ─
       if (message.type === "EXEC_GENERIC") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
