@@ -317,6 +317,26 @@
     let ok = 0;
     const filledLabels = new Set();
     // Top to bottom, no rush: the order a person would go in.
+    // The phone's Country picker, set BEFORE the number is typed, as a person
+    // does: Greenhouse's phone box runs intl-tel-input in strict mode, and a
+    // country chosen after the number rewrites it to "5109356846+1"
+    // (Smartsheet, CoreWeave, 2026-11-09). The number goes in without +1.
+    async function setPhoneCountry() {
+      try {
+        const lab = [...document.querySelectorAll("label")].find((l) => /^country\s*\*?$/i.test((l.textContent || "").trim()));
+        const ctl = lab && (document.getElementById(lab.htmlFor) || lab.parentElement?.querySelector("[role=combobox], select"));
+        const box = ctl && (ctl.closest("[class*='select__control'], [class*='-control']") || ctl.parentElement);
+        // Already chosen: a value, or the flag and "+1" the newer picker shows
+        // (choosing it again put "+1" after the number: "5109356846+1", Smartsheet).
+        const shown = (box?.textContent || "").replace(/\s+/g, " ").trim();
+        const empty = ctl && !(ctl.tagName === "SELECT" ? ctl.value : box?.querySelector("[class*='single-value'], [class*='singleValue'], img, [class*='flag']") || /\+\d|united states/i.test(shown));
+        if (empty && /^(us|usa|united states)/i.test(String(data.country || "United States"))) {
+          const r = await fillCombobox(ctl, "United States");
+          log("phone country:", r);
+        }
+      } catch (e) { warn("phone country:", e.message); }
+    }
+    if (data.fills.some((f) => f.name === "phone")) await setPhoneCountry();
     let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
     for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
       if (pass > 1) {
@@ -361,20 +381,7 @@
 
     if (pending.some((f) => !f.absent)) warn("STILL UNFILLED after all passes:", pending.filter((f) => !f.absent).map((f) => f.label));
 
-    // The phone's Country picker: the number goes in without +1, so the country is set here.
-    try {
-      const lab = [...document.querySelectorAll("label")].find((l) => /^country\s*\*?$/i.test((l.textContent || "").trim()));
-      const ctl = lab && (document.getElementById(lab.htmlFor) || lab.parentElement?.querySelector("[role=combobox], select"));
-      const box = ctl && (ctl.closest("[class*='select__control'], [class*='-control']") || ctl.parentElement);
-      // Already chosen: a value, or the flag and "+1" the newer picker shows
-      // (choosing it again put "+1" after the number: "5109356846+1", Smartsheet).
-      const shown = (box?.textContent || "").replace(/\s+/g, " ").trim();
-      const empty = ctl && !(ctl.tagName === "SELECT" ? ctl.value : box?.querySelector("[class*='single-value'], [class*='singleValue'], img, [class*='flag']") || /\+\d|united states/i.test(shown));
-      if (empty && /^(us|usa|united states)/i.test(String(data.country || "United States"))) {
-        const r = await fillCombobox(ctl, "United States");
-        log("phone country:", r);
-      }
-    } catch (e) { warn("phone country:", e.message); }
+    await setPhoneCountry(); // again, in case the page cleared it
     // The newer phone box carries its own flag picker; with no country chosen
     // (a globe) Greenhouse can reject the number. US numbers get United States.
     try {
