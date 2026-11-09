@@ -98,6 +98,11 @@
       "fieldPath": "expireAt",
       "ttl": true,
       "indexes": []
+    },
+    {
+      "collectionGroup": "aggregations",
+      "fieldPath": "feeds",
+      "indexes": []
     }
   ]
 }
