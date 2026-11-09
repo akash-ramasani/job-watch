@@ -25,7 +25,7 @@
     .card {
       position: fixed; right: 24px; bottom: 24px; z-index: 2147483647; width: 352px; max-width: calc(100vw - 48px);
       box-sizing: border-box; font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-      -webkit-font-smoothing: antialiased; background: #fff; color: #111827; border-radius: 16px; line-height: 1.4; text-align: left; letter-spacing: normal;
+      -webkit-font-smoothing: antialiased; background: #fff; color: #111827; border-radius: 16px; overflow: hidden; line-height: 1.4; text-align: left; letter-spacing: normal;
       box-shadow: 0 0 0 1px #e5e7eb, 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
       transform: translateY(20px); opacity: 0; transition: transform .3s cubic-bezier(.22,1,.36,1), opacity .2s ease;
     }
@@ -66,9 +66,9 @@
     .btn:disabled { opacity: .5; cursor: default; }
     .btn.green { background: #16a34a; } .btn.green:hover:not(:disabled) { background: #22c55e; }
     .btn svg { width: 16px; height: 16px; }
-    .progress { height: 3px; margin: 14px -16px -16px; overflow: hidden; border-radius: 0 0 16px 16px; background: #eef2ff; display: none; }
+    .progress { height: 3px; margin: 14px -16px -16px; overflow: hidden; background: #eef2ff; display: none; }
     .card.working .progress { display: block; }
-    .progress::after { content: ""; display: block; height: 100%; width: 40%; background: #4f46e5; border-radius: 3px; animation: prog 1.1s ease-in-out infinite; }
+    .progress::after { content: ""; display: block; height: 100%; width: 40%; background: #4f46e5; animation: prog 1.1s ease-in-out infinite; }
     @keyframes prog { from { transform: translateX(-100%); } to { transform: translateX(260%); } }
   `;
   // Heroicons (20 solid / 24 outline paths).
