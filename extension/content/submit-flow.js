@@ -60,6 +60,22 @@
     const answersLog = b.answersLog || {};
     const meta = b.meta || {};
     const isFile = (l) => (b.isFile && b.isFile(l)) || FILE.test(String(l || ""));
+    // Handed to the person: keep watching, and when the board confirms (they
+    // pressed Submit), record it, so the card and the "needs you" count do not
+    // stay wrong next to a "Success" page. 30 minutes at most.
+    let watching = false;
+    const watchForHand = () => {
+      if (watching) return;
+      watching = true;
+      const t0 = Date.now();
+      const tick = async () => {
+        if (Date.now() - t0 > 30 * 60 * 1000) return;
+        const codeOpen = b.code ? await safe(() => b.code.needed(), false) : false;
+        if (!codeOpen && await safe(() => b.submitted(), false)) { log("submitted by hand"); await recordDone(); return; }
+        setTimeout(tick, 3000);
+      };
+      setTimeout(tick, 3000);
+    };
     const recordDone = async () => { await b.ledger("submitted", { answersLog }); say("submitted and recorded."); return { status: "submitted", note: "" }; };
 
     if ((await safe(() => chrome.storage.local.get("jwNoSubmit"), {})).jwNoSubmit) return { status: "needs_attention", note: "test run: not submitted" };
@@ -79,12 +95,16 @@
       const rv = await safe(() => window.__jwReview(meta, (t) => say(t)), null);
       log("review:", rv);
       for (const f of rv?.fixed || []) answersLog[`review:${f.question}`] = { label: f.question, answer: f.answer || f.fix || "(fixed by review)", type: "ai-review", source: "ai" };
-      const wrong = (rv?.left || []).filter((i) => i.severity === "wrong");
+      // Only a required question still wrong holds the application back; an
+      // optional one the AI could not fix goes in as it is (Clipboard,
+      // 2026-11-09: an empty optional "If you selected Other…" stopped a good form).
+      const wrong = (rv?.left || []).filter((i) => i.severity === "wrong" && i.required);
       if (wrong.length) {
         const needsAttention = wrong.map((i) => ({ label: i.question.slice(0, 200), path: "", note: `review before Submit: ${i.problem}${i.fix ? ` (should be: ${i.fix})` : ""}` }));
         b.ledger("filled", { answersLog, needsAttention, reasons: await safe(() => b.reasons?.(), []) }).catch?.(() => {});
         if (window.__jwLearnManual) window.__jwLearnManual(wrong.map((i) => i.question), meta);
         say("these answers look wrong and could not be fixed. Check them, then press Submit:", wrong.map((i) => `${i.question.slice(0, 80)}: ${i.problem}`));
+        watchForHand();
         return { status: "needs_attention", note: `review: ${wrong.map((i) => `${i.question.slice(0, 50)}: ${i.problem}`).slice(0, 3).join("; ")}` };
       }
     }
@@ -183,6 +203,7 @@
       ];
       b.ledger("filled", { answersLog, needsAttention, reasons: await safe(() => b.reasons?.(), []) }).catch?.(() => {});
       if (list.length && window.__jwLearnManual) window.__jwLearnManual(list, meta);
+      watchForHand();
       if (text) say(text);
       else if (list.length) say(`${b.name} did not accept it. These need you, then press Submit:`, list);
       else say(`${b.name} did not accept the submission${last.formSaid ? `: ${last.formSaid}` : ""}. Check the form and press Submit.`);

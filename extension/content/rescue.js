@@ -116,7 +116,8 @@
     if (!items.length) return { ok: true, issues: [], fixed: [], left: [] };
     const r = await send({ type: "REVIEW_FORM", items, jobTitle: meta.jobTitle || "", companyName: meta.companyName || "" });
     if (!r?.ok) return { ok: false, error: r?.error || "review failed", issues: [], fixed: [], left: [] };
-    const issues = Array.isArray(r.issues) ? r.issues : [];
+    const req = new Map(items.map((x) => [x.question, x.required]));
+    const issues = (Array.isArray(r.issues) ? r.issues : []).map((i) => ({ ...i, required: !!req.get(i.question) }));
     const fixed = [];
     const left = [];
     for (const i of issues) {

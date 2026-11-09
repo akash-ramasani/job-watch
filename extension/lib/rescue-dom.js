@@ -246,13 +246,24 @@
     const vals = [];
     for (const el of block.querySelectorAll("input, select, textarea")) {
       if (["hidden", "file", "submit", "button", "password"].includes(el.type)) continue;
-      if (el.type === "radio" || el.type === "checkbox") { if (el.checked) vals.push((el.labels?.[0]?.textContent || el.value || "").trim()); continue; }
+      // A checked box's own label ("Yes", "LinkedIn"); a box with no words of
+      // its own (Ashby's Yes/No keeps a hidden one whose value is "on") is
+      // read from its buttons below, never as "on".
+      if (el.type === "radio" || el.type === "checkbox") {
+        if (!el.checked) continue;
+        const t = (el.labels?.[0]?.textContent || el.closest("label")?.textContent || el.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+        if (t) vals.push(t);
+        else if (el.value && !/^(on|off|true|false|\d+)$/i.test(el.value)) vals.push(el.value);
+        continue;
+      }
       if (el.tagName === "SELECT") { const t = el.options[el.selectedIndex]?.textContent?.trim() || ""; if (el.value && !PLACEHOLDER.test(t)) vals.push(t); continue; }
       // A picker's search box holds typing, not the choice.
       if (el.getAttribute("role") === "combobox" || el.closest("[class*=select__] , [class*=Select]")) continue;
       if (el.value?.trim()) vals.push(el.value.trim());
     }
     for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) vals.push(el.textContent.replace(/\s+/g, " ").trim());
+    // Toggle buttons: Ashby's Yes/No ("_active_"), aria-pressed, role=radio.
+    for (const el of block.querySelectorAll("button[aria-pressed=true], [role=radio][aria-checked=true], [class*=_yesno_] button[class*=_active], [class*=yesno] button[class*=active]")) vals.push(el.textContent.replace(/\s+/g, " ").trim());
     return [...new Set(vals.filter(Boolean))].join("; ").slice(0, 1500);
   }
 
