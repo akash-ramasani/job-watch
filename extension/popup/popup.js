@@ -103,7 +103,17 @@ function renderProfile(userDoc, uid) {
   // Avatar pop-in
   const parts = name.split(" ");
   const av = $("avatar-initials");
-  av.textContent = (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  const initials = (parts[0]?.[0] || "") + (parts[1]?.[0] || "");
+  av.textContent = initials;
+  // The same picture as the web app (users/{uid}.avatarUrl); initials if it won't load.
+  if (/^https:\/\//.test(userDoc.avatarUrl || "")) {
+    const img = document.createElement("img");
+    img.alt = name;
+    img.style.cssText = "width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;";
+    img.onload = () => { av.textContent = ""; av.appendChild(img); av.style.background = "#eef2ff"; };
+    img.onerror = () => { av.textContent = initials; };
+    img.src = userDoc.avatarUrl;
+  }
   av.classList.remove("avatar-pop");
   void av.offsetWidth; // reflow to restart animation
   av.classList.add("avatar-pop");
