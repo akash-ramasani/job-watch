@@ -382,6 +382,10 @@ function classify(label, kind = "") {
   // Word-bounded: "unit"/"apt" as substrings misfire on "opportunity"/"aptitude"
   // (this once routed "How did you hear about this opportunity?" to Apt 20).
   if (has("address", "line 2") || /\bapartment\b|\bapt\.?\b|\bunit\b|\bsuite\b/.test(l)) return "addressLine2";
+  // One box for the whole address ("Legal Address", "Home address", "Address"):
+  // street, city, state and ZIP. A form with its own City/ZIP boxes gets the
+  // street line only (mapForm turns this back into addressLine1 there).
+  if (/^(?:(?:legal|home|mailing|current|residential|permanent|full|physical|primary|your)\s+)*address(?:\s*\([^)]*\))?\??$/.test(l.trim())) return "fullAddress";
   if (any("address line 1", "street address") || (l.includes("address") && !l.includes("email") && !l.includes("ip"))) return "addressLine1";
   // "Hear about" only as the source of the application: "We would love to
   // hear about why you are interested" (Scale AI) is a motivation question.
@@ -413,7 +417,7 @@ function classify(label, kind = "") {
 /** Long-text questions whose honest answer is one short fact, not prose. */
 /** Stand-ins for a missing social link: the site itself, no profile claimed. */
 export const BARE_LINKS = { linkedin: "https://www.linkedin.com/", github: "https://www.github.com/" };
-const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "availability", "noticePeriod", "heardAboutUs", "currentCompany", "conditionalFollowup", "referral", "workSample", "publications", "location", "cityState", "linkedin", "github", "portfolio", "university", "currentTitle",
+const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "fullAddress", "availability", "noticePeriod", "heardAboutUs", "currentCompany", "conditionalFollowup", "referral", "workSample", "publications", "location", "cityState", "linkedin", "github", "portfolio", "university", "currentTitle",
   "requiresSponsorship", "workAuthorized", "willingToWorkHybrid", "preferredLanguage", "referredYesNo", "notApplicable", "ownWorkStatement", "testScore",
   // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
   "yearsExperience"]);
@@ -749,6 +753,7 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // Vague labels ("CONFLICT OF INTEREST", "HISTORY WITH ANDURIL") carry the real
   // question in the description — classify falls back to it.
   let key = classifyQuestion(q);
+  if (key === "fullAddress" && ctx.formHasAddressParts) key = "addressLine1";
   // A textarea/paragraph field must never get a yes/no or single-value profile
   // answer, even if its label contains a matching keyword (e.g. "office
   // preferences or geographic flexibility"). Route it to free text instead,
@@ -775,6 +780,10 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     preferredLanguage: profile.preferredLanguage || languagesAnswer(label, profile),
     postalCode: profile.postalCode || profile.zip,
     addressLine1: profile.addressLine1,
+    // "1025 Sutter St, Apt 5, San Francisco, CA 94109": what a one-box address wants.
+    fullAddress: profile.addressLine1 ? [profile.addressLine1, profile.addressLine2, profile.city,
+      [US_STATES[norm(profile.region || profile.state)]?.toUpperCase() || profile.region || profile.state, profile.postalCode || profile.zip].filter(Boolean).join(" ")]
+      .map((x) => String(x || "").trim()).filter(Boolean).join(", ") : "",
     addressLine2: profile.addressLine2,
     heardAboutUs: profile.heardAboutUs,
     smsConsent: profile.smsConsent,
@@ -1811,8 +1820,10 @@ export function mapForm(questions, profile, ai) {
   const review = [];
   let prev = null;
   let prevQ = null;
+  // Separate City / State / ZIP boxes: then an "Address" box is the street line.
+  const formHasAddressParts = questions.some((x) => ["city", "cityState", "postalCode", "addressLine2"].includes(classifyQuestion(x)));
   for (const q of questions) {
-    const a = answerQuestion(q, profile, ai, { prev, prevQ });
+    const a = answerQuestion(q, profile, ai, { prev, prevQ, formHasAddressParts });
     answers.push(a);
     if (a.required && a.answers.length === 0) review.push(a);
     prev = { key: classifyQuestion(q), label: a.label, answers: a.answers };

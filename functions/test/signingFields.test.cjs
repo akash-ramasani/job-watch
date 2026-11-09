@@ -28,3 +28,13 @@ test("details follow-up after No is N/A; after Yes it is left to the writer", ()
   const profileYes = { ...profile, savedAnswers: { [engine.normQuestion(qs()[0].label)]: { answer: "Yes", source: "you" } } };
   assert.notEqual(engine.mapForm(qs(), profileYes, null).answers[1].answers[0]?.value, "N/A");
 });
+
+test("one-box Legal Address gets the whole address; with City/ZIP boxes only the street", () => {
+  const p = { ...profile, addressLine1: "1025 Sutter St", city: "San Francisco", region: "California", postalCode: "94109" };
+  const addr = { label: "Legal Address", required: true, fields: [{ name: "question_20", type: "input_text" }] };
+  assert.equal(engine.mapForm([addr], p, null).answers[0].answers[0].value, "1025 Sutter St, San Francisco, CA 94109");
+  const withParts = [addr, { label: "City", required: true, fields: [{ name: "question_21", type: "input_text" }] }, { label: "Zip Code", required: true, fields: [{ name: "question_22", type: "input_text" }] }];
+  assert.equal(engine.mapForm(withParts, p, null).answers[0].answers[0].value, "1025 Sutter St");
+  const street = { label: "Street Address", required: true, fields: [{ name: "question_23", type: "input_text" }] };
+  assert.equal(engine.mapForm([street], p, null).answers[0].answers[0].value, "1025 Sutter St");
+});
