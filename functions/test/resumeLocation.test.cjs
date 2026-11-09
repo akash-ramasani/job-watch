@@ -146,3 +146,11 @@ test("codes, acronyms and state words never become cities", () => {
   assert.equal(chooseResumeLocation({ locationName: "MI-Admin Office Building (AOB)" }).display, "Detroit, MI");
   assert.equal(chooseResumeLocation({ locationName: "Space Coast, FL" }).display, "Melbourne, FL");
 });
+
+test("odd posted locations: stray dashes and a USA- prefix (Smartsheet)", () => {
+  const { parsePlace } = require("../lib/apply/ashby.cjs");
+  assert.equal(parsePlace("-REMOTE, USA-"), null);
+  assert.equal(parsePlace("USA-Bellevue, WA").city, "Bellevue");
+  assert.equal(parsePlace("USA-Boston").state, "Massachusetts");
+  assert.equal(parsePlace("San Francisco, CA").city, "San Francisco");
+});

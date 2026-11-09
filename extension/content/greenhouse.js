@@ -366,7 +366,10 @@
       const lab = [...document.querySelectorAll("label")].find((l) => /^country\s*\*?$/i.test((l.textContent || "").trim()));
       const ctl = lab && (document.getElementById(lab.htmlFor) || lab.parentElement?.querySelector("[role=combobox], select"));
       const box = ctl && (ctl.closest("[class*='select__control'], [class*='-control']") || ctl.parentElement);
-      const empty = ctl && !(ctl.tagName === "SELECT" ? ctl.value : box?.querySelector("[class*='single-value'], [class*='singleValue']"));
+      // Already chosen: a value, or the flag and "+1" the newer picker shows
+      // (choosing it again put "+1" after the number: "5109356846+1", Smartsheet).
+      const shown = (box?.textContent || "").replace(/\s+/g, " ").trim();
+      const empty = ctl && !(ctl.tagName === "SELECT" ? ctl.value : box?.querySelector("[class*='single-value'], [class*='singleValue'], img, [class*='flag']") || /\+\d|united states/i.test(shown));
       if (empty && /^(us|usa|united states)/i.test(String(data.country || "United States"))) {
         const r = await fillCombobox(ctl, "United States");
         log("phone country:", r);
@@ -386,6 +389,17 @@
         }
       }
     } catch (e) { warn("phone flag:", e.message); }
+    // Picking a country can write its dial code into the number box: put the
+    // number back as computed when the digits no longer match.
+    try {
+      const pf = data.fills.find((f) => f.name === "phone");
+      const ph = document.getElementById("phone") || document.querySelector("input[type=tel]");
+      const want = String(pf?.value || "");
+      if (pf && ph && ph.id && ph.value.replace(/\D/g, "") !== want.replace(/\D/g, "")) {
+        await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: ph.id, value: want });
+        log("phone restored:", ph.value);
+      }
+    } catch (e) { warn("phone restore:", e.message); }
     // A second Education block the board added from a saved MyGreenhouse
     // profile, with its School left empty, would hold the application back.
     // JobWatch fills one education entry: remove the empty extras.

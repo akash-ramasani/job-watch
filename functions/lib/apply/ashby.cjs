@@ -172,7 +172,11 @@ const isState = (s) => { const t = String(s || "").trim(); return (t.length === 
 /** One place from one piece of text: "San Francisco, CA", "CA - San Francisco", "NYC". */
 function placeOf(text) {
   const MODE = "(?:hybrid|on[- ]?site|in[- ]office|office[- ]based|in[- ]person)";
-  let raw = String(text || "").replace(/\s*[-–]\s*US$/i, "")
+  // Stray dashes and a country prefix: "-REMOTE, USA-" (Smartsheet) is no city
+  // called "USA-"; "USA-Bellevue, WA" is Bellevue.
+  let raw = String(text || "").replace(/^[\s\-–—_*•.]+|[\s\-–—_*•.]+$/g, "")
+    .replace(/^(?:usa|us|u\.s\.a?\.?|united states)\s*[-–:]\s*(?=\S)/i, "")
+    .replace(/\s*[-–]\s*US$/i, "")
     .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-–:|]|\\bin\\b)\\s*`, "i"), "")
     .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
     .replace(/\s*\((?:[^)]*)\)\s*$/, "")
