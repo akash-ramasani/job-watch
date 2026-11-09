@@ -709,6 +709,24 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       ? out([{ name: "resume", value: profile.resumePath, isFile: true }], SOURCE.PROFILE, 1)
       : unanswered("no resume on file");
   }
+
+  // Signing dates ("Application Date Signed", "Date Signed", "Today's Date"):
+  // the applicant's local day. A date picker takes ISO, a text box MM/DD/YYYY.
+  const ll = norm(label).replace(/[*:]/g, "").replace(/\s+/g, " ").trim();
+  if (["text", "date"].includes(kinds[0]) && (/\b(date signed|signed date|signature date|date of signature|today'?s date)\b/.test(ll) || /^date( \(mm\/dd\/yyyy\))?$/.test(ll))) {
+    const [y, m, d] = String(profile.todayISO || new Date().toISOString().slice(0, 10)).split("-");
+    return out([{ name, value: kinds[0] === "date" ? `${y}-${m}-${d}` : `${m}/${d}/${y}` }], SOURCE.RULE, 1, "today's date (signature)");
+  }
+
+  // "Please provide details, including the name of the organization…" right
+  // after a Yes/No we answered No: nothing to detail, so "N/A".
+  if (["text", "longtext"].includes(kinds[0]) && ctx.prev?.answers?.length
+    && (/^(please )?(provide|give|share|list|describe|explain|elaborate)\b.{0,80}\b(details?|explain|describe)\b/.test(ll) || /^if (yes|so|applicable)\b/.test(ll))) {
+    const pv = String(ctx.prev.answers[0].value ?? "");
+    const opt = (ctx.prevQ?.fields?.[0]?.values || []).find((v) => String(v.value) === pv);
+    const prevText = norm(opt ? opt.label : pv);
+    if (/^(no|none|n\/a|not applicable)\b/.test(prevText)) return q.required ? out([{ name, value: "N/A" }], SOURCE.RULE, 0.9, "not applicable: previous answer was No") : out([], SOURCE.NONE, 0, "not applicable: previous answer was No");
+  }
   if (name === "cover_letter" || fields.some((f) => f.name === "cover_letter")) {
     // Filled later by the doc generator; optional so it never blocks.
     return out([], SOURCE.NONE, 0, "cover letter attached separately");
@@ -1792,11 +1810,13 @@ export function mapForm(questions, profile, ai) {
   const answers = [];
   const review = [];
   let prev = null;
+  let prevQ = null;
   for (const q of questions) {
-    const a = answerQuestion(q, profile, ai, { prev });
+    const a = answerQuestion(q, profile, ai, { prev, prevQ });
     answers.push(a);
     if (a.required && a.answers.length === 0) review.push(a);
     prev = { key: classifyQuestion(q), label: a.label, answers: a.answers };
+    prevQ = q;
   }
   return { answers, review };
 }

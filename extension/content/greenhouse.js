@@ -583,8 +583,17 @@
   const autoReport = (status, note) => sendMsg({ type: "AUTO_RESULT", status, note }).catch(() => {});
   const visible = (el) => !!el && el.offsetParent !== null;
   function codeInputs() {
-    const hint = (i) => `${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
-    return [...document.querySelectorAll("input")].filter((i) => visible(i) && !["hidden", "checkbox", "radio", "file"].includes(i.type) && /security|verification|one-time-code|\bcode\b/i.test(hint(i)) && !/zip|postal|phone|country|promo/i.test(hint(i)));
+    // The emailed code's own box ("security-input-0", autocomplete one-time-code,
+    // "Security code"), never a question: a long agreement that mentions
+    // "verifications" once took the code (CannonDesign, 2026-11-09).
+    const isCodeBox = (i) => {
+      if (/^question_|^job_application_/.test(i.id || "") || /^question_|^job_application\[/.test(i.name || "")) return false;
+      const aria = i.getAttribute("aria-label") || "";
+      if (aria.length > 60) return false;
+      const h = `${i.id} ${i.name} ${aria} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
+      return /security[-_ ]?(code|input)|verification[-_ ]?code|one-time-code|\bcode\b/i.test(h) && !/zip|postal|phone|country|promo|referral|discount/i.test(h);
+    };
+    return [...document.querySelectorAll("input")].filter((i) => visible(i) && !["hidden", "checkbox", "radio", "file"].includes(i.type) && isCodeBox(i));
   }
   function confirmed() {
     const text = (document.body?.innerText || "").slice(0, 5000);

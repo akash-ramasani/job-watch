@@ -46,7 +46,10 @@ You get the applicant's profile and resume, the job, the field's question, and t
 Rules:
 - Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details.
 - A required question about experience, skills or background the resume does not show still gets an honest answer: in a text box, one or two plain first-person sentences that say so (for example "I have not done that myself.") and name the closest related work the resume shows; a Yes/No or option question gets the truthful option (No, None, Less than 1 year).
-- Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number, a reference's contact or an exact date.
+- Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number or a reference's contact.
+- A signature, "Application Date Signed", "Date", "Today's Date" or similar signing date is today's date (given below), in the format the field asks for (MM/DD/YYYY when it does not say). An electronic signature or "type your full name" box is the applicant's full legal name.
+- A follow-up that asks for details only if an earlier answer applies ("Please provide details...", "If yes, explain") gets "N/A" when the form shows that earlier answer as No or None.
+- Never put a security or verification code from an email into a question field.
 - Work authorization, sponsorship, visa, EEO and similar answers come only from the profile. Statements that the applicant's answers are their own work are confirmed (their standing choice).
 - A long <select> marked data-options-shown lists only some options: you may still "select" any option by its exact text (for example the applicant's university), or the list's "Other" option when theirs is surely not offered.
 - A dropdown or typeahead whose options are not in the HTML yet: click or type to open it, set done to false, and you will see the options next round.
@@ -61,6 +64,13 @@ function profileSummary(user, resume) {
   const education = (resume.education || []).slice(0, 3).map((e) => `${e.degree || ""}, ${e.institution || ""} ${e.endDate || ""}`.trim());
   const skills = [...(resume.skills || []), ...(resume.skillGroups || []).flatMap((g) => g.skills || [])].slice(0, 60);
   return { profile: p, resume: { summary: String(resume.summary || "").replace(/\*\*/g, "").slice(0, 800), roles, education, skills } };
+}
+
+/** yyyy-mm-dd today in the applicant's time zone. */
+function todayFor(user, now = new Date()) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: (user && user.timezone) || "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  } catch (_) { return now.toISOString().slice(0, 10); }
 }
 
 /** Steps referencing only refs present in the HTML, text capped. */
@@ -87,6 +97,7 @@ async function rescueField(deps, input, user, resume) {
   const html = String(input.html || "").slice(0, 12000);
   const ctx = profileSummary(user || {}, resume || {});
   const userText = [
+    `Today's date: ${todayFor(user)} (YYYY-MM-DD, the applicant's time zone).`,
     `Job: ${String(input.jobTitle || "").slice(0, 200)} at ${String(input.companyName || "").slice(0, 200)}`,
     `Applicant profile: ${JSON.stringify(ctx.profile)}`,
     `Resume: ${JSON.stringify(ctx.resume)}`,

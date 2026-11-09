@@ -2115,9 +2115,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Greenhouse's emailed security code: one box per character, or one box.
         const ghCode = async (code) => {
           const vis = (el) => el && el.offsetParent !== null;
-          const hint = (i) => `${i.id} ${i.name} ${i.getAttribute("aria-label") || ""} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
+          const isCodeBox = (i) => {
+            // The emailed code's own box ("security-input-0", autocomplete one-time-code,
+            // "Security code"), never a question: a long agreement that mentions
+            // "verifications" once took the code (CannonDesign, 2026-11-09).
+            if (/^question_|^job_application_/.test(i.id || "") || /^question_|^job_application\[/.test(i.name || "")) return false;
+            const aria = i.getAttribute("aria-label") || "";
+            if (aria.length > 60) return false;
+            const h = `${i.id} ${i.name} ${aria} ${i.getAttribute("autocomplete") || ""} ${i.getAttribute("placeholder") || ""}`;
+            return /security[-_ ]?(code|input)|verification[-_ ]?code|one-time-code|\bcode\b/i.test(h) && !/zip|postal|phone|country|promo|referral|discount/i.test(h);
+          };
           const boxes = [...document.querySelectorAll("input")].filter((i) => vis(i) && !["hidden", "checkbox", "radio", "file"].includes(i.type)
-            && /security|verification|one-time-code|\bcode\b/i.test(hint(i)) && !/zip|postal|phone|country|promo/i.test(hint(i)));
+            && isCodeBox(i));
           if (!boxes.length) return { ok: false, error: "no security code input found" };
           const set = (node, v) => {
             const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
