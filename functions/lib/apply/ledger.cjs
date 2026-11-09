@@ -190,8 +190,12 @@ async function recordEvent(db, uid, ev, now = new Date()) {
       const rk = roleKeyOf(ev.companyName, ev.jobTitle);
       if (rk) {
         const q = await tx.get(col.where("roleKey", "==", rk).limit(5));
-        const prior = q.docs.map((d) => d.data()).find((d) => d.status === SUBMITTED);
-        if (prior) return { ok: true, duplicate: true, reason: "same role", status: SUBMITTED, docId: q.docs.find((d) => d.data() === prior).id, submittedAt: prior.submittedAt || prior.appliedAt || null, attempts: int(prior.attempts) };
+        // Keep the snapshot: data() makes a new object each call, so it can't be matched back by identity.
+        const priorDoc = q.docs.find((d) => d.data().status === SUBMITTED);
+        if (priorDoc) {
+          const prior = priorDoc.data();
+          return { ok: true, duplicate: true, reason: "same role", status: SUBMITTED, docId: priorDoc.id, submittedAt: prior.submittedAt || prior.appliedAt || null, attempts: int(prior.attempts) };
+        }
       }
     }
     const r = applyEvent(cur, ev, nowISO);

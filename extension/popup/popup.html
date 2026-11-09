@@ -71,6 +71,7 @@
     /* ── Section labels ── */
     .section-label { font-size: 10px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: #9ca3af; margin-bottom: 4px; }
     .section-hint { font-size: 11px; color: #6b7280; line-height: 1.5; margin-bottom: 8px; }
+    #gmail-status:empty { display: none; }
 
     /* ── Body ── */
     .body { padding: 16px 18px; }
@@ -303,12 +304,11 @@
 
     <div class="auto-box anim-slide">
       <div class="auto-head"><span class="section-label" style="margin:0;">Gmail</span><span id="gmail-pill" class="auto-pill">Not connected</span></div>
-      <p class="section-hint" style="margin:6px 0 8px;">Reads only Greenhouse's security-code emails, so auto-apply can finish those applications.</p>
-      <div id="gmail-setup">
+      <div id="gmail-setup" style="margin-top:8px;">
         <input id="gmail-client" class="auto-input" placeholder="OAuth client ID (….apps.googleusercontent.com)" autocomplete="off" spellcheck="false" />
         <p class="section-hint" style="margin:6px 0;">Redirect URI for the client: <code id="gmail-redirect" class="auto-code"></code></p>
       </div>
-      <button class="btn btn-primary" id="btn-gmail">Connect Gmail</button>
+      <button class="btn btn-primary" id="btn-gmail" style="margin-top:12px;">Connect Gmail</button>
       <p id="gmail-status" class="section-hint" style="margin-top:6px;"></p>
     </div>
 

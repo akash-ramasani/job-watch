@@ -492,14 +492,10 @@ async function ghConfirmationPage(tabId, url) {
   }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
   // The runner's own job: finish it as submitted (autoThanksPage may have already).
   if (job) { await autoFinish({ status: "submitted", note: "" }, tabId); return; }
-  // A job the runner left for the person: the popup counts it as submitted now.
-  const st = await autoState();
+  // A job the runner left for the person: the popup counts it as submitted
+  // now, and its tab closes like the runner's own.
   const sameForm = (u) => { try { const q = new URL(u).searchParams; return q.get("for") === board && q.get("token") === token; } catch (_) { return false; } };
-  let changed = false;
-  for (const r of Object.values(st.results || {})) {
-    if (r.status !== "submitted" && sameForm(r.url)) { r.status = "submitted"; r.note = "finished by hand"; r.at = Date.now(); changed = true; }
-  }
-  if (changed) await saveAuto(st);
+  await finishedByHand(tabId, sameForm);
 }
 
 /** After the form pressed Submit (AUTO_SUBMITTING), a new page in the job's
@@ -694,6 +690,35 @@ async function autoNextJob(st, busy = new Set()) {
   return null;
 }
 
+// A submitted application's tab stays up this long (the confirmation shows), then closes.
+const SUBMITTED_CLOSE_MS = 5000;
+/** Close a submitted application's tab after SUBMITTED_CLOSE_MS, unless the
+ *  person has since taken that tab to another site. */
+async function closeSubmittedTab(tabId) {
+  if (tabId == null) return;
+  const host = (u) => { try { return new URL(u).hostname; } catch (_) { return ""; } };
+  const was = host((await chrome.tabs.get(tabId).catch(() => null))?.url);
+  setTimeout(async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab && host(tab.url) === was) chrome.tabs.remove(tabId).catch(() => {});
+  }, SUBMITTED_CLOSE_MS);
+}
+
+/** A "needs you" tab the person finished by hand: count it submitted and close
+ *  the tab like the runner's own. Returns whether the tab was one of those. */
+async function finishedByHand(tabId, isSameForm = null) {
+  const st = await autoState();
+  let hit = false;
+  for (const r of Object.values(st.results || {})) {
+    if (r.status === "submitted" || !(r.tabId === tabId || (isSameForm && isSameForm(r.url)))) continue;
+    if (r.tabId === tabId) hit = true;
+    r.status = "submitted"; r.note = "finished by hand"; r.at = Date.now(); r.tabId = null;
+  }
+  if (hit || isSameForm) await saveAuto(st);
+  if (hit) await closeSubmittedTab(tabId);
+  return hit;
+}
+
 async function autoFinish(result, tabId, jobId = null) {
   return withAutoLock(() => autoFinishNow(result, tabId, jobId));
 }
@@ -712,10 +737,12 @@ async function autoFinishNow(result, tabId, jobId) {
   st.running = st.running.filter((j) => j !== cur);
   st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
   await saveAuto(st);
-  // Submitted, skipped or failed: close the tab. Needs you: leave it open to
-  // finish, but only the newest AUTO_MAX_OPEN; older ones close (the popup
-  // lists them with their links, and they retry once a missing answer is saved).
-  if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
+  // Submitted: close the tab a few seconds later (the confirmation shows).
+  // Skipped or failed: close it now. Needs you: leave it open to finish, but
+  // only the newest AUTO_MAX_OPEN; older ones close (the popup lists them with
+  // their links, and they retry once a missing answer is saved).
+  if (result.status === "submitted") await closeSubmittedTab(cur.tabId);
+  else if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
   if (result.status === "needs_attention") {
     const open = Object.entries(st.results).filter(([, r]) => r.status === "needs_attention" && r.tabId).sort((a, b) => b[1].at - a[1].at);
     for (const [id, r] of open.slice(AUTO_MAX_OPEN)) {
@@ -741,13 +768,22 @@ async function autoFinishNow(result, tabId, jobId) {
  *  Falls back to a background tab where a window cannot be made. */
 async function openJobTab(url) {
   try {
-    const { jwJobWindow } = await chrome.storage.local.get("jwJobWindow");
+    // Session storage, not local: window ids restart at 1 when the browser
+    // restarts, so a remembered id could name the person's own window and jobs
+    // would open (and switch tabs) right in front of them.
+    chrome.storage.local.remove("jwJobWindow").catch(() => {});
+    const { jwJobWindow } = await chrome.storage.session.get("jwJobWindow");
     let win = jwJobWindow ? await chrome.windows.get(jwJobWindow).catch(() => null) : null;
+    // The person is using the job window (finishing a "needs you"): leave it
+    // alone and start a fresh minimized one rather than switch their tab.
+    if (win && (win.focused || win.type !== "normal")) win = null;
     if (!win) {
       win = await chrome.windows.create({ url, state: "minimized", focused: false });
-      await chrome.storage.local.set({ jwJobWindow: win.id });
+      await chrome.storage.session.set({ jwJobWindow: win.id });
       return win.tabs[0];
     }
+    // Restored but in the background: tuck it away again before adding a job.
+    if (win.state !== "minimized") await chrome.windows.update(win.id, { state: "minimized" }).catch(() => {});
     return await chrome.tabs.create({ windowId: win.id, url, active: true });
   } catch (err) {
     console.warn("[JobWatch] job window unavailable, using a tab:", err.message);
@@ -2134,6 +2170,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           const r = await recordApplicationEvent(message, sender);
           sendResponse({ ok: true, ...r });
+          // A "needs you" tab (Ashby, Lever, Greenhouse) the person just submitted: close it too.
+          const submitted = (message.event || (message.type === "APPLICATION_DONE" ? "submitted" : "")) === "submitted";
+          if (submitted && sender?.tab?.id != null && !(await autoJobForTab(sender.tab.id))) await finishedByHand(sender.tab.id);
         } catch (err) {
           console.warn("[JobWatch] recordApplication failed:", err.message);
           sendResponse({ ok: false, error: err.message });

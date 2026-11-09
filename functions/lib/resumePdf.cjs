@@ -5,18 +5,25 @@
  * Tectonic, so the PDF a user downloads is the real typeset document and not
  * the jsPDF approximation. Tectonic and a pre-warmed resource cache are put
  * in functions/.tectonic by scripts/setup-tectonic.cjs during the Cloud
- * Functions build (npm "gcp-build"), so a compile needs no network: it runs
+ * Functions build (npm "postinstall"), so a compile needs no network: it runs
  * with --only-cached and --untrusted (no shell escape, no reads outside the
  * job directory) and takes well under a second.
+ *
+ * When the build left no engine behind (a cached node_modules skips npm
+ * install, so postinstall never runs), the first compile on an instance
+ * installs it into the temp directory instead, which takes a few seconds.
  */
 const { spawn } = require("node:child_process");
 const fs = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
+const { installTectonic } = require("./tectonicInstall.cjs");
 
 const TECTONIC_DIR = path.join(__dirname, "..", ".tectonic");
+const RUNTIME_DIR = path.join(os.tmpdir(), "tectonic");
 const MAX_TEX_CHARS = 200_000;
 
+/** The engine the build installed (or TECTONIC_BIN / TECTONIC_CACHE_DIR for local dev). */
 function tectonicPaths() {
   return {
     bin: process.env.TECTONIC_BIN || path.join(TECTONIC_DIR, "bin", "tectonic"),
@@ -24,13 +31,26 @@ function tectonicPaths() {
   };
 }
 
-async function tectonicAvailable() {
-  try {
-    await fs.access(tectonicPaths().bin);
-    return true;
-  } catch {
-    return false;
+const exists = (p) => fs.access(p).then(() => true, () => false);
+let runtimeInstall = null; // one install per instance, shared by concurrent requests
+
+/** Paths of a usable engine, installing one at runtime if the build did not; null if none can be had. */
+async function ensureTectonic() {
+  const built = tectonicPaths();
+  if (await exists(built.bin)) return built;
+  if (process.platform !== "linux") return null;
+  if (!runtimeInstall) {
+    runtimeInstall = installTectonic(RUNTIME_DIR, (m) => console.log(`resumePdf: ${m} (runtime install; the build left none)`)).catch((err) => {
+      console.error("resumePdf: runtime tectonic install failed:", err.message);
+      runtimeInstall = null; // let a later request try again
+      return null;
+    });
   }
+  return runtimeInstall;
+}
+
+async function tectonicAvailable() {
+  return !!(await ensureTectonic());
 }
 
 /** Throws with a user-readable message when `tex` isn't a resume in our template. */
@@ -53,7 +73,9 @@ function validateResumeTex(tex) {
  */
 async function compileResumeTex(tex, { timeoutMs = 60_000 } = {}) {
   validateResumeTex(tex);
-  const { bin, cacheDir } = tectonicPaths();
+  const engine = await ensureTectonic();
+  if (!engine) throw new Error("The LaTeX compiler is not available on the server.");
+  const { bin, cacheDir } = engine;
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "resume-"));
   const texPath = path.join(dir, "resume.tex");
   try {
@@ -84,4 +106,4 @@ async function compileResumeTex(tex, { timeoutMs = 60_000 } = {}) {
   }
 }
 
-module.exports = { tectonicPaths, tectonicAvailable, validateResumeTex, compileResumeTex, MAX_TEX_CHARS };
+module.exports = { tectonicPaths, tectonicAvailable, ensureTectonic, validateResumeTex, compileResumeTex, MAX_TEX_CHARS };

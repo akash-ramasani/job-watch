@@ -80,13 +80,14 @@ function fakeDb() {
   const store = new Map();
   const docRef = (path) => ({
     id: path.split("/").pop(), path,
-    get: async () => ({ exists: store.has(path), id: path.split("/").pop(), data: () => store.get(path), ref: docRef(path) }),
+    // data() returns a fresh copy, as Firestore does.
+    get: async () => ({ exists: store.has(path), id: path.split("/").pop(), data: () => (store.has(path) ? { ...store.get(path) } : undefined), ref: docRef(path) }),
     set: (data, opts) => { store.set(path, opts?.merge ? { ...(store.get(path) || {}), ...data } : data); },
   });
   const runQuery = (q) => {
     const depth = q.path.split("/").length + 1;
     const docs = [...store.entries()].filter(([k, d]) => k.startsWith(q.path + "/") && k.split("/").length === depth && d[q.f] === q.v)
-      .map(([k, d]) => ({ id: k.split("/").pop(), data: () => d, ref: docRef(k), exists: true }));
+      .map(([k, d]) => ({ id: k.split("/").pop(), data: () => ({ ...d }), ref: docRef(k), exists: true }));
     return { empty: docs.length === 0, docs };
   };
   const colRef = (path) => ({

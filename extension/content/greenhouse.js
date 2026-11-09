@@ -120,11 +120,17 @@
     return null;
   }
 
+  // Greenhouse's own ids for the EEOC survey fields, by the fill's eeo token.
+  const EEO_IDS = { race: ["race"], gender: ["gender"], hispanic: ["hispanic_ethnicity"], veteran: ["veteran_status"], disability: ["disability_status"] };
+
   // Containment variant for EEO fills: "race" finds "Please identify your race".
-  function findFieldByLabelContains(token) {
+  // `skip`: labels that belong to other fills (a demographic question that
+  // also says "race") are never taken.
+  function findFieldByLabelContains(token, skip = []) {
     const want = norm(token);
+    const others = new Set(skip.map(norm));
     for (const lab of [...document.querySelectorAll("label")]) {
-      if (!norm(lab.textContent).includes(want)) continue;
+      if (!norm(lab.textContent).includes(want) || others.has(norm(lab.textContent))) continue;
       const forId = lab.getAttribute("for");
       if (forId) {
         const el = document.getElementById(forId);
@@ -245,7 +251,11 @@
       if (!el) el = findFieldByLabel(f.label);
       if (!el && ["select", "multiselect", "boolean"].includes(f.kind)) el = findChoiceGroup(f.label)?.[0] || null;
       if (!el && f.kind === "location") el = findFieldByLabelPrefix("location");
-      if (!el && f.eeo) el = findFieldByLabelContains(f.eeo);
+      // The EEOC survey by its own ids (new boards: race, gender, ...; old: job_application_race).
+      // Containment alone found the board's demographic question "Voluntary
+      // Self-Identification of Race/Ethnicity" for Race (Braze), whose options differ.
+      if (!el && f.eeo) el = EEO_IDS[f.eeo]?.map((id) => document.getElementById(id) || document.getElementById(`job_application_${id}`)).find(Boolean) || null;
+      if (!el && f.eeo) el = findFieldByLabelContains(f.eeo, data.fills.filter((x) => x !== f).map((x) => x.label));
       return el;
     }
     const pageTop = (f) => { const el = elementFor(f); return el ? el.getBoundingClientRect().top + window.scrollY : Number.POSITIVE_INFINITY; };
