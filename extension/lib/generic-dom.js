@@ -899,7 +899,9 @@
     const out = [];
     const seen = new Set();
     const ownerId = (el) => {
-      const box = el.closest("[data-automation-id^=formField-], fieldset, .form-group, .field, li, div");
+      // The field's own container first (closest() with a list took the error's
+      // bare parent div, so a refused phone was never tied to its box, CACI).
+      const box = el.closest("[data-automation-id^=formField-]") || el.closest("fieldset, .form-group, .field, li") || el.closest("div");
       const ctl = box?.querySelector("[data-jw-id]");
       return ctl?.getAttribute("data-jw-id") || "";
     };
