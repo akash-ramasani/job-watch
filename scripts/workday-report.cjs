@@ -32,6 +32,7 @@ const outFile = process.argv[3] || path.join(root, "research", "workday-runs", `
     else if (t.kind === "advance") j.advances.push(t.data);
     else if (t.kind === "review") j.review = t.data.text;
     else if (t.kind === "result") j.result = t.data;
+    else if (["load", "idle", "busy", "stuck"].includes(t.kind)) (j.pages = j.pages || []).push({ kind: t.kind, at: t.at, ...t.data });
     jobs.set(key, j);
   }
 

@@ -850,6 +850,11 @@
         if (AUTO.title) header.jobTitle = AUTO.title;
         if (AUTO.companyName) header.companyName = AUTO.companyName;
         log("auto-apply job:", AUTO.companyName, "|", AUTO.title);
+        // Each page an auto-apply tab loads (some went silent right after signing in).
+        setTimeout(async () => {
+          trace("load", { url: location.href.slice(0, 300), title: document.title.slice(0, 120), step: await gen("stepName").catch(() => ""), password: await gen("hasPassword").catch(() => null),
+            inApp: await gen("workdayInApp").catch(() => null), text: (document.body?.innerText || "").replace(/\s+/g, " ").slice(0, 400) });
+        }, 4000);
       }
     }
     await tick();
