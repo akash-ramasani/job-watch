@@ -809,6 +809,12 @@
    *  the job's Apply Manually link again (three times at most). */
   async function watchdog() {
     // A fill running for four minutes (Johnson Controls' My Experience went silent): say where it is.
+    // A step that is a third party's assessment (Centene: "Take Assessment", a
+    // tax-credit questionnaire behind inlineAssessmentButton): the person's.
+    if (AUTO && isWorkday && !busy && document.querySelector("[data-automation-id=inlineAssessmentButton]")) {
+      stopped = true;
+      return autoReport("needs_attention", `${header.companyName || "This company"} asks for an assessment (${(document.querySelector("[data-automation-id=inlineAssessmentButton]").innerText || "Take Assessment").trim()}): complete it yourself, then Save and Continue and Submit`);
+    }
     if (AUTO && isWorkday && busy && busySince && Date.now() - busySince > 240000 && !busyReported) {
       busyReported = true;
       trace("busy", { minutes: Math.round((Date.now() - busySince) / 60000), work: currentWork, step: lastStep, openLists: document.querySelectorAll("[data-automation-id=activeListContainer], [role=listbox]:not([data-automation-id=selectedItemList])").length,
@@ -827,7 +833,10 @@
     if (mem.nudges > 3) { stopped = true; return autoReport("error", `Workday left the application at ${location.pathname.slice(0, 120)} and did not come back`); }
     if (await gen("workdayPress", "continueButton", "^continue application$").catch(() => false)) return;
     if (await gen("workdayPress", "adventureButton", "^apply$").catch(() => false)) return;
-    location.href = AUTO.applyUrl;
+    // An empty page after signing in (Insulet: header only): the Apply Manually
+    // link, then the posting (it offers "Continue Application"), then sign in again.
+    const posting = String(AUTO.applyUrl || "").replace(/\/apply(\/.*)?$/, "");
+    location.href = mem.nudges === 2 && posting ? posting : mem.nudges === 3 ? loginUrl() : AUTO.applyUrl;
   }
 
   // Start once the page settles, then follow steps and new questions.
