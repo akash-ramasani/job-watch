@@ -662,11 +662,15 @@ const AI_DOWN_WAIT_MS = 15 * 60 * 1000;
 // Emulation.setFocusEmulationEnabled, the switch test browsers use; it detaches
 // when the job finishes. The browser shows a "debugging" bar meanwhile.
 const focusTabs = new Set();
+// Every debugger call is bounded: attaching while a tab navigates (right after a
+// sign-in submit) can hang, and a page waiting on it never learned its job (the
+// tabs that went silent after signing in, 2026-11-10).
+const within = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error(`no answer in ${ms} ms`)), ms))]);
 async function focusEmulate(tabId) {
   if (tabId == null || !chrome.debugger) return false;
-  try { await chrome.debugger.attach({ tabId }, "1.3"); } catch (e) { if (!/already attached/i.test(e.message || "")) { console.warn("[JobWatch] focus emulation unavailable:", e.message); return false; } }
+  try { await within(chrome.debugger.attach({ tabId }, "1.3"), 3000); } catch (e) { if (!/already attached/i.test(e.message || "")) { console.warn("[JobWatch] focus emulation unavailable:", e.message); return false; } }
   focusTabs.add(tabId);
-  try { await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true }); return true; }
+  try { await within(chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true }), 3000); return true; }
   catch (e) { console.warn("[JobWatch] focus emulation failed:", e.message); return false; }
 }
 function focusRelease(tabId) {
@@ -1293,7 +1297,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Unattended auto-apply ───────────────────────────────────────────
       if (message.type === "AUTO_JOB") {
         const job = await autoJobForTab(sender?.tab?.id);
-        if (job?.source === "workday" && sender?.frameId === 0) await focusEmulate(sender.tab.id);
+        // Not awaited: the page learns its job at once; emulation follows.
+        if (job?.source === "workday" && sender?.frameId === 0) focusEmulate(sender.tab.id).catch(() => {});
         sendResponse({ ok: true, job });
         return;
       }
