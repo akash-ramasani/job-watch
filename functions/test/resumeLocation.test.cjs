@@ -154,3 +154,10 @@ test("odd posted locations: stray dashes and a USA- prefix (Smartsheet)", () => 
   assert.equal(parsePlace("USA-Boston").state, "Massachusetts");
   assert.equal(parsePlace("San Francisco, CA").city, "San Francisco");
 });
+
+test("a work mode alone is no place: In-Office is not Office, Indiana (Cloudflare)", () => {
+  const { parsePlace } = require("../lib/apply/ashby.cjs");
+  assert.equal(parsePlace("In-Office"), null);
+  assert.equal(parsePlace("On-site"), null);
+  assert.equal(parsePlace("IN - Indianapolis").city, "Indianapolis");
+});

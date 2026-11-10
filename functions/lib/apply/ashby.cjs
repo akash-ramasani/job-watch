@@ -181,6 +181,9 @@ function placeOf(text) {
     .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
     .replace(/\s*\((?:[^)]*)\)\s*$/, "")
     .trim();
+  // A work mode alone is no place: "In-Office" (Cloudflare) once read as the
+  // city "Office" in IN, Indiana.
+  if (new RegExp(`^(?:${MODE}|office|in[- ]?office|on[- ]?site|onsite)$`, "i").test(raw)) return null;
   if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
   if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
   // "CA - San Francisco": state first.
