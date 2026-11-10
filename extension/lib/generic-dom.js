@@ -1077,6 +1077,31 @@
     press1(el);
     return true;
   }
+  /** The HTML of fields that went wrong, for traces: by JobWatch id, plus every
+   *  field Workday itself marks (error text inside it, or aria-invalid).
+   *  Styles and SVGs are dropped; each capped at 12 KB. */
+  function fieldHtml(ids = []) {
+    const out = [];
+    const seen = new Set();
+    const take = (box, why, id = "") => {
+      if (!box || seen.has(box)) return;
+      seen.add(box);
+      const html = box.outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, "<svg/>").replace(/ style="[^"]*"/g, "").replace(/ class="[^"]*"/g, "").replace(/\s+/g, " ").slice(0, 12000);
+      const err = clean(textOf(box.querySelector("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert]")));
+      out.push({ id, why, wd: box.getAttribute("data-automation-id") || "", label: clean(textOf(box.querySelector("label, legend"))).slice(0, 200), error: err.slice(0, 300), html });
+    };
+    const boxOf = (el) => el?.closest?.("[data-automation-id^=formField-]") || el?.closest?.("fieldset, [role=group]") || el?.parentElement;
+    for (const id of ids) {
+      const r = reg.get(id);
+      const el = (r && (r.inputs?.[0] || r.el)) || document.querySelector(`[data-jw-id="${CSS.escape(id)}"]`);
+      if (el) take(boxOf(el), "asked", id);
+    }
+    for (const e of document.querySelectorAll("[data-automation-id=errorMessage], [data-automation-id=inputError], [aria-invalid=true]")) {
+      if (!visible(e) && e.getAttribute("aria-invalid") !== "true") continue;
+      take(boxOf(e), "flagged by Workday", e.closest("[data-jw-id]")?.getAttribute("data-jw-id") || boxOf(e)?.querySelector?.("[data-jw-id]")?.getAttribute("data-jw-id") || "");
+    }
+    return out.slice(0, 25);
+  }
   /** Press a Workday button by automation id or text ("applyManually"). */
   function workdayPress(id, textRe = null) {
     const el = vis(`[data-automation-id="${CSS.escape(id)}"]`)[0] || (textRe ? buttonByText(new RegExp(textRe, "i")) : null);
@@ -1100,5 +1125,5 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
 })();

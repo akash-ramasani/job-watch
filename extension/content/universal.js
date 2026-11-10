@@ -562,7 +562,7 @@
     // AI reads what it still refuses.
     const errs = await gen("errors").catch(() => []);
     const pageSays = await gen("workdayAuthState").catch(() => ({ errors: [] }));
-    trace("advance", { step, press: n, moved: false, errors: errs, banner: pageSays.errors });
+    trace("advance", { step, press: n, moved: false, errors: errs, banner: pageSays.errors, problems: await gen("fieldHtml", errs.map((e) => e.path).filter(Boolean)).catch(() => []) });
     log(`workday: ${step} refused`, errs);
     for (const e of errs) {
       if (e.path) done.delete(e.path);
@@ -743,6 +743,8 @@
           attention: [...attention.entries()].map(([label, v]) => ({ label, note: v.note })),
           after: seenNow.map((f) => ({ id: f.id, label: f.label, type: f.type, required: !!f.required, filled: !!f.filled, wd: f.wd || "" })),
           errors: await gen("errors").catch(() => []),
+          // The HTML of every field that went wrong: failed fills, required ones still empty.
+          problems: await gen("fieldHtml", [...new Set([...Object.entries(fillResults).filter(([, v]) => !v.ok).map(([k]) => k), ...seenNow.filter((f) => f.required && !f.filled).map((f) => f.id)])]).catch(() => []),
         });
         for (const k of Object.keys(fillResults)) delete fillResults[k];
       }
