@@ -95,8 +95,15 @@ const outFile = process.argv[3] || path.join(root, "research", "workday-runs", `
     accounts: { ...acct, signInRate: pct(acct.signedIn, acct.jobs), createRate: pct(acct.created, acct.createAttempts), verifyRate: pct(acct.verified, acct.verifyNeeded), resetRate: pct(acct.resetDone, acct.resetAttempts) },
     fields: { ...fieldStats, fillRate: pct(fieldStats.filledOk, fieldStats.computed) },
   };
+  // Every field that went wrong, with its HTML (failed fills, required left empty, flagged by Workday).
+  const problems = [];
+  for (const j of list) {
+    for (const s of j.steps) for (const p of s.problems || []) problems.push({ company: j.company, tenant: j.tenant, step: s.step, at: "after filling", ...p });
+    for (const a of j.advances) for (const p of a.problems || []) problems.push({ company: j.company, tenant: j.tenant, step: a.step, at: `Save and Continue #${a.press}`, ...p });
+  }
+  summary.problemFields = problems.length;
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
-  fs.writeFileSync(outFile, JSON.stringify({ summary, catalog: Object.values(catalog), jobs: list }, null, 1));
+  fs.writeFileSync(outFile, JSON.stringify({ summary, problems, catalog: Object.values(catalog), jobs: list }, null, 1));
   console.log(JSON.stringify(summary, (k, v) => (k === "failed" && Array.isArray(v) ? v.slice(0, 15) : v), 1));
   console.log("\nwrote", outFile);
   process.exit(0);
