@@ -189,7 +189,19 @@
   }
   /** Open a dropdown: a click, else the keys a keyboard user would press
    *  (BambooHR's menus ignore synthetic clicks but open on Space). */
+  /** Close whatever list is open and wait until none shows: the next dropdown's
+   *  options are then its own (Morgan Stanley's State read the Suffix list,
+   *  Alteryx's Phone Device Type the states, 2026-11-10). */
+  async function noListOpen() {
+    for (let i = 0; i < 12 && openOptions().length; i++) {
+      press(document.activeElement || document.body, "Escape");
+      await sleep(80);
+      if (openOptions().length) { document.body.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); document.body.click(); }
+      await sleep(120);
+    }
+  }
   async function openPopup(btn) {
+    await noListOpen();
     btn.scrollIntoView({ block: "center" });
     realClick(btn);
     let opts = await waitOptions(800);
@@ -385,6 +397,7 @@
         const filled = typeaheadFilled(el);
         let options = [];
         if (!filled && readOptions) {
+          await noListOpen();
           el.scrollIntoView({ block: "center" });
           el.focus();
           realClick(el);
@@ -654,7 +667,10 @@
       await sleep(200);
     }
     el.dispatchEvent(new Event("blur", { bubbles: true }));
-    return { ok: picked.length > 0 && typeaheadFilled(el), picked: picked.join("; "), seen: picked.length ? undefined : values.slice(0, 5) };
+    // Workday redraws the box after picks: judge by the live one.
+    const live = (el.isConnected ? el : (r.domId && document.getElementById(r.domId))) || el;
+    const shown = live.closest?.("[data-automation-id^=formField-]")?.querySelectorAll("[data-automation-id=selectedItem]").length || 0;
+    return { ok: picked.length > 0 && (shown > 0 || typeaheadFilled(live)), picked: picked.join("; "), seen: picked.length ? undefined : values.slice(0, 5) };
   }
   async function clickInput(input) {
     const target = input.closest("label") || (input.id && forLabel(input)) || input;

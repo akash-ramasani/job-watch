@@ -260,6 +260,32 @@
     return opts.find((o) => ofLevel(o) && own(o) && !/ of /.test(k(o))) || opts.find((o) => ofLevel(o) && own(o)) || null;
   }
 
+  /** After My Experience: a Work Experience entry whose "To" shows empty
+   *  (Travelers refused "The field To is required", 2026-11-10). The current
+   *  job ticks "I currently work here" again, else gets this month; a past job
+   *  gets its end date again. */
+  async function fixWorkTo(roles) {
+    const fields = await gen("scan", { readOptions: false }).catch(() => []);
+    const blocks = [...new Set(fields.filter((f) => /^work experience \d+/i.test(f.section || "")).map((f) => f.section))];
+    for (let i = 0; i < blocks.length; i++) {
+      const role = roles[i];
+      const mine = fields.filter((f) => f.section === blocks[i]);
+      const to = mine.find((f) => f.type === "date" && /^to\b|end date/i.test(f.label) && !f.filled);
+      if (!role || !to) continue;
+      if (role.current) {
+        const cur = mine.find((f) => f.type === "yesno" && /currently work here|current(ly)? (employed|position|job)/i.test(f.label));
+        if (cur) { await gen("apply", cur.id, { kind: "boolean", value: "Yes", path: cur.id, label: cur.label }).catch(() => {}); await sleep(700); }
+        const again = (await gen("scan", { readOptions: false }).catch(() => [])).find((f) => f.id === to.id);
+        if (!again || again.filled) continue;
+        const now = new Date();
+        await gen("apply", to.id, { kind: "date", value: `${MONTH(now.getMonth() + 1)}/${now.getFullYear()}`, path: to.id, label: to.label }).catch(() => {});
+      } else if (role.to) {
+        await gen("apply", to.id, { kind: "date", value: role.to.month ? `${MONTH(role.to.month)}/${role.to.year}` : `12/${role.to.year}`, path: to.id, label: to.label }).catch(() => {});
+      }
+      log(`workday: fixed an empty To in ${blocks[i]}`);
+    }
+  }
+
   async function workdayExperience(pkg) {
     const hist = pkg.history || {};
     const plan = [
@@ -291,6 +317,7 @@
         for (const f of failures) attention.set(`${name}: ${f.label}`, { path: f.path, note: f.error || "could not fill" });
       }
     }
+    await fixWorkTo((hist.roles || []).slice(0, 5));
   }
 
   // ── Verify ────────────────────────────────────────────────────────────────
