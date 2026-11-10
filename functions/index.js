@@ -137,7 +137,7 @@ const { applicationResume } = require("./lib/apply/applicationResume.cjs");
 // A stuck field: one small JSON plan per field, many per application. Haiku.
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
-const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-sonnet-5-5";
+const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-haiku-5-5"; // the check before Submit: Haiku 5.5 (cost, 2026-11-10)
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");

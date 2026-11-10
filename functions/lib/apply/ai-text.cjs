@@ -9,7 +9,7 @@
 // are what a recruiter reads: Sonnet writes them. Picks and facts stay on the
 // fast model the board modules pass in (deps.model). Auto-apply only takes
 // jobs with a fit score of 40+, so there are few enough to write well.
-const WRITE_MODEL = process.env.WRITE_MODEL || "claude-sonnet-5-5";
+const WRITE_MODEL = process.env.WRITE_MODEL || "claude-haiku-5-5"; // answers and cover letters: Haiku 5.5 (cost, 2026-11-10)
 
 const stripHtml = (s) => String(s || "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
 
