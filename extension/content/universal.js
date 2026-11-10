@@ -129,6 +129,9 @@
   const stepFills = [];   // the computed fills of this step
   const stepReview = [];  // what the server left for the person on this step
   let lastProgress = Date.now(); // the last trace: the watchdog acts on a tab that went quiet
+  let currentWork = "";          // what the fill is doing now (for a fill that runs too long)
+  let busySince = 0;
+  let busyReported = false;
   function trace(kind, data) {
     if (!AUTO || !isWorkday) return;
     lastProgress = Date.now();
@@ -142,6 +145,7 @@
       if (pass > 1) await sleep(900);
       const still = [];
       for (const f of pending) {
+        currentWork = `filling ${f.label || f.path} (${f.kind}, pass ${pass})`;
         hl.focus(elOf(f.path), `Filling: ${f.label || f.path}`);
         const r = await applyWithRetry(f, pkg);
         fillResults[f.path] = { label: f.label, kind: f.kind, source: f.source || "", value: f.values || f.value, ok: !!r.ok, error: r.error || "", picked: r.picked || r.actual || "", seen: r.ok ? undefined : r.seen, pass };
@@ -323,6 +327,7 @@
         const order = new Map(fields.map((d, k) => [d.id, k]));
         const fills = mine.map((f) => sec.fillFor(f, sec.items[i])).filter(Boolean);
         banner(`JobWatch is adding ${name} from your resume.`);
+        currentWork = `adding ${name}`;
         const failures = await fillFields(fills, pkg, order);
         for (const f of failures) attention.set(`${name}: ${f.label}`, { path: f.path, note: f.error || "could not fill" });
       }
@@ -649,6 +654,8 @@
     if (manual()) { window.__jwManualStart = false; forced = true; armNext = true; }
     if (!started && !forced && (!formish() || pageSig() === notAFormSig)) return;
     busy = true;
+    busySince = Date.now();
+    busyReported = false;
     try {
       if (started && await gen("submitted").catch(() => false)) {
         if (started && !submittedSeen) {
@@ -793,6 +800,12 @@
    *  record what the page shows, then Continue Application / Apply, else open
    *  the job's Apply Manually link again (three times at most). */
   async function watchdog() {
+    // A fill running for four minutes (Johnson Controls' My Experience went silent): say where it is.
+    if (AUTO && isWorkday && busy && busySince && Date.now() - busySince > 240000 && !busyReported) {
+      busyReported = true;
+      trace("busy", { minutes: Math.round((Date.now() - busySince) / 60000), work: currentWork, step: lastStep, openLists: document.querySelectorAll("[data-automation-id=activeListContainer], [role=listbox]:not([data-automation-id=selectedItemList])").length,
+        text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.replace(/\s+/g, " ").slice(-1500) });
+    }
     if (!AUTO || !isWorkday || busy || stopped || Date.now() - lastProgress < 60000) return;
     if (onApplyFlow() && await gen("workdayInApp").catch(() => false)) return;
     const mem = authMem();
@@ -831,9 +844,9 @@
     const timer = setInterval(() => {
       if (stopped || Date.now() - t0 > 90 * 60 * 1000) { clearInterval(timer); obs.disconnect(); return; }
       if (location.href !== lastUrl) { lastUrl = location.href; quietUntil = Date.now() + 1500; }
+      watchdog().catch(() => {}); // also while a fill runs: it reports a fill that runs too long
       if (Date.now() < quietUntil || busy) return;
       tick();
-      watchdog().catch(() => {});
     }, 1500);
   })();
 })();
