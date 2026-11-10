@@ -128,8 +128,10 @@
   const fillResults = {}; // path -> { ok, error, picked, value, kind, source, label }
   const stepFills = [];   // the computed fills of this step
   const stepReview = [];  // what the server left for the person on this step
+  let lastProgress = Date.now(); // the last trace: the watchdog acts on a tab that went quiet
   function trace(kind, data) {
     if (!AUTO || !isWorkday) return;
+    lastProgress = Date.now();
     sendMsg({ type: "WORKDAY_TRACE", kind, data: { ...data, page: location.href.slice(0, 300) } }).catch?.(() => {});
   }
 
@@ -780,6 +782,28 @@
     }
   }
 
+  /** An auto-apply tab that went quiet for a minute off the application (after
+   *  signing in, Workday sometimes lands on the posting, Candidate Home or an
+   *  error page and nothing happened until the 25-minute timeout, 2026-11-10):
+   *  record what the page shows, then Continue Application / Apply, else open
+   *  the job's Apply Manually link again (three times at most). */
+  async function watchdog() {
+    if (!AUTO || !isWorkday || busy || stopped || Date.now() - lastProgress < 60000) return;
+    if (onApplyFlow() && await gen("workdayInApp").catch(() => false)) return;
+    const mem = authMem();
+    mem.nudges = (mem.nudges || 0) + 1;
+    authSave(mem);
+    trace("idle", {
+      nudge: mem.nudges, url: location.href.slice(0, 300),
+      text: (document.body?.innerText || "").replace(/\s+/g, " ").slice(0, 1500),
+      buttons: [...document.querySelectorAll("button, a[role=button], [data-automation-id=adventureButton], [data-automation-id=continueButton]")].filter((x) => x.offsetParent).map((x) => `${x.getAttribute("data-automation-id") || ""}|${(x.innerText || "").trim().slice(0, 40)}`).slice(0, 40),
+    });
+    if (mem.nudges > 3) { stopped = true; return autoReport("error", `Workday left the application at ${location.pathname.slice(0, 120)} and did not come back`); }
+    if (await gen("workdayPress", "continueButton", "^continue application$").catch(() => false)) return;
+    if (await gen("workdayPress", "adventureButton", "^apply$").catch(() => false)) return;
+    location.href = AUTO.applyUrl;
+  }
+
   // Start once the page settles, then follow steps and new questions.
   (async () => {
     await sleep(manual() ? 200 : 1500);
@@ -804,6 +828,7 @@
       if (location.href !== lastUrl) { lastUrl = location.href; quietUntil = Date.now() + 1500; }
       if (Date.now() < quietUntil || busy) return;
       tick();
+      watchdog().catch(() => {});
     }, 1500);
   })();
 })();
