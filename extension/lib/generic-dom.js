@@ -689,10 +689,18 @@
       const opts = await waitOptions(2500, before || null);
       const hit = opts.find((o) => nrm(optText(o)) === nrm(v)) || opts.find((o) => base(optText(o)) === nrm(v));
       if (hit) {
+        // Count what Workday shows as chosen, before and after: a click it did not
+        // take is not a pick (CoStar showed "0 items selected" after ten "picks").
+        const box = () => ((el.isConnected ? el : (r.domId && document.getElementById(r.domId))) || el).closest?.("[data-automation-id^=formField-]");
+        const count = () => box()?.querySelectorAll("[data-automation-id=selectedItem]").length || 0;
+        const before = count();
         hit.scrollIntoView({ block: "nearest" });
-        realClick(optTarget(hit));
-        await sleep(600);
-        picked.push(optText(hit));
+        for (const tryPick of [() => realClick(optTarget(hit)), () => realClick(hit), () => { hit.focus?.(); press(optTarget(hit), "Enter"); press(hit, "Enter"); }, () => optTarget(hit).click?.()]) {
+          tryPick();
+          await sleep(600);
+          if (count() > before) { picked.push(optText(hit)); break; }
+          if (!hit.isConnected) break;
+        }
       }
       setNative(el, "");
       await closeList(el);
