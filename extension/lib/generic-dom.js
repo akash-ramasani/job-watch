@@ -636,6 +636,20 @@
     let hit = opts.length ? (exact(opts, match || value) || exact(opts, value)) : null;
     let laterCategory = null;
     if (hit && isCategory(hit) && alternates.length) { laterCategory = optText(hit); hit = null; }
+    // No exact name: an option holding every distinctive word searched, never a
+    // category ("Computer Science" -> "Computer and Information Science", J&J).
+    const keyWords = (t) => nrm(t).replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length >= 2 && !STOP.test(w));
+    // Not for "How did you hear" (its own ordered names; "Job Board" must never take a regional board).
+    const heardList = alternates.some((a) => /^linkedin$/i.test(a));
+    const nearPick = (os, term) => {
+      if (heardList || keyWords(term).length < 2) return null;
+      const near = os.filter((o) => !isCategory(o) && fits(term, optText(o)));
+      return near.sort((a, b) => optText(a).length - optText(b).length)[0] || null;
+    };
+    if (!hit && !laterCategory && opts.length && keyWords(value).length >= 2 && !heardList) {
+      const near = opts.filter((o) => !isCategory(o) && fits(value, optText(o)));
+      if (near.length) { near.sort((a, b) => optText(a).length - optText(b).length); hit = near[0]; }
+    }
     if (hit) { hit.scrollIntoView({ block: "nearest" }); realClick(optTarget(hit)); await sleep(500); return finish(optText(hit)); }
     // Other names to search ("LinkedIn", "Indeed"…), each picked the same way.
     for (const alt of alternates.slice(0, 6)) {
@@ -644,7 +658,8 @@
       await search(alt);
       if (chosen() && fits(alt, chosen())) { await closeList(el); return { ok: true, picked: chosen() }; }
       if (chosen()) { await unpick(); continue; }
-      const found = exact(await results(), alt);
+      const shown = await results();
+      const found = exact(shown, alt) || nearPick(shown, alt);
       if (found && !isCategory(found)) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
       if (found && !laterCategory) laterCategory = optText(found);
     }
