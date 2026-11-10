@@ -158,7 +158,10 @@ export function drawResumePdfLocally(resume, contact, fileBase) {
   };
   const strip = (u) => String(u || "").replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/$/, "");
 
-  const h = { ...(contact || {}), ...(resume.header || {}) };
+  // Contact details come from the account (Personal Information); a resume's
+  // own header only supplies the city a tailored resume sets per job.
+  const filled = Object.fromEntries(Object.entries(contact || {}).filter(([, v]) => String(v || "").trim()));
+  const h = { ...(resume.header || {}), ...filled, ...(resume.header?.location ? { location: resume.header.location } : {}) };
   setStyle(19, "bold");
   ensure(30);
   doc.text(String(h.name || "").toUpperCase(), pageW / 2, y, { align: "center" });

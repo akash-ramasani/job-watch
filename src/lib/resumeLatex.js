@@ -147,7 +147,10 @@ function dateRange(start, end) {
  *                { name, location, phone, email, github, linkedin }
  */
 export function buildResumeLatex(resume, contact = {}) {
-  const h = { ...(contact || {}), ...(resume?.header || {}) };
+  // Contact details come from the account (Personal Information); a resume's
+  // own header only supplies the city a tailored resume sets per job.
+  const filled = Object.fromEntries(Object.entries(contact || {}).filter(([, v]) => String(v || "").trim()));
+  const h = { ...(resume?.header || {}), ...filled, ...(resume?.header?.location ? { location: resume.header.location } : {}) };
   const name = h.name || contact.name || "";
 
   // Line 1: where to reach you. Line 2: where to read more. Same split as the

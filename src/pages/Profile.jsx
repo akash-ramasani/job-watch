@@ -91,12 +91,12 @@ export default function Profile({ user, userMeta }) {
   const { showToast } = useToast();
 
   const [formData, setFormData] = useState({
-    firstName: "", lastName: "", middleName: "", university: "",
+    firstName: "", lastName: "", middleName: "",
     country: "United States", addressLine1: "", addressLine2: "",
     city: "", region: "", postalCode: "",
     phone: "", linkedin: "",
     github: "", portfolio: "",
-    availability: "", hourlyRate: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
+    availability: "", hourlyRate: "", salaryExpectation: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
@@ -104,6 +104,7 @@ export default function Profile({ user, userMeta }) {
     eeoEthnicity: "Decline to self-identify",
     eeoVeteran: "I am not a protected veteran",
     eeoDisability: "No, I don't have a disability",
+    applicationEducation: [], certifications: "",
   });
   const [generatingPronunciation, setGeneratingPronunciation] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -170,7 +171,6 @@ export default function Profile({ user, userMeta }) {
         firstName: userMeta.firstName || "",
         lastName: userMeta.lastName || "",
         middleName: userMeta.middleName || "",
-        university: userMeta.university || "",
         country: userMeta.country || "United States",
         addressLine1: userMeta.addressLine1 || "",
         addressLine2: userMeta.addressLine2 || "",
@@ -183,6 +183,7 @@ export default function Profile({ user, userMeta }) {
         portfolio: userMeta.portfolio || "",
         availability: userMeta.availability || "",
         hourlyRate: userMeta.hourlyRate || "",
+        salaryExpectation: userMeta.salaryExpectation || "",
         visaType: userMeta.visaType || "H-1B",
         citizenshipCountry: userMeta.citizenshipCountry || "",
         startupCompanies: userMeta.startupCompanies || "",
@@ -203,9 +204,14 @@ export default function Profile({ user, userMeta }) {
         eeoEthnicity: userMeta.eeoEthnicity || "Decline to self-identify",
         eeoVeteran: userMeta.eeoVeteran || "I am not a protected veteran",
         eeoDisability: userMeta.eeoDisability || "No, I don't have a disability",
+        // Education and certifications for applications; until saved here,
+        // they start from the resume.
+        applicationEducation: (userMeta.applicationEducation?.length ? userMeta.applicationEducation : (savedResumeFull?.education || []))
+          .map((e) => ({ institution: e.institution || e.school || "", degree: e.degree || "", field: e.field || e.major || "", startDate: e.startDate || "", endDate: e.endDate || "" })),
+        certifications: (userMeta.certifications?.length ? userMeta.certifications : (savedResumeFull?.certifications || [])).join("\n"),
       });
     }
-  }, [userMeta, user?.phoneNumber]);
+  }, [userMeta, user?.phoneNumber, savedResumeFull]);
 
   async function handleGeneratePronunciation() {
     const name = `${formData.firstName} ${formData.lastName}`.trim();
@@ -239,8 +245,14 @@ export default function Profile({ user, userMeta }) {
         linkedin: fromLinkedInSlug(formData.linkedin),
         github: fromGithubSlug(formData.github),
         fullName: `${formData.firstName} ${formData.lastName}`.trim(),
+        applicationEducation: formData.applicationEducation
+          .map((e) => Object.fromEntries(Object.entries(e).map(([k, v]) => [k, String(v || "").trim()])))
+          .filter((e) => e.institution || e.degree),
+        certifications: formData.certifications.split("\n").map((c) => c.trim()).filter(Boolean),
         updatedAt: serverTimestamp(),
       };
+      // Forms ask "University" on its own: the first school above.
+      saveData.university = saveData.applicationEducation[0]?.institution || userMeta?.university || "";
       await setDoc(doc(db, "users", user.uid), saveData, { merge: true });
       showToast("Profile updated successfully", "success");
     } catch {
@@ -370,7 +382,7 @@ export default function Profile({ user, userMeta }) {
   async function downloadResume(profile, format) {
     const contact = contactFromUser(user, userMeta);
     const resume = profileToResume(profile);
-    const base = `${profile.header?.name || contact.name || "My"} - Resume`;
+    const base = `${contact.name || profile.header?.name || "My"} - Resume`;
     let renderer = "tex";
     if (format === "tex") downloadResumeTex(resume, contact, base);
     else renderer = await downloadResumePdf(resume, contact, base);
@@ -454,10 +466,6 @@ export default function Profile({ user, userMeta }) {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label htmlFor="university" className="caps-label block mb-2">University</label>
-                <input id="university" name="university" type="text" value={formData.university} onChange={handleChange} placeholder="e.g. Stanford University" className="input-standard" />
-              </div>
-              <div>
                 <label htmlFor="country" className="caps-label block mb-2">Country</label>
                 <input id="country" name="country" type="text" value={formData.country} onChange={handleChange} autoComplete="country-name" className="input-standard" placeholder="United States" />
               </div>
@@ -497,7 +505,7 @@ export default function Profile({ user, userMeta }) {
         <ProfileCard
           onSubmit={handleSave}
           title="Application Defaults"
-          description="Pre-filled answers used by the extension when submitting Ashby applications automatically."
+          description="What application forms ask on every job site, filled from here."
           footer={
             <button disabled={busy} type="submit" className="btn-primary">
               {busy ? "Saving…" : "Save Defaults"}
@@ -565,6 +573,10 @@ export default function Profile({ user, userMeta }) {
                 <input id="hourlyRate" name="hourlyRate" type="text" value={formData.hourlyRate} onChange={handleChange} className="input-standard" placeholder="75 USD per hour" />
               </div>
               <div>
+                <label htmlFor="salaryExpectation" className="caps-label block mb-2">Salary Expectation</label>
+                <input id="salaryExpectation" name="salaryExpectation" type="text" value={formData.salaryExpectation} onChange={handleChange} className="input-standard" placeholder="120,000 USD base, flexible" />
+              </div>
+              <div>
                 <label htmlFor="visaType" className="caps-label block mb-2">Visa You Would Need</label>
                 <input id="visaType" name="visaType" type="text" value={formData.visaType} onChange={handleChange} className="input-standard" placeholder="H-1B" />
               </div>
@@ -575,18 +587,6 @@ export default function Profile({ user, userMeta }) {
               <div>
                 <label htmlFor="startupCompanies" className="caps-label block mb-2">Startups You Worked At</label>
                 <input id="startupCompanies" name="startupCompanies" type="text" value={formData.startupCompanies} onChange={handleChange} className="input-standard" placeholder="Runn Technologies" />
-              </div>
-              <div>
-                <label htmlFor="gpa" className="caps-label block mb-2">GPA</label>
-                <input id="gpa" name="gpa" type="text" value={formData.gpa} onChange={handleChange} className="input-standard" placeholder="3.6" />
-              </div>
-              <div>
-                <label htmlFor="satScore" className="caps-label block mb-2">SAT Score</label>
-                <input id="satScore" name="satScore" type="text" value={formData.satScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
-              </div>
-              <div>
-                <label htmlFor="actScore" className="caps-label block mb-2">ACT Score</label>
-                <input id="actScore" name="actScore" type="text" value={formData.actScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
               </div>
             </div>
 
@@ -639,6 +639,57 @@ export default function Profile({ user, userMeta }) {
                   disabled={formData.clearanceStatus === "None"}
                   options={["None", "Confidential", "Secret", "Top Secret (TS)", "TS/SCI", "TS/SCI with CI Poly", "TS/SCI with Full Poly", "Other"]}
                 />
+              </div>
+            </div>
+
+            {/* Education + Certifications, as forms ask for them (with dates). */}
+            <div className="pt-2 border-t border-gray-100">
+              <div className="flex items-center justify-between mb-4">
+                <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Education</p>
+                <button type="button" className="text-xs font-bold text-indigo-600 hover:text-indigo-800"
+                  onClick={() => setFormData((f) => ({ ...f, applicationEducation: [...f.applicationEducation, { institution: "", degree: "", field: "", startDate: "", endDate: "" }] }))}>
+                  + Add school
+                </button>
+              </div>
+              <div className="space-y-3">
+                {formData.applicationEducation.map((ed, i) => {
+                  const setEd = (patch) => setFormData((f) => ({ ...f, applicationEducation: f.applicationEducation.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
+                  return (
+                    <div key={i} className="relative rounded-xl border border-gray-200 bg-gray-50/60 p-4 pr-10">
+                      <button type="button" aria-label="Remove school" title="Remove school"
+                        onClick={() => setFormData((f) => ({ ...f, applicationEducation: f.applicationEducation.filter((_, j) => j !== i) }))}
+                        className="absolute top-3 right-3 h-6 w-6 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50">✕</button>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input type="text" aria-label="School" className="input-standard" placeholder="School" value={ed.institution} onChange={(e) => setEd({ institution: e.target.value })} />
+                        <input type="text" aria-label="Degree" className="input-standard" placeholder="Degree, e.g. Master of Science" value={ed.degree} onChange={(e) => setEd({ degree: e.target.value })} />
+                        <input type="text" aria-label="Field of study" className="input-standard" placeholder="Field of study, e.g. Computer Science" value={ed.field} onChange={(e) => setEd({ field: e.target.value })} />
+                        <div className="grid grid-cols-2 gap-3">
+                          <input type="text" aria-label="Start" className="input-standard" placeholder="Start, e.g. Aug 2024" value={ed.startDate} onChange={(e) => setEd({ startDate: e.target.value })} />
+                          <input type="text" aria-label="End" className="input-standard" placeholder="End, e.g. May 2026" value={ed.endDate} onChange={(e) => setEd({ endDate: e.target.value })} />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!formData.applicationEducation.length && <p className="text-xs text-gray-400">No schools yet.</p>}
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mt-5">
+                <div>
+                  <label htmlFor="gpa" className="caps-label block mb-2">GPA</label>
+                  <input id="gpa" name="gpa" type="text" value={formData.gpa} onChange={handleChange} className="input-standard" placeholder="3.6" />
+                </div>
+                <div>
+                  <label htmlFor="satScore" className="caps-label block mb-2">SAT Score</label>
+                  <input id="satScore" name="satScore" type="text" value={formData.satScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
+                </div>
+                <div>
+                  <label htmlFor="actScore" className="caps-label block mb-2">ACT Score</label>
+                  <input id="actScore" name="actScore" type="text" value={formData.actScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />
+                </div>
+              </div>
+              <div className="mt-5">
+                <label htmlFor="certifications" className="caps-label block mb-2">Certifications</label>
+                <textarea id="certifications" name="certifications" rows={3} value={formData.certifications} onChange={handleChange} className="input-standard" placeholder={"One per line, e.g. AWS Certified Solutions Architect – Associate"} />
               </div>
             </div>
 

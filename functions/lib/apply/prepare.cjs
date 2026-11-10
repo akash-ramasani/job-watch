@@ -5,6 +5,7 @@
 // form (option LABELS for comboboxes so the script can pick them by text).
 
 const { buildProfileForJob, parsePlace, REMOTE_LOCATION_DEFAULT } = require("./ashby.cjs");
+const { applicationResume } = require("./applicationResume.cjs");
 const { aiContext, answerFreeText, pickOption, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
 
 const GH_BASE = "https://boards-api.greenhouse.io/v1/boards";
@@ -47,7 +48,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     db.collection("users").doc(uid).collection("resume").doc("profile").get(),
   ]);
   const profile = userSnap.exists ? userSnap.data() : {};
-  const resume = resumeSnap.exists ? resumeSnap.data() : {};
+  const resume = applicationResume(profile, resumeSnap.exists ? resumeSnap.data() : {});
   let appliedBefore = null;
   try {
     if (job.companyName) {
@@ -126,8 +127,8 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
           fills.push({ label: q.label, name: q.fields[0].name, kind, value: p.values[0], ...(kind === "multiselect" ? { values: p.values } : {}), required: !!q.required, source: "ai", note: `AI pick: ${p.why || ""}`.trim() });
           aiPicked.add(r.label);
         } else if (["text", "longtext", "number"].includes(kind) && !/needs a link|password|no referral|follow-up/i.test(`${r.note || ""} ${q.label}`)
-          // Pay only from the person's own answer on the Profile page.
-          && (!/salary|compensation/i.test(`${r.note || ""} ${q.label}`) || String(profileForJob.applicantFacts?.startAndPay || "").trim())) {
+          // Pay only from the person's own Salary Expectation (Application Defaults).
+          && (!/salary|compensation/i.test(`${r.note || ""} ${q.label}`) || String(profile.salaryExpectation || "").trim())) {
           const num = kind === "number";
           const a = await answerFreeText({ label: q.label, description: [stripHtml(q.description || ""), num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" "), ashbyType: num ? "Number" : kind === "longtext" ? "LongText" : "String" }, ctx, aiDeps);
           const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;

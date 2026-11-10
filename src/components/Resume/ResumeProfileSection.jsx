@@ -299,7 +299,6 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
 
   // ── Editing ──
   if (view === "editing") {
-    const header = draft.header || {};
     return (
       <div className="rounded-2xl border border-gray-100 bg-white shadow-sm">
         <div className="px-5 sm:px-6 py-4 border-b border-gray-100">
@@ -405,16 +404,6 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
             <AutoTextarea value={draft.extraExperience} onChange={(e) => set({ extraExperience: e.target.value })} placeholder="Tools, projects, results you left out for space" rows={3} />
           </Section>
 
-          <Section title="Contact line" hint="Shown under your name. Leave blank to use your account details.">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Name" value={header.name} onChange={(e) => set({ header: { ...header, name: e.target.value } })} placeholder={contact.name} />
-              <Field label="Phone" value={header.phone} onChange={(e) => set({ header: { ...header, phone: e.target.value } })} placeholder={contact.phone} />
-              <Field label="Email" value={header.email} onChange={(e) => set({ header: { ...header, email: e.target.value } })} placeholder={contact.email} />
-              <Field label="City" value={header.location} onChange={(e) => set({ header: { ...header, location: e.target.value } })} placeholder={contact.location || "City, State"} />
-              <Field label="LinkedIn" value={header.linkedin} onChange={(e) => set({ header: { ...header, linkedin: e.target.value } })} placeholder={contact.linkedin} />
-              <Field label="GitHub" value={header.github} onChange={(e) => set({ header: { ...header, github: e.target.value } })} placeholder={contact.github} />
-            </div>
-          </Section>
         </div>
 
         <div className="sticky bottom-0 flex items-center justify-end gap-3 px-5 sm:px-6 py-4 border-t border-gray-100 bg-white/95 backdrop-blur rounded-b-2xl">
@@ -458,7 +447,7 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
   }
 
   // ── Saved resume ──
-  const name = saved.header?.name || contact.name;
+  const name = contact.name || saved.header?.name;
   const roles = saved.roles || [];
   const thinRoles = roles.filter((r) => lines(r.description).length < 3);
   const skillCount = skillGroupsOf(saved).reduce((n, g) => n + g.skills.length, 0);

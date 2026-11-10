@@ -13,6 +13,7 @@
 // dropped answers on longer forms.
 
 const { savedIndex } = require("./savedAnswers.cjs");
+const { applicationResume } = require("./applicationResume.cjs");
 const { METROS } = require("../resumeLocation.cjs");
 const { candidateYearsOf, buildProfileText } = require("../jobFit.cjs");
 const { renderCoverLetterPdf, contactLine } = require("./coverPdf.cjs");
@@ -396,7 +397,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     db.collection("users").doc(uid).collection("resume").doc("profile").get(),
   ]);
   const user = userSnap.exists ? userSnap.data() : {};
-  const resume = resumeSnap.exists ? resumeSnap.data() : {};
+  const resume = applicationResume(user, resumeSnap.exists ? resumeSnap.data() : {});
   let appliedBefore = null;
   try {
     const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(1).get();

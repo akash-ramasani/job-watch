@@ -133,14 +133,13 @@ const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
 const { reviewForm } = require("./lib/apply/review.cjs");
-const { applicantNotes } = require("./lib/apply/applicantNotes.cjs");
+const { applicationResume } = require("./lib/apply/applicationResume.cjs");
 // A stuck field: one small JSON plan per field, many per application. Haiku.
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
 const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-sonnet-5-5";
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
-const { draftAnswers, applyDrafts } = require("./lib/apply/draftAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");
 const { createAssistantContext, runTool, toolsForOpenAI, buildSystemPrompt } = require("./lib/assistantTools.cjs");
 
@@ -4419,7 +4418,7 @@ exports.mapFormFields = onCall(
     ]);
 
     const user = userSnap.exists ? userSnap.data() : {};
-    const resume = resumeSnap.exists ? resumeSnap.data() : {};
+    const resume = applicationResume(user, resumeSnap.exists ? resumeSnap.data() : {});
 
     const fullName = user.fullName || `${user.firstName || ""} ${user.lastName || ""}`.trim();
 
@@ -4964,7 +4963,7 @@ exports.tailoredResumeFile = onCall(
     try { validateResumeTex(tex); } catch (err) { throw new HttpsError("internal", err.message); }
     if (!(await tectonicAvailable())) throw new HttpsError("unavailable", "The LaTeX compiler is not available on the server.");
     const { pdf } = await compileResumeTex(tex);
-    const fileName = autoResumeFileName(resume.header?.name || contact.name, job.title || "");
+    const fileName = autoResumeFileName(contact.name || resume.header?.name, job.title || "");
     logger.info(`tailoredResumeFile: uid=${uid} job=${jobId} ${fileName} ${pdf.length} bytes cached=${!!json.result.cached}`);
     return { jobId: String(jobId), fileName, pdfBase64: pdf.toString("base64"), bytes: pdf.length };
   }
@@ -4989,7 +4988,7 @@ exports.rescueField = onCall(
     ]);
     const t0 = Date.now();
     const plan = await rescueFieldPlan({ anthropic: new Anthropic({ apiKey: key, maxRetries: 2 }), model: RESCUE_MODEL }, d,
-      userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
+      userSnap.exists ? userSnap.data() : {}, applicationResume(userSnap.data() || {}, resumeSnap.exists ? resumeSnap.data() : {}));
     logger.info(`rescueField: uid=${uid} round=${d.round || 1} q="${String(d.question).slice(0, 80)}" steps=${plan.steps.length} done=${plan.done} cannot="${plan.cannot}" ms=${Date.now() - t0}`);
     return plan;
   }
@@ -5015,7 +5014,7 @@ exports.reviewApplication = onCall(
     ]);
     const t0 = Date.now();
     const r = await reviewForm({ anthropic: new Anthropic({ apiKey: key, maxRetries: 2 }), model: REVIEW_MODEL }, d,
-      userSnap.exists ? userSnap.data() : {}, resumeSnap.exists ? resumeSnap.data() : {});
+      userSnap.exists ? userSnap.data() : {}, applicationResume(userSnap.data() || {}, resumeSnap.exists ? resumeSnap.data() : {}));
     logger.info(`reviewApplication: uid=${uid} company="${String(d.companyName || "").slice(0, 60)}" items=${d.items.length} issues=${r.issues.length} ${r.issues.map((i) => `[${i.severity}] ${i.question.slice(0, 50)}: ${i.problem.slice(0, 80)}`).join(" | ")} ms=${Date.now() - t0}`);
     return r;
   }
@@ -5032,36 +5031,6 @@ exports.learnAnswers = onCall({ region: REGION, maxInstances: 10 }, async (reque
   logger.info(`learnAnswers: uid=${uid} saved=${r.saved} missing=${r.missing}`);
   return r;
 });
-
-// "Answer with AI" on the Profile page: the open questions, grouped and
-// answered from the person's background note, profile and resume; the rest
-// stay for the person, one copy each (lib/apply/draftAnswers.cjs).
-exports.draftMissingAnswers = onCall(
-  { region: REGION, maxInstances: 5, memory: "512MiB", timeoutSeconds: 180, secrets: [ANTHROPIC_API_KEY, OPENAI_API_KEY] },
-  async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const about = String(request.data?.about ?? "").trim().slice(0, 2000);
-    const ref = db.collection("users").doc(uid);
-    if (request.data?.about !== undefined) await ref.set({ answerContext: about }, { merge: true });
-    const [userSnap, resumeSnap] = await Promise.all([ref.get(), ref.collection("resume").doc("profile").get()]);
-    const user = userSnap.data() || {};
-    const missing = user.missingAnswers || {};
-    if (!Object.keys(missing).length) return { answered: 0, waiting: 0, merged: 0 };
-    let groups;
-    try {
-      ({ groups } = await draftAnswers({ client: requireOpenAI(), model: RESUME_MODEL }, { missing, user, resume: resumeSnap.data() || {}, about: [about || user.answerContext || "", applicantNotes({ ...user, answerContext: "" })].filter(Boolean).join("\n") }));
-    } catch (err) {
-      logger.error("draftMissingAnswers failed:", err);
-      if (isOutOfCredits(err)) throw new HttpsError("resource-exhausted", "The AI service is out of credits right now. Try again later.");
-      throw new HttpsError("internal", `Could not draft answers: ${err.message}`);
-    }
-    const r = applyDrafts(missing, groups, { FieldValue: admin.firestore.FieldValue });
-    if (Object.keys(r.update).length) await ref.update(r.update);
-    logger.info(`draftMissingAnswers: uid=${uid} questions=${Object.keys(missing).length} answered=${r.answered} waiting=${r.waiting} merged=${r.merged}`);
-    return { answered: r.answered, waiting: r.waiting, merged: r.merged };
-  }
-);
 
 // What companies wrote back: the extension sends recent Gmail messages
 // (sender, subject, snippet); matched ones are sorted by Claude and recorded

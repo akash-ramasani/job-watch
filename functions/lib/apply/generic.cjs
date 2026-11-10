@@ -17,6 +17,7 @@
 // links go back to the content script for Workday's My Experience page.
 
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
+const { applicationResume } = require("./applicationResume.cjs");
 const { aiContext, answerFreeText, pool } = require("./ai-text.cjs");
 
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -273,7 +274,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
     db.collection("users").doc(uid).collection("resume").doc("profile").get(),
   ]);
   const user = userSnap.exists ? userSnap.data() : {};
-  const resume = resumeSnap.exists ? resumeSnap.data() : {};
+  const resume = applicationResume(user, resumeSnap.exists ? resumeSnap.data() : {});
   let appliedBefore = null;
   if (job.companyName) {
     try {

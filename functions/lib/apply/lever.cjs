@@ -13,6 +13,7 @@
 // consent[marketing]. Fills are keyed by that name (`path`).
 
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
+const { applicationResume } = require("./applicationResume.cjs");
 const { aiContext, answerFreeText, pickOption, pool } = require("./ai-text.cjs");
 
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -87,7 +88,7 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     db.collection("users").doc(uid).collection("resume").doc("profile").get(),
   ]);
   const user = userSnap.exists ? userSnap.data() : {};
-  const resume = resumeSnap.exists ? resumeSnap.data() : {};
+  const resume = applicationResume(user, resumeSnap.exists ? resumeSnap.data() : {});
   let appliedBefore = null;
   try {
     const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(1).get();
