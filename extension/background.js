@@ -1367,6 +1367,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         } catch (err) { sendResponse({ ok: false, error: err.message }); }
         return;
       }
+      // Focus emulation again before a step is filled or saved (it is lost when
+      // the "debugging" bar is cancelled or closed; CoStar's Self Identify date).
+      if (message.type === "WORKDAY_FOCUS") {
+        const job = await autoJobForTab(sender?.tab?.id);
+        sendResponse({ ok: job?.source === "workday" ? await focusEmulate(sender.tab.id) : false });
+        return;
+      }
       if (message.type === "AUTO_SUBMITTING") {
         const st = await autoState();
         await withAutoLock(async () => {

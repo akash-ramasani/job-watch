@@ -569,6 +569,7 @@
       return autoReport("needs_attention", `stuck on ${step || "a step"}${left ? `: ${left}` : ": Save and Continue did not move on"}`);
     }
     banner(`Auto-apply: ${step || "this step"} is filled. Pressing Save and Continue.`);
+    await sendMsg({ type: "WORKDAY_FOCUS" });
     // Workday greys Save and Continue out while it works (an upload, a check):
     // wait for it, up to half a minute (Autodesk, 2026-11-10).
     let r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
@@ -753,6 +754,7 @@
         started = true;
       }
       lastStep = step;
+      if (AUTO && isWorkday) await sendMsg({ type: "WORKDAY_FOCUS" });
       banner(`JobWatch is reading the form${step ? `: ${step}` : ""}…`);
       // Read options of the fresh pick lists (opens each dropdown once).
       fields = await gen("scan", { readOptions: true }).catch(() => fields);
