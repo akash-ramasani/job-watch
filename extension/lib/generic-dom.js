@@ -966,6 +966,14 @@
     const message = (body.match(/[^.]*\b(verify|verification|activate)\b[^.]*(email|account)[^.]*\./i) || [""])[0].slice(0, 240);
     return { mode, errors: [...new Set(errs)], message };
   }
+  /** In the application itself: past "Create Account/Sign In" with questions on
+   *  screen (not a page between two forms, which once read as "signed in"). */
+  function workdayInApp() {
+    if (vis("input[type=password]").length || vis("[data-automation-id=SignInWithEmailButton]").length) return false;
+    const step = clean(textOf(document.querySelector("[data-automation-id=progressBarActiveStep]")));
+    if (!step || /sign ?in|create account/i.test(step)) return false;
+    return !!document.querySelector("[data-automation-id^=formField-], [data-automation-id=applyFlowPage] input, [data-automation-id=reviewPage]");
+  }
   /** Open the email form from the chooser screen; true when it opened. */
   async function workdayEmailForm() {
     const b = vis("[data-automation-id=SignInWithEmailButton]")[0];
@@ -1076,5 +1084,5 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
 })();

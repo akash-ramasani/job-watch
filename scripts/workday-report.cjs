@@ -26,6 +26,7 @@ const outFile = process.argv[3] || path.join(root, "research", "workday-runs", `
     const key = t.jobId || `${t.tenant}|${t.url}`;
     const j = jobs.get(key) || { jobId: t.jobId, tenant: t.tenant, company: t.companyName, title: t.title, test: t.test, version: t.version, auth: [], steps: [], advances: [], review: null, result: null, first: t.at, last: t.at };
     j.last = t.at;
+    if (t.test) j.test = true;
     if (t.kind === "auth") j.auth.push(t.data);
     else if (t.kind === "step") j.steps.push(t.data);
     else if (t.kind === "advance") j.advances.push(t.data);

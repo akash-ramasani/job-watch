@@ -405,10 +405,11 @@
     banner(mode === "create" ? "Auto-apply: creating your Workday account for this company." : "Auto-apply: signing in to Workday.");
     const r = await gen("workdayAuth", { email: creds.email, password: creds.password, mode }).catch((e) => ({ ok: false, error: e.message }));
     if (!r?.ok) { trace("auth", { phase: "action failed", did: mode, error: r?.error }); warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 15; i++) {
       await sleep(1000);
-      // In: no account form and not back on the "Sign in with email" chooser.
-      if (!(await gen("hasPassword").catch(() => true)) && (await gen("workdayAuthState").catch(() => ({})))?.mode !== "chooser") {
+      // In: the application's own steps are on screen (Morgan Stanley read as
+      // signed in between two forms, then refused the password, 2026-11-10).
+      if (await gen("workdayInApp").catch(() => false)) {
         sendMsg({ type: "WORKDAY_ACCOUNT" });
         trace("auth", { phase: "signed in", did: mode, tries: mem.tries, viaReset: !!mem.resetAt, viaCreate: !!mem.triedCreate, verified: !!mem.verified });
         authSave({ done: true });
