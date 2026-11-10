@@ -218,7 +218,7 @@ function refreshWorkday() {
     if (!res?.ok) return;
     $("wd-pill").textContent = res.set ? "On" : "Off";
     $("wd-pill").className = `auto-pill${res.set ? " on" : ""}`;
-    $("wd-password").placeholder = res.set ? "Saved. Type a new one to change it" : "Workday password";
+    $("wd-password").placeholder = res.set ? "Saved. Type a new one to change it" : "Workday password (12+ characters)";
     const email = res.email || res.profileEmail;
     if (!$("wd-email").value && document.activeElement !== $("wd-email")) $("wd-email").value = email;
     if ($("wd-status").dataset.msg) return;

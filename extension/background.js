@@ -1273,8 +1273,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const password = String(message.password || "");
         const email = String(message.email ?? "").trim().toLowerCase();
         if (email && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) { sendResponse({ ok: false, error: "That email does not look right." }); return; }
-        if (password && (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password))) {
-          sendResponse({ ok: false, error: "Workday asks for at least 8 characters with an upper-case letter, a lower-case letter, a number and a symbol." });
+        // 12 at least: Citi asks for 12 (2026-11-10); one password serves every company.
+        if (password && (password.length < 12 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password))) {
+          sendResponse({ ok: false, error: "Use at least 12 characters (some companies, like Citi, ask for 12) with an upper-case letter, a lower-case letter, a number and a symbol." });
           return;
         }
         const w = await workdayState();

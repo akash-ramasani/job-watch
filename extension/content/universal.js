@@ -389,6 +389,13 @@
     // (Create Account); an account that exists is reset to the saved password
     // (Forgot your password? -> the email's link -> Reset Password), then Sign In.
     let mode = mem.mode || "signin";
+    // The company's own password rules ("Password must include: A minimum of 12
+    // characters", Citi): only a new saved password helps.
+    const rule = said.match(/password must (include|contain|be)[^.]*|minimum of \d+ characters/i);
+    if (rule) {
+      authSave(mem);
+      return autoReport("needs_attention", `${header.companyName || "This company"} refuses the saved Workday password: ${said.replace(/\s+/g, " ").slice(0, 160)}. Save a longer one in the JobWatch popup.`);
+    }
     if (mem.mode === "signin" && (WRONG.test(said) || LOCKED.test(said))) {
       if (mem.resetAt) { authSave(mem); return autoReport("needs_attention", `Workday at ${header.companyName || "this company"} still refuses the saved password after a reset: ${said.slice(0, 140)}`); }
       if (creds.hasAccount || mem.triedCreate) return resetPassword(mem, creds);
