@@ -1263,6 +1263,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "WORKDAY_STATUS") {
         const w = await workdayState();
         const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
+        if (!w.email && !jwCachedUserDoc?.email) {
+          try { const { idToken, uid } = await getFreshToken(); const e = String((await fsGet(`users/${uid}`, idToken))?.email || "").trim(); if (e) { w.email = e; await chrome.storage.local.set({ jwWorkday: { ...w } }); } } catch (_) { /* popup shows it empty */ }
+        }
         sendResponse({ ok: true, set: !!w.password, email: w.email || "", profileEmail: jwCachedUserDoc?.email || "", gmailEmail: (await gmailState()).email || "", accounts: Object.keys(w.tenants || {}).length });
         return;
       }
@@ -1286,7 +1289,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!job || job.source !== "workday" || !tenant) { sendResponse({ ok: false, error: "not an auto-apply Workday tab" }); return; }
         const w = await workdayState();
         const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
-        const email = String(w.email || jwCachedUserDoc?.email || "").trim();
+        let email = String(w.email || jwCachedUserDoc?.email || "").trim();
+        if (!email) {
+          // The cached profile can lack the email (2026-11-10): read it from the account, and keep it.
+          try {
+            const { idToken, uid } = await getFreshToken();
+            email = String((await fsGet(`users/${uid}`, idToken))?.email || "").trim();
+            if (email) await chrome.storage.local.set({ jwWorkday: { ...w, email } });
+          } catch (_) { /* reported below */ }
+        }
         if (!w.password || !email) { sendResponse({ ok: false, error: !w.password ? "no Workday password saved in the JobWatch popup" : "no Workday email saved in the JobWatch popup" }); return; }
         sendResponse({ ok: true, email, password: w.password, hasAccount: !!w.tenants?.[tenant] });
         return;
