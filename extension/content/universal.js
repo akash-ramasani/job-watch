@@ -13,6 +13,12 @@
 // Workday: sign-in and account creation stay with the person (only the email
 // is filled); My Experience gets the resume upload plus work history,
 // education and links from the resume when Workday did not already add them.
+//
+// Workday auto-apply (a tab the runner opened, 2026-11-10): signs in with the
+// password saved in the popup, or makes the company's account (verification
+// link from Gmail), fills each step, presses Save and Continue, fixes what
+// Workday flags (three presses per step at most), and stops on the Review page
+// for the person to check and press Submit.
 
 (function () {
   "use strict";
@@ -154,9 +160,9 @@
       externalId: postingKey()?.id || "", domFields: sendable.map(({ section: _s, parts: _p, filled: _f, ...d }) => d),
       ...header, descriptionText: await gen("descriptionText").catch(() => ""),
     });
-    if (!res?.ok || !res.data) { banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); return null; }
+    if (!res?.ok || !res.data) { banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); autoReport("error", `could not compute the application: ${res?.error || "unknown error"}`); return null; }
     const pkg = res.data;
-    if (pkg.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`); stopped = true; return null; }
+    if (pkg.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`); stopped = true; autoReport("skipped", "already applied"); return null; }
     pkgCache = { ...(pkgCache || {}), ...pkg, resumeB64: pkg.resumeB64 || pkgCache?.resumeB64 };
     // The posting's own title and company (Workday's API, or the job JobWatch holds) beat the page header.
     if (pkg.jobTitle) header.jobTitle = pkg.jobTitle;
@@ -298,6 +304,110 @@
     }).then((r) => { if (!r?.ok) warn("ledger(filled) failed:", r?.error); });
   }
 
+  // ── Workday auto-apply: account and steps ─────────────────────────────────
+  let AUTO = null; // the runner's job when this tab is one of its own
+  function autoReport(status, note) {
+    if (!AUTO) return;
+    AUTO = null; // the tab is the person's from here on
+    sendMsg({ type: "AUTO_RESULT", status, note: String(note || "").slice(0, 300) });
+  }
+  // What the account steps did so far, kept across page loads in this tab.
+  const AUTH_KEY = "jwWdAuth";
+  const authMem = () => { try { return JSON.parse(sessionStorage.getItem(AUTH_KEY) || "{}"); } catch { return {}; } };
+  const authSave = (o) => { try { sessionStorage.setItem(AUTH_KEY, JSON.stringify(o)); } catch { /* private mode */ } };
+  const EXISTS = /already (exists|in use|registered|associated)|account (with|for) this email|email address is already/i;
+  const WRONG = /(wrong|incorrect|invalid|not valid).{0,40}(password|email|sign in|credentials)|password.{0,20}(incorrect|wrong|invalid)|could not sign you in/i;
+  const LOCKED = /lock(ed)?\b|too many (attempts|tries)/i;
+  const VERIFY = /verif|activat|confirm your (email|account)/i;
+
+  /** Sign in, or make the account, with the popup's Workday password. */
+  async function autoAuth() {
+    const creds = await sendMsg({ type: "WORKDAY_CREDS" });
+    if (!creds?.ok) return autoReport("needs_attention", `Workday sign-in: ${creds?.error || "no password"}`);
+    const mem = authMem();
+    mem.tries = (mem.tries || 0) + 1;
+    if (mem.tries > 6) { authSave(mem); return autoReport("needs_attention", "Workday sign-in did not go through after six tries"); }
+    const st = await gen("workdayAuthState").catch(() => ({ mode: null, errors: [], message: "" }));
+    const said = `${st.errors.join(" ")} ${st.message}`.trim();
+    let mode = mem.mode || (creds.hasAccount ? "signin" : "create");
+    if (mem.mode === "create" && EXISTS.test(said)) { mode = "signin"; sendMsg({ type: "WORKDAY_ACCOUNT" }); }
+    else if (LOCKED.test(said)) { authSave(mem); return autoReport("needs_attention", `Workday account at ${header.companyName || "this company"} is locked: ${said.slice(0, 160)}`); }
+    else if (mem.mode === "signin" && WRONG.test(said)) {
+      authSave(mem);
+      return autoReport("needs_attention", `Workday at ${header.companyName || "this company"} refused the saved password (an older account?). Sign in or reset the password here: ${said.slice(0, 120)}`);
+    }
+    else if (mem.mode && VERIFY.test(said)) return verifyEmail(mem);
+    else if (mem.mode === "create" && st.mode === "signin") mode = "signin"; // made the account; Workday moved on to Sign In
+    mem.mode = mode; mem.at = mem.at || Date.now();
+    authSave(mem);
+    banner(mode === "create" ? "Auto-apply: creating your Workday account for this company." : "Auto-apply: signing in to Workday.");
+    const r = await gen("workdayAuth", { email: creds.email, password: creds.password, mode }).catch((e) => ({ ok: false, error: e.message }));
+    if (!r?.ok) { warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
+    for (let i = 0; i < 10; i++) {
+      await sleep(1000);
+      if (!(await gen("hasPassword").catch(() => true))) { // in: the account form is gone
+        sendMsg({ type: "WORKDAY_ACCOUNT" });
+        authSave({ done: true });
+        log("workday: signed in");
+        return;
+      }
+    }
+    const after = await gen("workdayAuthState").catch(() => ({ errors: [], message: "" }));
+    if (mode === "create" && VERIFY.test(`${after.errors.join(" ")} ${after.message}`)) return verifyEmail(mem);
+    // Anything else the page said is read on the next tick.
+  }
+
+  /** Workday emailed a verification link: open it from Gmail, then sign in. */
+  async function verifyEmail(mem) {
+    sendMsg({ type: "WORKDAY_ACCOUNT" });
+    banner("Auto-apply: Workday sent a verification email. Opening its link from Gmail…");
+    for (let i = 0; i < 18; i++) { // three minutes
+      const r = await sendMsg({ type: "WORKDAY_VERIFY_LINK", since: mem.at || Date.now() - 600000, open: true });
+      if (!r?.ok) return autoReport("needs_attention", `Workday verification email: ${r?.error || "Gmail unavailable"}`);
+      if (r.link) {
+        authSave({ ...mem, mode: "signin", verified: true });
+        banner("Auto-apply: account verified. Signing in…");
+        await sleep(1500);
+        location.href = AUTO?.applyUrl || location.href;
+        return;
+      }
+      await sleep(10000);
+    }
+    autoReport("needs_attention", "Workday's verification email did not arrive within three minutes");
+  }
+
+  /** The step is filled: Save and Continue, or stop on Review. */
+  const stepPresses = new Map();
+  async function autoAdvance(step) {
+    if (await gen("onReviewStep").catch(() => false)) {
+      banner("Auto-apply filled every step. This is the Review page: check each answer, then press Submit yourself.");
+      return autoReport("review", "filled to Review: check it and press Submit");
+    }
+    const n = (stepPresses.get(step) || 0) + 1;
+    stepPresses.set(step, n);
+    if (n > 3) {
+      const left = [...attention.keys()].slice(0, 5).join("; ");
+      return autoReport("needs_attention", `stuck on ${step || "a step"}${left ? `: ${left}` : ": Save and Continue did not move on"}`);
+    }
+    banner(`Auto-apply: ${step || "this step"} is filled. Pressing Save and Continue.`);
+    const r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
+    if (!r?.ok) return autoReport("needs_attention", `${step || "step"}: ${r?.error || "could not press Save and Continue"}`);
+    for (let i = 0; i < 20; i++) {
+      await sleep(1000);
+      const now = await gen("stepName").catch(() => step);
+      if (now !== step) return; // the next tick fills the new step
+    }
+    // Same step: what Workday flags is filled again on the next tick, and the
+    // AI reads what it still refuses.
+    const errs = await gen("errors").catch(() => []);
+    log(`workday: ${step} refused`, errs);
+    for (const e of errs) {
+      if (e.path) done.delete(e.path);
+      attention.set(e.label || e.path || e.text, { path: e.path || "", note: `The form says: ${e.text}` });
+    }
+    await rescueStuck();
+  }
+
   // ── The step loop ─────────────────────────────────────────────────────────
   let stopped = false;
   let busy = false;
@@ -328,6 +438,7 @@
 
   async function tick() {
     if (stopped || busy) return;
+    if (AUTO && await gen("workdayClosed").catch(() => false)) { stopped = true; return autoReport("error", "job closed: no longer available"); }
     if (!onApplyFlow()) return;
     if (manual()) { window.__jwManualStart = false; forced = true; armNext = true; }
     if (!started && !forced && (!formish() || pageSig() === notAFormSig)) return;
@@ -341,20 +452,28 @@
         return;
       }
       if (isWorkday && await gen("workdayStartModal").catch(() => false)) {
+        if (AUTO && await gen("workdayPress", "applyManually", "^apply manually$").catch(() => false)) { banner("Auto-apply: choosing Apply Manually."); return; }
         banner("JobWatch: choose Autofill with Resume or Apply Manually. JobWatch fills each step after you sign in.");
         return;
       }
+      // Auto-apply: the account form first (whatever the scan makes of it).
+      if (AUTO && await gen("hasPassword").catch(() => false)) return await autoAuth();
       const step = await gen("stepName").catch(() => "");
+      // Auto-apply on Review (a page with no questions): stop for the person.
+      if (AUTO && started && await gen("onReviewStep").catch(() => false)) return await autoAdvance(step);
       let fields = await gen("scan", { readOptions: false }).catch(() => []);
       if (isWorkday && !fields.length && /sign in|create account/i.test(step)) {
+        if (AUTO) return await autoAuth();
         banner("JobWatch: sign in or create your Workday account. JobWatch fills the application once you are in.");
         return;
       }
       if (!fields.length) { if (!started) notAFormSig = pageSig(); return; }
       if (!started && !forced && !looksLikeApplication(fields)) { notAFormSig = pageSig(); return; }
 
-      // Sign-in and account pages: only the email; the password is the person's.
+      // Sign-in and account pages: only the email; the password is the person's
+      // (auto-apply on Workday: the popup's password, autoAuth).
       if (await gen("hasPassword").catch(() => false)) {
+        if (AUTO) return await autoAuth();
         const email = fields.find((f) => (f.type === "email" || /e-?mail/i.test(f.label)) && !f.filled);
         if (email && !done.has(email.id)) {
           done.add(email.id);
@@ -371,11 +490,18 @@
       // on My Information and on My Experience): forget the last step's.
       if (newStep && started) done.clear();
       const fresh = fields.filter((f) => !done.has(f.id) && !f.filled);
-      if (!fresh.length && !(isWorkday && newStep && /experience/i.test(step))) { lastStep = step; return; }
+      // (Auto-apply's first step goes on even when Workday filled all of it: the
+      // application is computed and recorded once, then Save and Continue.)
+      if (!fresh.length && !(AUTO && !started) && !(isWorkday && newStep && /experience/i.test(step))) {
+        lastStep = step;
+        // Auto-apply: a step with nothing left to fill (Workday kept it from before) moves on.
+        if (AUTO && started) await autoAdvance(step);
+        return;
+      }
 
       // Nothing fills until the person presses Autofill, once per page or step.
       const stepKey = `${location.pathname}|${step}`;
-      if (armNext) { armedFor = stepKey; armNext = false; }
+      if (armNext || AUTO) { armedFor = stepKey; armNext = false; }
       if (armedFor !== stepKey) {
         window.__jwNotify.launcher({
           text: step && started ? `Next step: ${step}. Fill it from your JobWatch profile.` : "Fill this application from your JobWatch profile. You review and submit.",
@@ -394,7 +520,7 @@
           header.companyName = raw && !/^(en|us|en-us|job|jobs|apply|o)$/i.test(raw) ? raw.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) : "";
         }
         const st = await ledger("start");
-        if (st?.duplicate) { banner(`JobWatch: you already applied to ${st.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(st.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); stopped = true; return; }
+        if (st?.duplicate) { banner(`JobWatch: you already applied to ${st.reason === "same role" ? "this role at this company" : "this job"} on ${fmtDay(st.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); stopped = true; autoReport("skipped", "already applied"); return; }
         if (!st?.ok) warn("ledger(start) failed:", st?.error);
         started = true;
       }
@@ -419,6 +545,9 @@
       // Ids seen after filling (conditional questions that just appeared are new).
       const seenNow = await gen("scan", { readOptions: false }).catch(() => []);
       for (const f of seenNow) if (f.filled) done.add(f.id);
+      // Auto-apply: new questions that just appeared are filled first (next tick);
+      // otherwise Save and Continue, or stop on Review.
+      if (AUTO && !seenNow.some((f) => !f.filled && !done.has(f.id))) await autoAdvance(step);
     } catch (e) {
       warn("tick failed:", e.message);
     } finally {
@@ -429,6 +558,16 @@
   // Start once the page settles, then follow steps and new questions.
   (async () => {
     await sleep(manual() ? 200 : 1500);
+    if (isWorkday && window.top === window) {
+      const r = await sendMsg({ type: "AUTO_JOB" });
+      if (r?.job) {
+        AUTO = r.job;
+        forced = true; // the runner opened it: no "is this an application?" checks
+        if (AUTO.title) header.jobTitle = AUTO.title;
+        if (AUTO.companyName) header.companyName = AUTO.companyName;
+        log("auto-apply job:", AUTO.companyName, "|", AUTO.title);
+      }
+    }
     await tick();
     let lastUrl = location.href;
     let quietUntil = 0;

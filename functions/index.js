@@ -4920,7 +4920,7 @@ exports.getAutoApplyQueue = onCall(
     const answersUpdatedAt = at?.toMillis ? at.toMillis() : (Date.parse(at) || 0);
     const st = queue.stats || {};
     const line = (k) => (st[k] ? `${k} ${st[k].applied}/${st[k].total} applied, ${st[k].left} left` : `${k} ?`);
-    logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length} | ${line("ashby")} | ${line("greenhouse")} | ${line("lever")}`);
+    logger.info(`getAutoApplyQueue: uid=${uid} queue=${queue.length} | ${line("ashby")} | ${line("greenhouse")} | ${line("lever")} | ${line("workday")}`);
     return { queue, count: queue.length, answersUpdatedAt, stats: st };
   }
 );

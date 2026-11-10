@@ -1,6 +1,6 @@
 // autoApply.cjs — the queue behind the extension's unattended auto-apply.
 //
-// Every Ashby, Greenhouse and Lever job on the person's Jobs page (the same
+// Every Ashby, Greenhouse, Lever and Workday job on the person's Jobs page (the same
 // "related" rule the page uses: job types, AI/rule verdicts, visa
 // eligibility), newest day first and the best match first within a day, minus every job already applied to (by job id,
 // form key and company+title). Only matching jobs: a fit score of at least
@@ -8,7 +8,9 @@
 // changes it, 0 takes every job), each sent with its tailored resume
 // (2026-11-03). No daily cap. Each entry carries the URL the runner opens: the
 // Ashby or Lever application page, or Greenhouse's own embedded form (a company's
-// careers site may wrap it in an iframe the runner cannot drive).
+// careers site may wrap it in an iframe the runner cannot drive), or Workday's
+// "Apply Manually" page (2026-11-10: Workday signs in or makes the account with
+// the password saved in the extension, fills each step and stops at Review).
 
 const { createAssistantContext, isRelatedJob } = require("../assistantTools.cjs");
 const { classifyTitle } = require("../jobFamilies.cjs");
@@ -18,6 +20,7 @@ const ledger = require("./ledger.cjs");
 const GH_SOURCES = new Set(["greenhouse"]);
 const ASHBY_SOURCES = new Set(["ashby", "ashbyhq"]);
 const LEVER_SOURCES = new Set(["lever"]);
+const WORKDAY_SOURCES = new Set(["workday"]);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Board slug of a feed URL: boards-api.greenhouse.io/v1/boards/<token>/..., posting-api/job-board/<org>. */
@@ -49,6 +52,13 @@ function applyUrlFor(job, feedSlugs) {
     const f = feedSlugs.get(job.companyKey);
     return f?.source === "lever" && UUID.test(ext) ? `https://jobs.${f.eu ? "eu." : ""}lever.co/${encodeURIComponent(f.slug)}/${ext.toLowerCase()}/apply` : "";
   }
+  if (WORKDAY_SOURCES.has(src)) {
+    // <tenant>.wdN.myworkdayjobs.com/[locale/]<site>/job/<loc>/<Title>_<Req>
+    // (or wdN.myworkdaysite.com/recruiting/<tenant>/<site>/job/...): the posting
+    // plus /apply/applyManually, which skips the "how to apply" choice.
+    const m = url.match(/^(https:\/\/(?:[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com|wd\d+\.myworkdaysite\.com\/recruiting\/[^/?#]+)\/(?:[a-z]{2}-[A-Z]{2}\/)?[^/?#]+\/(?:job|details)\/[^?#]*?[^/?#]*_[A-Za-z0-9-]+)(?:\/apply(?:\/[^?#]*)?)?\/?(?:[?#].*)?$/i);
+    return m ? `${m[1]}/apply/applyManually` : "";
+  }
   if (GH_SOURCES.has(src)) {
     let token = feedSlugs.get(job.companyKey)?.slug || "";
     let id = ext;
@@ -79,7 +89,7 @@ function resumeFileName(fullName, jobTitle) {
 /**
  * The queue: [{ jobId, source, applyUrl, title,
  * companyName, externalId, locationName, postedAt }]; source is "ashby",
- * "greenhouse" or "lever".
+ * "greenhouse", "lever" or "workday".
  */
 async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null } = {}) {
   const ctx = createAssistantContext(db, uid, { adminUid });
@@ -112,14 +122,15 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   const seen = new Set();
   const out = [];
   // For the log: Ashby/Greenhouse jobs on the Jobs page, how many are applied to, how many are left.
-  const stats = { ashby: { total: 0, applied: 0 }, greenhouse: { total: 0, applied: 0 }, lever: { total: 0, applied: 0 } };
+  const stats = { ashby: { total: 0, applied: 0 }, greenhouse: { total: 0, applied: 0 }, lever: { total: 0, applied: 0 }, workday: { total: 0, applied: 0 } };
   const lists = [...(allSnap.exists ? allSnap.data()?.jobs || [] : []), ...(recentSnap.exists ? recentSnap.data()?.jobs || [] : [])];
   for (const j of lists) {
     if (!j?.id || seen.has(j.id)) continue;
     seen.add(j.id);
     const src = String(j.source || "").toLowerCase();
-    // Ashby, Greenhouse and Lever (Lever back on after its 50-form test, 2026-11-02).
-    if (!GH_SOURCES.has(src) && !ASHBY_SOURCES.has(src) && !LEVER_SOURCES.has(src)) continue;
+    // Ashby, Greenhouse, Lever (back on after its 50-form test, 2026-11-02) and Workday.
+    const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
+    if (!board) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     // The US filter again, as it reads today: jobs saved under an older one
@@ -133,7 +144,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     if (!scores[j.id] && Array.isArray(jobTypes) && jobTypes.length && fam.length && !fam.every((f) => jobTypes.includes(f))) continue;
     // A matching job only; an unscored one waits for its score.
     if (minScore > 0 && !(typeof scores[j.id]?.score === "number" && scores[j.id].score >= minScore)) continue;
-    const st = stats[ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse"];
+    const st = stats[board];
     st.total++;
     if (applied.ids.has(j.id)) { st.applied++; continue; }
     const applyUrl = applyUrlFor(j, feedSlugs);
@@ -148,7 +159,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const postedAt = Math.min(...[ms(j.sourceUpdatedTs), ms(j.firstSeenAt)].filter((t) => t > 0)) || 0;
     const score = typeof scores[j.id]?.score === "number" ? scores[j.id].score : -1;
     out.push({
-      jobId: j.id, source: ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : "greenhouse", applyUrl,
+      jobId: j.id, source: board, applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
       locationName: j.locationName || "", postedAt, score,
     });
@@ -160,6 +171,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   stats.ashby.left = out.filter((j) => j.source === "ashby").length;
   stats.greenhouse.left = out.filter((j) => j.source === "greenhouse").length;
   stats.lever.left = out.filter((j) => j.source === "lever").length;
+  stats.workday.left = out.filter((j) => j.source === "workday").length;
   Object.defineProperty(list, "stats", { value: stats, enumerable: false });
   return list;
 }

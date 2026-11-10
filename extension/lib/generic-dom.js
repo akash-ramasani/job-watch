@@ -774,5 +774,89 @@
   }
   function workdaySectionNames() { return workdaySections().map((s) => ({ name: s.name, entries: s.entries })); }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd };
+  // ── Workday unattended: account, start choice, Save and Continue ─────────
+  const vis = (sel) => [...document.querySelectorAll(sel)].filter(visible);
+  /** Workday puts a transparent click_filter over its buttons: press that when there is one. */
+  function press1(btn) {
+    const filter = btn.parentElement?.querySelector("[data-automation-id=click_filter]") || (btn.matches("[data-automation-id=click_filter]") ? btn : null);
+    const el = filter && visible(filter) ? filter : btn;
+    el.scrollIntoView({ block: "center" });
+    realClick(el);
+    if (el === btn) return;
+    btn.click?.();
+  }
+  function buttonByText(re, scope = document) {
+    return [...scope.querySelectorAll("button, [role=button], a, [data-automation-id=click_filter]")]
+      .filter(visible).find((b) => re.test(clean(b.getAttribute("aria-label") || textOf(b))));
+  }
+  /** The sign-in or create-account form now on the page:
+   *  { mode: "create" | "signin" | null, errors: [text], message } */
+  function workdayAuthState() {
+    const pw = vis("input[type=password]");
+    const mode = !pw.length ? null : (pw.length >= 2 || vis("[data-automation-id=verifyPassword], [data-automation-id=createAccountSubmitButton]").length) ? "create" : "signin";
+    const errs = vis("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert], [data-automation-id=errorBanner]")
+      .map((e) => clean(textOf(e))).filter((t) => t && t.length < 300);
+    const body = clean((document.body?.innerText || "").slice(0, 4000));
+    const message = (body.match(/[^.]*\b(verify|verification|activate)\b[^.]*(email|account)[^.]*\./i) || [""])[0].slice(0, 240);
+    return { mode, errors: [...new Set(errs)], message };
+  }
+  /** Fill and send the account form: { email, password, mode }. */
+  async function workdayAuth({ email, password, mode }) {
+    const st = workdayAuthState();
+    if (st.mode !== mode) {
+      // Switch forms: "Sign In" link on Create Account, "Create Account" on Sign In.
+      const link = vis(mode === "signin" ? "[data-automation-id=signInLink]" : "[data-automation-id=createAccountLink]")[0]
+        || buttonByText(mode === "signin" ? /^(sign in|already have an account\??\s*sign in)$/i : /^(create account|don't have an account\??\s*create account)$/i);
+      if (!link) return { ok: false, error: `no ${mode === "signin" ? "Sign In" : "Create Account"} link` };
+      press1(link);
+      await sleep(1500);
+      if (workdayAuthState().mode !== mode) return { ok: false, error: `the ${mode} form did not open` };
+    }
+    const form = vis("input[type=password]")[0]?.closest("form, [data-automation-id=signInContent], [data-automation-id=createAccountContent], [role=dialog], main") || document.body;
+    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]").find((e) => form.contains(e)) || [...form.querySelectorAll("input[type=text]")].find(visible);
+    const pws = vis("input[type=password]").filter((e) => form.contains(e));
+    if (!emailEl || !pws.length) return { ok: false, error: "account form fields not found" };
+    await typeInto(emailEl, email, { keys: true });
+    emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
+    for (const p of pws) { await typeInto(p, password, { keys: true }); p.dispatchEvent(new Event("blur", { bubbles: true })); }
+    if (mode === "create") {
+      // "I agree to the terms" and similar: every unchecked box on the account form.
+      for (const cb of [...form.querySelectorAll("input[type=checkbox]")].filter((c) => !c.checked)) {
+        const target = visible(cb) ? cb : cb.closest("label, div") || cb;
+        realClick(target);
+        await sleep(150);
+        if (!cb.checked) cb.click();
+      }
+    }
+    await sleep(300);
+    const submit = vis(mode === "signin" ? "[data-automation-id=signInSubmitButton]" : "[data-automation-id=createAccountSubmitButton]")[0]
+      || buttonByText(mode === "signin" ? /^sign in$/i : /^create account$/i, form) || buttonByText(mode === "signin" ? /^sign in$/i : /^create account$/i);
+    if (!submit) return { ok: false, error: "no submit button on the account form" };
+    press1(submit);
+    return { ok: true };
+  }
+  /** Press a Workday button by automation id or text ("applyManually"). */
+  function workdayPress(id, textRe = null) {
+    const el = vis(`[data-automation-id="${CSS.escape(id)}"]`)[0] || (textRe ? buttonByText(new RegExp(textRe, "i")) : null);
+    if (!el) return false;
+    press1(el);
+    return true;
+  }
+  /** Save and Continue (or Next / Continue) at the bottom of a step. Never Submit. */
+  function workdayNext() {
+    const btn = vis("[data-automation-id=bottom-navigation-next-button], [data-automation-id=pageFooterNextButton], [data-automation-id=wd-CommandButton_next]")[0]
+      || buttonByText(/^(save and continue|next|continue)$/i);
+    if (!btn) return { ok: false, error: "no Save and Continue button" };
+    if (/submit/i.test(clean(textOf(btn)))) return { ok: false, error: "the button is Submit" };
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return { ok: false, error: "Save and Continue is disabled" };
+    press1(btn);
+    return { ok: true };
+  }
+  /** A Workday page that says the posting is gone. */
+  function workdayClosed() {
+    const t = (document.body?.innerText || "").slice(0, 3000);
+    return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
+  }
+
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayAuth, workdayPress, workdayNext, workdayClosed };
 })();

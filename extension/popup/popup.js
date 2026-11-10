@@ -171,13 +171,15 @@ function renderAuto(st) {
     : running.length
     ? `Now applying to ${running.length}: ${running.map((j) => j.companyName).join(", ")}`
     : st.on && st.idle ? `All caught up. Watching for new jobs: each one starts within a minute of appearing.${st.retrying ? ` ${st.retrying} failed job${st.retrying === 1 ? "" : "s"} will retry on ${st.retrying === 1 ? "its" : "their"} own.` : ""}`
-    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse and Lever job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.";
+    : st.on ? "Waiting a moment before the next job…" : "Applies to every Ashby, Greenhouse, Lever and Workday job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.";
   const failed = (st.needs || 0) + (st.errors || 0);
   $("btn-auto-retry").style.display = failed ? "block" : "none";
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
   $("auto-reasons").style.display = st.reasons ? "block" : "none";
   $("auto-reasons").textContent = st.reasons ? `Stopped today by: ${st.reasons}.` : "";
-  $("auto-stats").innerHTML = [["Submitted (24 h)", st.submitted], ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]]
+  const cells = [["Submitted (24 h)", st.submitted], ...(st.review ? [["Ready to submit", st.review]] : []), ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]];
+  $("auto-stats").style.gridTemplateColumns = `repeat(${cells.length}, 1fr)`;
+  $("auto-stats").innerHTML = cells
     .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
 }
 function refreshAuto() { chrome.runtime.sendMessage({ type: "AUTO_STATUS" }, (res) => renderAuto(res?.status)); }
@@ -209,6 +211,30 @@ $("btn-gmail").addEventListener("click", () => {
   });
 });
 refreshGmail();
+
+// ── Workday: one password for every company's account ────────────────────────
+function refreshWorkday() {
+  chrome.runtime.sendMessage({ type: "WORKDAY_STATUS" }, (res) => {
+    if (!res?.ok) return;
+    $("wd-pill").textContent = res.set ? "On" : "Off";
+    $("wd-pill").className = `auto-pill${res.set ? " on" : ""}`;
+    $("wd-password").placeholder = res.set ? "Saved. Type a new one to change it" : "Workday password";
+    if (!$("wd-status").dataset.msg) $("wd-status").textContent = res.set ? `Accounts made or signed in: ${res.accounts}.` : "Off: Workday jobs are skipped until a password is saved.";
+  });
+}
+$("btn-wd-save").addEventListener("click", () => {
+  const password = $("wd-password").value;
+  if (!password) return;
+  chrome.runtime.sendMessage({ type: "WORKDAY_SET", password }, (res) => {
+    const st = $("wd-status");
+    st.dataset.msg = "1";
+    st.style.color = res?.ok ? "#065f46" : "#dc2626";
+    st.textContent = res?.ok ? "Saved. Workday jobs join auto-apply." : (res?.error || chrome.runtime.lastError?.message || "Could not save.");
+    if (res?.ok) $("wd-password").value = "";
+    setTimeout(() => { delete st.dataset.msg; st.style.color = ""; refreshWorkday(); }, 4000);
+  });
+});
+refreshWorkday();
 
 $("btn-auto-retry").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "AUTO_RETRY" }, () => setTimeout(refreshAuto, 300));

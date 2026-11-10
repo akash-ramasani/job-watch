@@ -529,7 +529,7 @@ async function autoLeverThanks(tabId, url) {
   await autoFinish({ status: "submitted", note: "" }, tabId);
 }
 
-// ─── Unattended auto-apply (Ashby, Greenhouse, Lever) ──────────────────────────────
+// ─── Unattended auto-apply (Ashby, Greenhouse, Lever, Workday) ─────────────────────
 // Works through getAutoApplyQueue one job at a time in a background tab: the
 // tailored resume is made first (tailoredResumeFile), the page's content
 // script fills the form, submits when nothing is left for the person, enters
@@ -544,9 +544,17 @@ async function autoLeverThanks(tabId, url) {
 // retried on their own (30 minutes, then 2 hours; three tries in all; closed
 // postings never). A job that needed the person is retried once they add a
 // saved answer on the Profile page, if its tab was closed.
+//
+// Workday (2026-11-10): only with a Workday password saved in the popup. The
+// page signs in, or makes the company's account and opens the verification
+// link from Gmail, fills every step, presses Save and Continue, and stops on
+// the Review page ("review": ready to submit, the tab stays open for the
+// person to check and press Submit). At most WORKDAY_MAX_REVIEW wait at once.
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const WORKDAY_JOB_TIMEOUT_MS = 25 * 60 * 1000; // account, verification email and five or six steps
+const WORKDAY_MAX_REVIEW = 5; // Workday applications waiting on Review before more start
 const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
 const AUTO_IDLE_MS = 15 * 60 * 1000; // the queue is fetched again at least this often
 const AUTO_POLL_MS = 60 * 1000; // nothing to do: check whether the job list changed this often
@@ -686,7 +694,14 @@ async function autoNextJob(st, busy = new Set()) {
     autoQueue = { at: Date.now(), list: r.queue || [], answersUpdatedAt: Number(r.answersUpdatedAt) || 0 };
     if (stamp) jobsStampSeen = stamp;
   }
-  for (const j of autoQueue.list) if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
+  // Workday: only with its password saved, and while few wait on Review.
+  const { jwWorkday } = await chrome.storage.local.get("jwWorkday");
+  const reviewOpen = Object.values(st.results).filter((r) => r.status === "review" && r.tabId).length;
+  const workdayOk = !!jwWorkday?.password && reviewOpen < WORKDAY_MAX_REVIEW;
+  for (const j of autoQueue.list) {
+    if (j.source === "workday" && !workdayOk) continue;
+    if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
+  }
   return null;
 }
 
@@ -732,7 +747,7 @@ async function autoFinishNow(result, tabId, jobId) {
   st.results[cur.jobId] = {
     status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries,
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
-    ...(result.status === "needs_attention" ? { tabId: cur.tabId || null } : {}),
+    ...(["needs_attention", "review"].includes(result.status) ? { tabId: cur.tabId || null } : {}),
   };
   st.running = st.running.filter((j) => j !== cur);
   st.nextAt = Date.now() + AUTO_GAP_MS[0] + Math.random() * (AUTO_GAP_MS[1] - AUTO_GAP_MS[0]);
@@ -742,7 +757,14 @@ async function autoFinishNow(result, tabId, jobId) {
   // only the newest AUTO_MAX_OPEN; older ones close (the popup lists them with
   // their links, and they retry once a missing answer is saved).
   if (result.status === "submitted") await closeSubmittedTab(cur.tabId);
-  else if (result.status !== "needs_attention" && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
+  else if (!["needs_attention", "review"].includes(result.status) && cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
+  if (result.status === "review") {
+    // Workday, filled to Review: the tab stays open for the person to check and submit.
+    const ready = Object.values(st.results).filter((r) => r.status === "review" && r.tabId).length;
+    try {
+      chrome.notifications.create("jwReview", { type: "basic", iconUrl: "icons/icon128.png", title: `JobWatch: ${ready} Workday application${ready === 1 ? "" : "s"} ready to submit`, message: `Latest: ${cur.companyName}, ${cur.title}. Check the Review page and press Submit.`.slice(0, 250), priority: 0 });
+    } catch (_) { /* a nicety */ }
+  }
   if (result.status === "needs_attention") {
     const open = Object.entries(st.results).filter(([, r]) => r.status === "needs_attention" && r.tabId).sort((a, b) => b[1].at - a[1].at);
     for (const [id, r] of open.slice(AUTO_MAX_OPEN)) {
@@ -813,8 +835,20 @@ async function autoTick() {
     for (const j of st0.running) {
       const alive = j.tabId ? await chrome.tabs.get(j.tabId).then(() => true).catch(() => false) : true;
       if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
-      else if (Date.now() - j.startedAt > AUTO_JOB_TIMEOUT_MS) await autoFinish({ status: "error", note: "timed out after 15 minutes" }, j.tabId, j.jobId);
+      else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) await autoFinish({ status: "error", note: `timed out after ${j.source === "workday" ? 25 : 15} minutes` }, j.tabId, j.jobId);
     }
+    // Workday applications waiting on Review whose tab the person closed
+    // without submitting: no longer count toward WORKDAY_MAX_REVIEW.
+    await withAutoLock(async () => {
+      const st = await autoState();
+      let changed = false;
+      for (const r of Object.values(st.results)) {
+        if (r.status !== "review" || r.tabId == null) continue;
+        if (await chrome.tabs.get(r.tabId).then(() => true).catch(() => false)) continue;
+        r.tabId = null; r.note = "closed on Review without submitting"; changed = true;
+      }
+      if (changed) await saveAuto(st);
+    });
     // 2. Fill the free slots, one job at a time.
     for (let slot = 0; slot < AUTO_PARALLEL; slot++) {
       const job = await withAutoLock(async () => {
@@ -966,7 +1000,7 @@ async function autoStatus() {
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
   const stopped = results.filter((r) => ["needs_attention", "error"].includes(r.status) && r.at >= Date.now() - 864e5);
-  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), review: count("review"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
@@ -1046,6 +1080,52 @@ async function greenhouseCode(sinceMs, retried = false, { tabId = null, company 
   jwGhCodes[pick.code] = { tabId, at: Date.now() };
   await chrome.storage.local.set({ jwGhCodes });
   return pick.code;
+}
+
+// ─── Workday accounts ────────────────────────────────────────────────────────
+// One password for every company's Workday account (chrome.storage.local
+// jwWorkday, this computer only, set in the popup). The email is the Profile's.
+// jwWorkday.tenants remembers the companies that already have an account, so
+// those sign in instead of trying to make one.
+async function workdayState() { const { jwWorkday } = await chrome.storage.local.get("jwWorkday"); return jwWorkday || {}; }
+const workdayTenantOf = (url) => {
+  try {
+    const u = new URL(url);
+    const m = u.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/i);
+    if (m) return m[1].toLowerCase();
+    const p = u.pathname.split("/").filter(Boolean);
+    return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
+  } catch { return ""; }
+};
+/** The newest Workday "verify your account" link for this tenant received after
+ *  `sinceMs`, or "". Each link is handed out once. */
+async function workdayVerifyLink(sinceMs, tenant, retried = false) {
+  const token = await gmailToken(false);
+  const auth = { headers: { Authorization: `Bearer ${token}` } };
+  const q = encodeURIComponent("newer_than:1d (verify OR verification OR activate OR confirm) (workday OR myworkday OR myworkdayjobs)");
+  const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=8`, auth).then((r) => r.json());
+  if (list.error) {
+    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return workdayVerifyLink(sinceMs, tenant, true); }
+    throw new Error(`Gmail: ${list.error.message || list.error.code} (reconnect Gmail in the JobWatch popup)`);
+  }
+  const { jwWdLinks = {} } = await chrome.storage.local.get("jwWdLinks");
+  const day = Date.now() - 864e5;
+  for (const k of Object.keys(jwWdLinks)) if (jwWdLinks[k] < day) delete jwWdLinks[k];
+  for (const m of list.messages || []) {
+    const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`, auth).then((r) => r.json());
+    if (Number(msg.internalDate) < sinceMs - 120000) continue;
+    let raw = "";
+    const walk = (p) => { if (!p) return; if (p.body?.data && /text\/(plain|html)/.test(p.mimeType || "")) raw += " " + b64urlText(p.body.data); (p.parts || []).forEach(walk); };
+    walk(msg.payload);
+    const links = [...raw.matchAll(/https:\/\/[^\s"'<>]+/g)].map((x) => x[0].replace(/&amp;/g, "&").replace(/[).,]+$/, ""))
+      .filter((u) => /myworkdayjobs\.com|myworkdaysite\.com|myworkday\.com/i.test(u) && /activat|verif|confirm|token/i.test(u));
+    const link = links.find((u) => !tenant || workdayTenantOf(u) === tenant || u.toLowerCase().includes(tenant)) || "";
+    if (!link || jwWdLinks[link]) continue;
+    jwWdLinks[link] = Date.now();
+    await chrome.storage.local.set({ jwWdLinks });
+    return link;
+  }
+  return "";
 }
 
 // ─── Replies from companies (Gmail) ──────────────────────────────────────────
@@ -1144,6 +1224,58 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Unattended auto-apply ───────────────────────────────────────────
       if (message.type === "AUTO_JOB") {
         sendResponse({ ok: true, job: await autoJobForTab(sender?.tab?.id) });
+        return;
+      }
+      // ── Workday account: the password only goes to an auto-apply tab on Workday.
+      if (message.type === "WORKDAY_STATUS") {
+        const w = await workdayState();
+        sendResponse({ ok: true, set: !!w.password, accounts: Object.keys(w.tenants || {}).length });
+        return;
+      }
+      if (message.type === "WORKDAY_SET") {
+        const password = String(message.password || "");
+        if (password && (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password))) {
+          sendResponse({ ok: false, error: "Workday asks for at least 8 characters with an upper-case letter, a lower-case letter, a number and a symbol." });
+          return;
+        }
+        const w = await workdayState();
+        await chrome.storage.local.set({ jwWorkday: { ...w, password } });
+        if (password) { autoQueue = { at: 0, list: [], answersUpdatedAt: 0 }; autoTick(); }
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "WORKDAY_CREDS") {
+        const job = await autoJobForTab(sender?.tab?.id);
+        const tenant = workdayTenantOf(sender?.tab?.url || "");
+        if (!job || job.source !== "workday" || !tenant) { sendResponse({ ok: false, error: "not an auto-apply Workday tab" }); return; }
+        const w = await workdayState();
+        const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
+        const email = String(jwCachedUserDoc?.email || "").trim();
+        if (!w.password || !email) { sendResponse({ ok: false, error: !w.password ? "no Workday password saved in the JobWatch popup" : "no email on your Profile" }); return; }
+        sendResponse({ ok: true, email, password: w.password, hasAccount: !!w.tenants?.[tenant] });
+        return;
+      }
+      if (message.type === "WORKDAY_ACCOUNT") {
+        const tenant = workdayTenantOf(sender?.tab?.url || "");
+        if (tenant) {
+          const w = await workdayState();
+          await chrome.storage.local.set({ jwWorkday: { ...w, tenants: { ...(w.tenants || {}), [tenant]: Date.now() } } });
+        }
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "WORKDAY_VERIFY_LINK") {
+        try {
+          const link = await workdayVerifyLink(Number(message.since) || Date.now() - 600000, workdayTenantOf(sender?.tab?.url || ""));
+          if (link && message.open) {
+            // Open it beside the application (the link may live on another Workday
+            // host), give it time to verify, then close it; the application tab signs in.
+            const t = await chrome.tabs.create({ url: link, active: false, ...(sender?.tab?.windowId != null ? { windowId: sender.tab.windowId } : {}) }).catch(() => null);
+            await new Promise((r) => setTimeout(r, 12000));
+            if (t?.id != null) chrome.tabs.remove(t.id).catch(() => {});
+          }
+          sendResponse({ ok: true, link });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
         return;
       }
       if (message.type === "AUTO_SUBMITTING") {
@@ -1484,19 +1616,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const { idToken } = await getFreshToken();
           const { pendingJob } = await new Promise((r) => chrome.storage.session.get("pendingJob", r));
           const job = pendingJob && message.externalId && jobMatchesExternalId(pendingJob, message.externalId) ? pendingJob : null;
+          // An auto-apply tab (Workday) sends the job's tailored resume, like the other boards.
+          const autoJob = await autoJobForTab(sender?.tab?.id);
+          const tailoredP = autoJob ? tailoredResumeFor({ jobId: autoJob.jobId }) : null;
           const res = await fetch(`${FUNCTIONS_BASE}/prepareGenericApplication`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
             body: JSON.stringify({ data: {
               source: message.source || "web", applyUrl: message.applyUrl || sender?.tab?.url || "", formKey: message.formKey || "",
               externalId: message.externalId || "", domFields: message.domFields || [],
-              jobTitle: job?.title || message.jobTitle || "", companyName: job?.companyName || message.companyName || "",
-              jobLocationName: job?.locationName || message.locationName || "", descriptionText: message.descriptionText || "",
+              jobTitle: job?.title || autoJob?.title || message.jobTitle || "", companyName: job?.companyName || autoJob?.companyName || message.companyName || "",
+              jobLocationName: job?.locationName || autoJob?.locationName || message.locationName || "", descriptionText: message.descriptionText || "",
             } }),
           });
           const json = await res.json();
           if (!res.ok || json.error) throw new Error(json.error?.message || `prepareGenericApplication ${res.status}`);
-          sendResponse({ ok: true, data: json.result, pendingJob: job });
+          sendResponse({ ok: true, data: tailoredP ? await withTailoredResume(json.result, tailoredP) : json.result, pendingJob: job });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }

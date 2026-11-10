@@ -16,6 +16,18 @@ test("apply URLs: Ashby application page, Greenhouse embedded form", () => {
   assert.equal(applyUrlFor({ source: "workday", jobUrl: "https://x.wd5.myworkdayjobs.com/a" }, feeds), "");
 });
 
+test("apply URLs: Workday posting -> Apply Manually", () => {
+  const feeds = new Map();
+  const wd = (jobUrl) => applyUrlFor({ source: "workday", jobUrl }, feeds);
+  assert.equal(wd("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Senior-Engineer_JR1987654"),
+    "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Senior-Engineer_JR1987654/apply/applyManually");
+  assert.equal(wd("https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Senior-Engineer_JR1987654/apply?source=x"),
+    "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Senior-Engineer_JR1987654/apply/applyManually");
+  assert.equal(wd("https://wd1.myworkdaysite.com/recruiting/acme/External/job/Remote/Data-Analyst_R-12345"),
+    "https://wd1.myworkdaysite.com/recruiting/acme/External/job/Remote/Data-Analyst_R-12345/apply/applyManually");
+  assert.equal(wd("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite"), "");
+});
+
 test("resume file name: First_Last_Resume_Job_Title.pdf", () => {
   assert.equal(resumeFileName("Akash Ramasani", "Lead Engineer - Product Catalog Team"), "Akash_Ramasani_Resume_Lead_Engineer_Product_Catalog_Team.pdf");
   assert.equal(resumeFileName("Akash Ramasani", "Senior Software Engineer, Payments (Req 12345)"), "Akash_Ramasani_Resume_Senior_Software_Engineer_Payments.pdf");
