@@ -545,7 +545,13 @@
       return autoReport("needs_attention", `stuck on ${step || "a step"}${left ? `: ${left}` : ": Save and Continue did not move on"}`);
     }
     banner(`Auto-apply: ${step || "this step"} is filled. Pressing Save and Continue.`);
-    const r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
+    // Workday greys Save and Continue out while it works (an upload, a check):
+    // wait for it, up to half a minute (Autodesk, 2026-11-10).
+    let r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
+    for (let i = 0; i < 15 && !r?.ok && /disabled/i.test(r?.error || ""); i++) {
+      await sleep(2000);
+      r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
+    }
     if (!r?.ok) return autoReport("needs_attention", `${step || "step"}: ${r?.error || "could not press Save and Continue"}`);
     for (let i = 0; i < 20; i++) {
       await sleep(1000);
