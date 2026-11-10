@@ -345,6 +345,17 @@
         }
       } catch (e) { warn("phone country:", e.message); }
     }
+    // The number as it should be typed, whatever came in: a country code tacked
+    // on the end ("5109356846+1", "5109356846; +1") is dropped, and a leading
+    // +1 / 1 on a US number too. The fill itself is corrected to match.
+    const cleanPhone = (v) => {
+      let t = String(v || "").replace(/\s*;?\s*\+\d{1,3}\s*$/, "").trim();
+      const d = t.replace(/\D/g, "");
+      if (d.length === 11 && d[0] === "1") t = d.slice(1);
+      else if (d.length === 10) t = d;
+      return t;
+    };
+    for (const f of data.fills) if (f.name === "phone") f.value = cleanPhone(f.value);
     PHONE_WANT = String(data.fills.find((f) => f.name === "phone")?.value || "");
     if (PHONE_WANT) { sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghPhoneTrap" }).catch(() => {}); watchPhone(); phoneStep = "phone country"; await setPhoneCountry(); }
     let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
@@ -769,7 +780,8 @@
   let phoneStep = "";
   let phoneWatch = null;
   const phoneBox = () => document.getElementById("phone") || document.querySelector("input[type=tel]");
-  const phoneOk = (v) => { const d = String(v || "").replace(/\D/g, ""); const w = PHONE_WANT.replace(/\D/g, ""); return !!w && (d === w || d === `1${w}`); };
+  // Right digits, and no "+" anywhere but the very start ("5109356846+1" is wrong).
+  const phoneOk = (v) => { const t = String(v || "").trim(); const d = t.replace(/\D/g, ""); const w = PHONE_WANT.replace(/\D/g, ""); return !!w && !/.\+/.test(t) && (d === w || d === `1${w}`); };
   function watchPhone() {
     if (phoneWatch) return;
     let last = phoneBox()?.value ?? "";

@@ -307,6 +307,8 @@ function employmentEntries(resume) {
 /** Greenhouse's phone box sits next to its own country picker (+1 already
  *  chosen), so a US number goes in without the country code: "5109356846". */
 function nationalPhone(v) {
+  // A country code tacked on the end ("5109356846+1") is not part of the number.
+  v = String(v || "").replace(/\s*;?\s*\+\d{1,3}\s*$/, "").trim();
   const d = String(v || "").replace(/\D/g, "");
   if (d.length === 11 && d[0] === "1") return d.slice(1);
   if (d.length === 10) return d;

@@ -212,6 +212,7 @@
       if (el.value?.trim()) out.push(el.value.trim());
     }
     for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) {
+      if (el.closest(".phone-input__country, .iti__country-container")) continue;
       const t = el.textContent.replace(/\s+/g, " ").trim();
       if (t) out.push(t);
     }
@@ -261,7 +262,11 @@
       if (el.getAttribute("role") === "combobox" || el.closest("[class*=select__] , [class*=Select]")) continue;
       if (el.value?.trim()) vals.push(el.value.trim());
     }
-    for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) vals.push(el.textContent.replace(/\s+/g, " ").trim());
+    for (const el of block.querySelectorAll("[class*=single-value i], [class*=singleValue], [class*=multi-value__label i], [class*=multiValue] [class*=label i], [data-automation-id=selectedItem]")) {
+      // The phone's Country picker ("+1") is not part of the phone answer.
+      if (el.closest(".phone-input__country, .iti__country-container")) continue;
+      vals.push(el.textContent.replace(/\s+/g, " ").trim());
+    }
     // Toggle buttons: Ashby's Yes/No ("_active_"), aria-pressed, role=radio.
     for (const el of block.querySelectorAll("button[aria-pressed=true], [role=radio][aria-checked=true], [class*=_yesno_] button[class*=_active], [class*=yesno] button[class*=active]")) vals.push(el.textContent.replace(/\s+/g, " ").trim());
     return [...new Set(vals.filter(Boolean))].join("; ").slice(0, 1500);
