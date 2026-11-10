@@ -653,6 +653,29 @@ async function tailoredResumeFor(ref) {
 // waits instead of sending generic applications (2026-11-03: ran out at 9:30 AM).
 const AI_DOWN = /out of credits|credit balance|billing|resource-exhausted/i;
 const AI_DOWN_WAIT_MS = 15 * 60 * 1000;
+// ─── Workday in a minimized window: focus emulation ───────────────────────────
+// Workday only commits dates (and some other widgets) when the page has focus,
+// which a tab in the minimized job window never has: Ohio State, Capital One,
+// WellSky and Cadence refused dates they showed (2026-11-10; reproduced in an
+// unfocused window, fixed only by focus emulation). For its own Workday
+// auto-apply tabs, JobWatch attaches the debugger and turns on
+// Emulation.setFocusEmulationEnabled, the switch test browsers use; it detaches
+// when the job finishes. The browser shows a "debugging" bar meanwhile.
+const focusTabs = new Set();
+async function focusEmulate(tabId) {
+  if (tabId == null || !chrome.debugger) return false;
+  try { await chrome.debugger.attach({ tabId }, "1.3"); } catch (e) { if (!/already attached/i.test(e.message || "")) { console.warn("[JobWatch] focus emulation unavailable:", e.message); return false; } }
+  focusTabs.add(tabId);
+  try { await chrome.debugger.sendCommand({ tabId }, "Emulation.setFocusEmulationEnabled", { enabled: true }); return true; }
+  catch (e) { console.warn("[JobWatch] focus emulation failed:", e.message); return false; }
+}
+function focusRelease(tabId) {
+  if (tabId == null || !focusTabs.has(tabId)) return;
+  focusTabs.delete(tabId);
+  chrome.debugger.detach({ tabId }).catch(() => {});
+}
+chrome.debugger?.onDetach.addListener((src) => focusTabs.delete(src.tabId));
+
 /** The auto-apply job this tab is working on, or null. */
 async function autoJobForTab(tabId) {
   const st = await autoState();
@@ -744,6 +767,7 @@ async function autoFinishNow(result, tabId, jobId) {
   const prev = st.results[cur.jobId];
   const tries = (prev?.tries || 0) + 1;
   const note = String(result.note || "").slice(0, 300);
+  focusRelease(cur.tabId);
   // A test run (autoApplyTest): traced, tab closed, never retried or submitted.
   if (cur.test) {
     st.results[cur.jobId] = { status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries: AUTO_MAX_TRIES, test: true };
@@ -1256,7 +1280,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       // ── Unattended auto-apply ───────────────────────────────────────────
       if (message.type === "AUTO_JOB") {
-        sendResponse({ ok: true, job: await autoJobForTab(sender?.tab?.id) });
+        const job = await autoJobForTab(sender?.tab?.id);
+        if (job?.source === "workday" && sender?.frameId === 0) await focusEmulate(sender.tab.id);
+        sendResponse({ ok: true, job });
         return;
       }
       // ── Workday account: the password only goes to an auto-apply tab on Workday.
