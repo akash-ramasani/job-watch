@@ -329,7 +329,12 @@
         const box = el.closest("[data-automation-id^=formField-]") || el.closest("[data-automation-id=attachmentsSection]") || el.closest(".form-group, .field, fieldset, li") || el.parentElement?.parentElement || el.parentElement;
         let label = labelFor(el);
         if (!label || /^(select files?|upload|browse|choose file|drop files? here.*)$/i.test(label)) label = textOf(box?.querySelector("label, legend, h3, h4")) || "Resume/CV";
-        if (/^(attach|upload|drop|select)\b/i.test(label) && !/resume|cv|cover/i.test(label)) label = `Resume/CV (${label})`;
+        // Workday's second box ("Additional Documents", fkit additionalAttachments)
+        // is not the resume's: the resume went into both at Samsung and Proofpoint,
+        // and a file there demands a "Category" (2026-11-10).
+        const fkit = el.closest("[data-fkit-id]")?.getAttribute("data-fkit-id") || "";
+        if (/additional|supporting|other|cover/i.test(fkit) && !/resume/i.test(fkit)) label = `Additional documents (${label})`;
+        else if (/^(attach|upload|drop|select)\b/i.test(label) && !/resume|cv|cover/i.test(label)) label = `Resume/CV (${label})`;
         const shown = box?.querySelector("[data-automation-id=file-upload-item], [data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName], [class*=file-name], [class*=filename]");
         add({ type: "file", el, box }, { label: stripLabel(label), description: "", type: "file", required: requiredOf(el, label, box), options: [], filled: !!(el.files && el.files.length) || !!(shown && textOf(shown)), section: sectionFor(box || el) });
         continue;
@@ -833,8 +838,11 @@
     const node = r.el;
     const SHOWN = "[data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName]";
     // Workday redraws the upload box once the file is in: look at the live one.
+    // The same box again after a redraw: by its Workday id, never "the first upload box".
+    const fkit = r.box?.getAttribute?.("data-fkit-id") || node.closest?.("[data-fkit-id]")?.getAttribute("data-fkit-id") || "";
+    if (/additional/i.test(fkit) && !/resume/i.test(fkit)) return { ok: false, error: "not the resume's box (additional documents)" };
     const liveBox = () => (node.isConnected ? (r.box || node.parentElement)
-      : document.querySelector("input[data-automation-id=file-upload-input-ref]")?.closest("[data-automation-id^=formField-]")) || r.box || node.parentElement;
+      : (fkit && document.querySelector(`[data-fkit-id="${CSS.escape(fkit)}"]`)?.closest("[data-automation-id^=formField-]")) || document.querySelector("input[data-automation-id=file-upload-input-ref]")?.closest("[data-automation-id^=formField-]")) || r.box || node.parentElement;
     let box = liveBox();
     // Copies of one file (an upload checked too early and sent again, five of
     // them at State Street, 2026-11-10): keep the first, delete the rest.
