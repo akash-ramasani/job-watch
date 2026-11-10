@@ -307,11 +307,14 @@
       // File uploads (often hidden behind a button or drop zone).
       if (t === "file") {
         seenEls.add(el);
-        const box = el.closest("[data-automation-id^=formField-], [data-automation-id=attachmentsSection], .form-group, .field, fieldset, li, div") || el.parentElement;
+        // The field's own container first: closest() with a list takes the nearest
+        // match, a bare <div> around the input, and Workday shows uploaded files
+        // beside it, so they were never seen (five copies, 2026-11-10).
+        const box = el.closest("[data-automation-id^=formField-]") || el.closest("[data-automation-id=attachmentsSection]") || el.closest(".form-group, .field, fieldset, li") || el.parentElement?.parentElement || el.parentElement;
         let label = labelFor(el);
         if (!label || /^(select files?|upload|browse|choose file|drop files? here.*)$/i.test(label)) label = textOf(box?.querySelector("label, legend, h3, h4")) || "Resume/CV";
         if (/^(attach|upload|drop|select)\b/i.test(label) && !/resume|cv|cover/i.test(label)) label = `Resume/CV (${label})`;
-        const shown = box?.querySelector("[data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName], [class*=file-name], [class*=filename]");
+        const shown = box?.querySelector("[data-automation-id=file-upload-item], [data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName], [class*=file-name], [class*=filename]");
         add({ type: "file", el, box }, { label: stripLabel(label), description: "", type: "file", required: requiredOf(el, label, box), options: [], filled: !!(el.files && el.files.length) || !!(shown && textOf(shown)), section: sectionFor(box || el) });
         continue;
       }
@@ -696,6 +699,20 @@
       return { ok: !!r.el.value, actual: r.el.value };
     }
     if (r.inputs?.length) {
+      // Workday redraws an entry while it is typed into (Oracle's start saved
+      // as 05/1900, 2026-11-10): find each part again by its id, type, then
+      // read back what Workday shows and type once more when it differs.
+      const ids = r.inputs.map((p) => p.id);
+      const live = () => ids.map((id, i) => (id && document.getElementById(id)) || r.inputs[i]);
+      const want = (p) => { const w = p.getAttribute("data-automation-id") || ""; return /Month/.test(w) ? mm : /Day/.test(w) ? dd : /Year/.test(w) ? yyyy : ""; };
+      const shownOk = () => live().every((p) => {
+        const v = want(p);
+        if (!v) return true;
+        const disp = clean(document.getElementById(p.id?.replace(/-input$/, "-display"))?.textContent || p.getAttribute("aria-valuetext") || p.value);
+        return Number(disp) === Number(v);
+      });
+      for (let attempt = 0; attempt < 2; attempt++) {
+      r.inputs = live();
       for (const p of r.inputs) {
         const which = p.getAttribute("data-automation-id") || "";
         const v = /Month/.test(which) ? mm : /Day/.test(which) ? dd : /Year/.test(which) ? yyyy : "";
@@ -715,8 +732,12 @@
         p.dispatchEvent(new Event("blur", { bubbles: true }));
         await sleep(100);
       }
-      const ok = r.inputs.every((p) => clean(p.value) && !/^(mm|dd|yyyy)$/i.test(p.value));
-      return { ok, actual: r.inputs.map((p) => p.value).join("/") };
+      await sleep(400);
+      if (shownOk()) break;
+      }
+      const parts = live();
+      const ok = shownOk() && parts.every((p) => clean(p.value) && !/^(mm|dd|yyyy)$/i.test(p.value));
+      return { ok, actual: parts.map((p) => p.value).join("/"), ...(ok ? {} : { error: "the date did not keep (Workday shows another one)" }) };
     }
     return fillText(r, dd ? `${mm}/${dd}/${yyyy}` : `${mm}/${yyyy}`);
   }
@@ -727,8 +748,24 @@
     const liveBox = () => (node.isConnected ? (r.box || node.parentElement)
       : document.querySelector("input[data-automation-id=file-upload-input-ref]")?.closest("[data-automation-id^=formField-]")) || r.box || node.parentElement;
     let box = liveBox();
-    // Already there (a pass before this one uploaded it): not a second copy.
-    if (box?.querySelector(SHOWN)) return { ok: true, actual: textOf(box.querySelector("[data-automation-id=file-upload-item-name], [data-automation-id=fileName]")) || fileName };
+    // Copies of one file (an upload checked too early and sent again, five of
+    // them at State Street, 2026-11-10): keep the first, delete the rest.
+    const dedupe = async () => {
+      const items = [...(liveBox()?.querySelectorAll("[data-automation-id=file-upload-item]") || [])];
+      const seen = new Set();
+      for (const it of items) {
+        const name = clean(textOf(it.querySelector("[data-automation-id=file-upload-item-name]")));
+        if (!name) continue;
+        if (!seen.has(name)) { seen.add(name); continue; }
+        const del = it.querySelector("[data-automation-id=delete-file]");
+        if (del) { realClick(del); await sleep(900); }
+      }
+    };
+    // Already there (a pass before this one uploaded it): never a second copy.
+    if (box?.querySelector(SHOWN) || box?.querySelector("[data-automation-id=file-upload-item]")) {
+      await dedupe();
+      return { ok: true, actual: textOf(liveBox()?.querySelector("[data-automation-id=file-upload-item-name], [data-automation-id=fileName]")) || fileName };
+    }
     const ext = (fileName || "file.pdf").split(".").pop().toLowerCase();
     const mime = ext === "pdf" ? "application/pdf" : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/octet-stream";
     const bin = atob(b64);
@@ -749,7 +786,9 @@
       await shown(6000);
     }
     for (let i = 0; i < 30 && !liveBox()?.querySelector(SHOWN); i++) await sleep(300); // still uploading
-    return { ok: !!liveBox()?.querySelector(SHOWN), actual: fileName };
+    await dedupe();
+    // A file in the box is an upload under way, not a failure to retry.
+    return { ok: !!liveBox()?.querySelector(SHOWN) || !!liveBox()?.querySelector("[data-automation-id=file-upload-item]"), actual: fileName };
   }
 
   /** Put one computed fill into its field. extra = { resumeB64, resumeName }. */

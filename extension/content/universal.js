@@ -259,7 +259,8 @@
       errs = await gen("errors").catch(() => []);
       const problems = after.filter((d) => (d.required && !d.filled) || errs.some((e) => e.path === d.id));
       log(`verify pass ${pass}/4: ${problems.length} problem(s)`, problems.map((d) => d.label), errs);
-      const fixable = problems.filter((d) => byPath.has(d.id));
+      // A resume once uploaded is never sent again (copies piled up on Workday).
+      const fixable = problems.filter((d) => byPath.has(d.id) && !(d.type === "file" && answersLog[d.id]));
       if (!fixable.length) break;
       banner(`JobWatch is checking the form, pass ${pass} of 4. Fixing ${fixable.length} field${fixable.length === 1 ? "" : "s"}.`);
       await fillFields(fixable.map((d) => byPath.get(d.id)), pkgCache, new Map(after.map((d, i) => [d.id, i])));
