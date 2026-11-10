@@ -871,7 +871,19 @@ async function autoTick() {
     for (const j of st0.running) {
       const alive = j.tabId ? await chrome.tabs.get(j.tabId).then(() => true).catch(() => false) : true;
       if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
-      else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) await autoFinish({ status: "error", note: `timed out after ${j.source === "workday" ? 25 : 15} minutes` }, j.tabId, j.jobId);
+      else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) {
+        // Where a Workday job ended up when it timed out (some went silent right
+        // after signing in, with no page script left to say where).
+        if (j.source === "workday" && j.tabId) {
+          try {
+            const tab = await chrome.tabs.get(j.tabId);
+            const { idToken, uid } = await getFreshToken();
+            await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(tab.url || j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version,
+              json: JSON.stringify({ status: "error", note: `timed out after 25 minutes on ${String(tab.url || "").slice(0, 200)} (${String(tab.title || "").slice(0, 100)})`, step: "", timedOutAt: tab.url, tabTitle: tab.title }) }, idToken);
+          } catch (_) { /* best effort */ }
+        }
+        await autoFinish({ status: "error", note: `timed out after ${j.source === "workday" ? 25 : 15} minutes` }, j.tabId, j.jobId);
+      }
     }
     // Workday applications waiting on Review whose tab the person closed
     // without submitting: no longer count toward WORKDAY_MAX_REVIEW.
