@@ -303,6 +303,11 @@
         return data.resumeB64 ? uploadFile(el, data.resumeB64, data.resumeName, slot) : { ok: false, error: "no resume bytes" };
       }
       if (f.kind === "cover-text") return pasteCoverLetter(f.value);
+      // The phone already holds the number (Greenhouse prefills it from a
+      // MyGreenhouse profile): leave it. Typing over it made the page rewrite
+      // it to "5109356846+1" (log: "(510) 935-6846" -> "5109356846+1"
+      // during "filling Phone", Cloudflare, 2026-11-09).
+      if (f.name === "phone" && phoneOk(el.value)) return { ok: true, kept: el.value };
       if (f.kind === "location") return fillLocation(el, f.value, f.match);
       if (el.type === "checkbox") return checkBox(el);
       if (f.kind === "select" || f.kind === "multiselect" || f.kind === "boolean" || isCombobox(el)) {
@@ -773,11 +778,18 @@
   async function fixPhone(why) {
     const ph = phoneBox();
     if (!PHONE_WANT || !ph?.id || phoneOk(ph.value)) return false;
-    console.warn(`[JobWatch/GH] phone was "${ph.value}" (${why}): typing ${PHONE_WANT} again`);
-    const prev = phoneStep; phoneStep = `fixPhone: ${why}`;
-    await sendMsg({ type: "EXEC_MAIN_WORLD", action: "typeHuman", id: ph.id, value: PHONE_WANT });
-    await sleep(300);
-    if (!phoneOk(ph.value)) await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: ph.id, value: PHONE_WANT });
+    console.warn(`[JobWatch/GH] phone was "${ph.value}" (${why}): typing it again`);
+    const prev = phoneStep;
+    // The page can rewrite what is typed (see fillOne): try the number as
+    // digits, with +1, and formatted, and keep the first that stays put.
+    const d = PHONE_WANT.replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+    const tries = d.length === 10 ? [d, `+1${d}`, `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`] : [PHONE_WANT];
+    for (const v of tries) {
+      phoneStep = `fixPhone (${why}): ${v}`;
+      await sendMsg({ type: "EXEC_MAIN_WORLD", action: "typeHuman", id: ph.id, value: v });
+      await sleep(1200);
+      if (phoneOk(ph.value)) { console.log(`[JobWatch/GH] phone fixed with "${v}": "${ph.value}"`); break; }
+    }
     phoneStep = prev;
     return phoneOk(ph.value);
   }
