@@ -247,7 +247,13 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
   }
   // Desired salary as a typed number (WellSky: "Open to discussion" did not stay
   // in a number box): Salary Expectation, else hourly rate x 2080.
-  if (!hasOpts && ["text", "number"].includes(dom.type || "text") && /(desired|ideal|target|expected|base) (annual )?(salary|pay|compensation)|salary (expectation|requirement)|compensation expectation/.test(l)) {
+  // Current salary (University of Miami asked it in a text box): the Profile's
+  // own number if it has one, else the common answer; many states bar the question.
+  if (!hasOpts && ["text", "textarea", "number"].includes(dom.type || "text") && /\bcurrent (annual |base )?(salary|compensation|pay)\b|salary history|present salary/.test(l)) {
+    const cur = String(profile.currentSalary || "").trim();
+    if (cur || dom.type !== "number") return { ...base, kind: "text", value: cur || "Prefer not to disclose" };
+  }
+  if (!hasOpts && ["text", "textarea", "number"].includes(dom.type || "text") && /(desired|ideal|target|expected|base) (annual )?(salary|pay|compensation)|salary (expectation|requirement)|compensation expectation/.test(l)) {
     const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
     let want = num(profile.salaryExpectation);
     if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }

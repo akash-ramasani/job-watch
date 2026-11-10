@@ -742,7 +742,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // "Please provide details, including the name of the organization…" right
   // after a Yes/No we answered No: nothing to detail, so "N/A".
   if (["text", "longtext"].includes(kinds[0]) && ctx.prev?.answers?.length
-    && (/^(please )?(provide|give|share|list|describe|explain|elaborate)\b.{0,80}\b(details?|explain|describe)\b/.test(ll) || /^if (yes|so|applicable)\b/.test(ll))) {
+    && (/^(please )?(provide|give|share|list|describe|explain|elaborate)\b.{0,80}\b(details?|explain|describe)\b/.test(ll) || /^if (yes|so|applicable)\b/.test(ll)
+      // "Please provide the Type, Number, Issue Date, Expiration Date and Issuing State." (University of Miami)
+      || /^(please )?(provide|list|give|enter|specify)\b.{0,40}\b(type|number|name|date|state|issuer|agency)s?\b/.test(ll))) {
     const pv = String(ctx.prev.answers[0].value ?? "");
     const opt = (ctx.prevQ?.fields?.[0]?.values || []).find((v) => String(v.value) === pv);
     const prevText = norm(opt ? opt.label : pv);
@@ -1469,8 +1471,15 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return pickYesNo(ans, "from the resume's education", SOURCE.RESUME, 0.9);
   }
   if (key === "licenseGate") {
-    const wanted = (norm(label).match(/(series \d+|cpa|pmp|cfa|cisa|cissp|rn|pe|bar|[a-z0-9+#]+ (license|certification|certificate))/g) || []);
-    const certs = norm([...(profile.certifications || []), profile.resumeText || ""].join(" "));
+    // A named credential only: "a license or certification relevant to this
+    // application" named "a", found in the resume text, and answered Yes for a
+    // person with no certifications (University of Miami, 2026-11-10).
+    const GENERIC = /^(a|an|any|the|your|valid|active|current|relevant|professional|required|state|appropriate|applicable|such|this|that|or|and)$/;
+    const wanted = (norm(label).match(/(series \d+|\bcpa\b|\bpmp\b|\bcfa\b|\bcisa\b|\bcissp\b|\brn\b|\bpe\b|\bbar\b|[a-z0-9+#]+ (license|certification|certificate))/g) || [])
+      .filter((w) => !GENERIC.test(w.replace(/ (license|certification|certificate)$/, "")));
+    const listed = (profile.certifications || []).map((c) => String(c || "").trim()).filter(Boolean);
+    const certs = norm([...listed, profile.resumeText || ""].join(" "));
+    if (!wanted.length && listed.length) return unanswered("certification question without a named credential: the AI weighs the listed certifications");
     const ans = wanted.length && wanted.every((w) => certs.includes(w.replace(/ (license|certification|certificate)$/, ""))) ? "Yes" : "No";
     return pickYesNo(ans, ans === "Yes" ? "certification on the resume" : "no such license on the resume", SOURCE.RESUME, 0.9);
   }
