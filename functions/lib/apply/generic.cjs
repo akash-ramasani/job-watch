@@ -490,7 +490,12 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   // 4. AI free text (two-pass so the engine stays sync), four in flight.
   const ctx = aiContext(profile, resume, job);
   const firstPass = mapForm(questions, profile, null);
-  const needAi = firstPass.answers.map((a, i) => ({ a, q: questions[i] })).filter(({ a }) => a.answers.length === 0 && /free-text/i.test(a.note));
+  // Workday: no AI text in an optional box. Optional boxes there are mostly
+  // follow-ups ("Company name", "Your job title", "Dates of employment" after
+  // "Have you previously worked for Truist?" answered No, which the AI filled with
+  // "Truist." and the current title, 2026-11-10); blank is the true answer.
+  const aiMayWrite = (q) => source !== "workday" || !!q.required;
+  const needAi = firstPass.answers.map((a, i) => ({ a, q: questions[i] })).filter(({ a, q }) => a.answers.length === 0 && /free-text/i.test(a.note) && aiMayWrite(q));
   const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn, readability };
   const cache = new Map();
   const aiNotes = new Map();
@@ -543,7 +548,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
       } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
     });
     const openParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
-      .filter(({ r, q }) => q && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+      .filter(({ r, q }) => q && aiMayWrite(q) && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
     await pool(openParked, 4, async ({ r, q }) => {
       try {
         const num = fieldKind(q.fields[0]) === "number";
@@ -558,6 +563,24 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
     });
   }
 
+  // Workday: after "Have you previously worked for Truist?" answered No, the
+  // optional boxes that follow (Company name, Your job title, Dates of
+  // employment, Your most recent manager…) are for former employees: blank,
+  // whoever would have filled them, up to the next required question.
+  if (source === "workday") {
+    const order = all.map((q) => q.path);
+    const fillOf = (p) => fills.find((f) => f.path === p);
+    for (let i = 0; i < all.length; i++) {
+      const q = all[i];
+      const v = String(fillOf(q.path)?.value ?? fillOf(q.path)?.values?.[0] ?? "");
+      if (!/(previously|ever|formerly|past)\b.{0,40}(worked|been employed|employed|work(ed)? as)|employment history/i.test(q.label) || !/^no\b/i.test(v)) continue;
+      for (let k = i + 1; k < order.length && !all[k].required; k++) {
+        const kind = (domById.get(all[k].path) || {}).type;
+        if (!["text", "textarea", "email", "tel", "url", "date", "number"].includes(kind)) continue;
+        for (let x = fills.length - 1; x >= 0; x--) if (fills[x].path === all[k].path) fills.splice(x, 1);
+      }
+    }
+  }
   const filledPaths = new Set(fills.map((f) => f.path));
   const review = mapped.review
     .map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path || "" }))
