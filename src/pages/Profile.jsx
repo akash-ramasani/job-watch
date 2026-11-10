@@ -381,36 +381,32 @@ export default function Profile({ user, userMeta }) {
     <div className="page-wrapper space-y-12">
 
       {/* ═══ PROFILE HERO ═══ */}
-      <div className="overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-gray-900/5">
-        <div className="h-24 bg-gradient-to-r from-indigo-500/20 via-indigo-400/10 to-indigo-500/5" />
-        <div className="px-4 pb-6 sm:px-8 sm:pb-8">
-          <div className="relative -mt-12 flex items-start gap-x-5">
-            <div className="h-24 w-24 shrink-0 rounded-2xl bg-white p-1 shadow-md ring-1 ring-gray-900/5">
-              <UserAvatar
-                uid={user?.uid}
-                avatarUrl={userMeta?.avatarUrl}
-                name={userMeta?.fullName}
-                email={user?.email}
-                size="xl"
-                className="rounded-xl"
-              />
+      {/* One gradient band, half the old height: no white lower half. */}
+      <div className="overflow-hidden rounded-2xl bg-gradient-to-r from-indigo-500/20 via-indigo-400/10 to-indigo-500/5 shadow-2xl shadow-indigo-500/10 ring-1 ring-gray-200">
+        <div className="flex items-center gap-x-4 px-4 py-4 sm:px-8">
+          <div className="h-16 w-16 shrink-0 rounded-2xl bg-white p-1 shadow-md ring-1 ring-gray-900/5">
+            <UserAvatar
+              uid={user?.uid}
+              avatarUrl={userMeta?.avatarUrl}
+              name={userMeta?.fullName}
+              email={user?.email}
+              size="xl"
+              className="rounded-xl"
+            />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <h1 className="truncate text-xl font-bold tracking-tight text-gray-900">
+                {userMeta?.fullName || "Your Profile"}
+              </h1>
+              {user?.emailVerified && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-600 ring-1 ring-inset ring-emerald-200">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                  Verified
+                </span>
+              )}
             </div>
-            <div className="flex h-24 flex-col justify-between pt-1">
-              <div className="flex h-11 items-center gap-3">
-                <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-                  {userMeta?.fullName || "Your Profile"}
-                </h1>
-                {user?.emailVerified && (
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-600 ring-1 ring-inset ring-emerald-200">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-                    Verified
-                  </span>
-                )}
-              </div>
-              <div className="flex h-12 items-center pt-2">
-                <span className="text-sm font-medium text-gray-500">{user?.email}</span>
-              </div>
-            </div>
+            <p className="mt-0.5 truncate text-sm font-medium text-gray-500">{user?.email}</p>
           </div>
         </div>
       </div>
@@ -679,8 +675,8 @@ export default function Profile({ user, userMeta }) {
       {/* ═══ SAVED ANSWERS ═══ */}
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.05 }}>
         <ProfileCard
-          title="Saved answers"
-          description="Questions from application forms, answered once and reused on every form. Answer the ones waiting and auto-apply retries the jobs that needed them."
+          title="Your answers for applications"
+          description="The one place JobWatch answers application questions from, with your details above and your resume."
         >
           <SavedAnswersCard uid={user?.uid} notify={showToast} />
         </ProfileCard>
@@ -767,7 +763,8 @@ export default function Profile({ user, userMeta }) {
 
             {/* User ID Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-              <p className="caps-label mb-3">User ID (MCP Server)</p>
+              <p className="text-sm font-semibold text-gray-900">User ID</p>
+              <p className="mt-0.5 mb-3 text-xs text-gray-400">For the JobWatch MCP server.</p>
               <div className="flex items-center gap-2">
                 <code className="flex-1 truncate rounded-lg bg-gray-50 border border-gray-200 px-3 py-2 text-xs font-mono text-gray-600">
                   {user?.uid}
@@ -795,10 +792,10 @@ export default function Profile({ user, userMeta }) {
         >
           <div className="space-y-6">
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-50">
-                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Sign-in Methods</p>
+              <div className="px-5 py-4 border-b border-gray-100">
+                <p className="text-sm font-semibold text-gray-900">Sign-in methods</p>
               </div>
-              <div className="p-6 space-y-6">
+              <div className="p-5 space-y-6">
                 <div>
                   <p className="text-sm font-semibold text-gray-900">Email Address</p>
                   <p className="text-sm text-gray-500 mt-1">{user?.email}</p>
@@ -854,8 +851,8 @@ export default function Profile({ user, userMeta }) {
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
-                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-indigo-600">Login History</p>
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+                <p className="text-sm font-semibold text-gray-900">Login history</p>
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-bold text-gray-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                   Active Now

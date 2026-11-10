@@ -134,7 +134,6 @@ const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
 const { reviewForm } = require("./lib/apply/review.cjs");
 const { applicantNotes } = require("./lib/apply/applicantNotes.cjs");
-const { draftFacts } = require("./lib/apply/draftFacts.cjs");
 // A stuck field: one small JSON plan per field, many per application. Haiku.
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
@@ -5061,32 +5060,6 @@ exports.draftMissingAnswers = onCall(
     if (Object.keys(r.update).length) await ref.update(r.update);
     logger.info(`draftMissingAnswers: uid=${uid} questions=${Object.keys(missing).length} answered=${r.answered} waiting=${r.waiting} merged=${r.merged}`);
     return { answered: r.answered, waiting: r.waiting, merged: r.merged };
-  }
-);
-
-// "Fill from my resume" on the Profile page: drafts the answers to
-// "Questions only you can answer" from the resume and Profile; the page shows
-// them for the person to edit and save (lib/apply/draftFacts.cjs).
-exports.draftApplicantFacts = onCall(
-  { region: REGION, maxInstances: 5, memory: "512MiB", timeoutSeconds: 120, secrets: [ANTHROPIC_API_KEY] },
-  async (request) => {
-    const uid = request.auth?.uid;
-    if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const key = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
-    if (!/^sk-ant-/.test(key)) throw new HttpsError("failed-precondition", "The Anthropic key is not configured.");
-    if (!Anthropic) Anthropic = require("@anthropic-ai/sdk");
-    const ref = db.collection("users").doc(uid);
-    const [userSnap, resumeSnap] = await Promise.all([ref.get(), ref.collection("resume").doc("profile").get()]);
-    if (!resumeSnap.exists) throw new HttpsError("failed-precondition", "Upload your resume on the Profile page first.");
-    try {
-      const r = await draftFacts({ anthropic: new Anthropic({ apiKey: key, maxRetries: 2 }), model: RESUME_MODEL }, userSnap.data() || {}, resumeSnap.data() || {});
-      logger.info(`draftApplicantFacts: uid=${uid} filled=${Object.values(r.facts).filter(Boolean).length}`);
-      return r;
-    } catch (err) {
-      logger.error("draftApplicantFacts failed:", err);
-      if (isOutOfCredits(err)) throw new HttpsError("resource-exhausted", "The AI service is out of credits right now. Try again later.");
-      throw new HttpsError("internal", `Could not draft answers: ${err.message}`);
-    }
   }
 );
 

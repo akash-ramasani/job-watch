@@ -12,8 +12,7 @@
 // below deletes what is left of them.
 import React, { useEffect, useState } from "react";
 import { doc, onSnapshot, updateDoc, deleteField, serverTimestamp } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
-import { db, functions } from "../firebase";
+import { db } from "../firebase";
 
 // Prefilled once; what you write here is saved with your account.
 const DEFAULT_ABOUT = "I am an F-1 OPT student from India, currently in the USA. I completed my Master's in Computer Science (MS CS) at California State University, East Bay (CSU East Bay).";
@@ -39,7 +38,6 @@ export default function SavedAnswersCard({ uid, notify }) {
   const [old, setOld] = useState({ saved: 0, missing: 0 });
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const [drafting, setDrafting] = useState(false);
 
   useEffect(() => {
     if (!uid) return undefined;
@@ -64,27 +62,6 @@ export default function SavedAnswersCard({ uid, notify }) {
     }
   }
 
-  // "Fill from my resume": the AI drafts each answer from the resume and
-  // Profile; only empty boxes are filled, nothing is saved until you press Save.
-  async function fillFromResume() {
-    setDrafting(true);
-    try {
-      const { data: r } = await httpsCallable(functions, "draftApplicantFacts", { timeout: 120000 })({});
-      let n = 0;
-      const next = { ...(facts || {}) };
-      for (const q of APPLICANT_QUESTIONS) {
-        const v = String(r?.facts?.[q.key] || "").trim();
-        if (v && !String(next[q.key] || "").trim()) { next[q.key] = v; n++; }
-      }
-      setFacts(next);
-      notify?.(n ? `Filled ${n} from your resume. Read them, edit anything that is not right, then press Save answers.` : "Nothing new to fill: every box already has your answer.", "success");
-    } catch (e) {
-      notify?.(`Could not fill: ${e.message}`, "error");
-    } finally {
-      setDrafting(false);
-    }
-  }
-
   async function clearOld() {
     setClearing(true);
     try {
@@ -101,13 +78,13 @@ export default function SavedAnswersCard({ uid, notify }) {
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
         <p className="text-sm font-semibold text-gray-900">
           Questions only you can answer
-          <span className="ml-2 text-xs font-medium text-gray-500">{answered} of {APPLICANT_QUESTIONS.length} answered</span>
+          <span className="ml-2 text-xs font-medium text-gray-400">{answered} of {APPLICANT_QUESTIONS.length} answered</span>
         </p>
-        <p className="mt-0.5 text-xs text-gray-500">The one place JobWatch's answers come from, with your Profile and resume. Each answer here covers every way a form asks it (export control, relatives at the company, weekend hours, salary, "why this company", "proudest accomplishment"…). Nothing a form shows is saved or reused.</p>
-        <div className="mt-3 space-y-3">
+        <p className="text-xs text-gray-400 mt-0.5">The one place JobWatch's answers come from, with your Profile and resume. Each answer here covers every way a form asks it (export control, relatives at the company, weekend hours, salary, "why this company", "proudest accomplishment"…). Nothing a form shows is saved or reused.</p>
+        <div className="mt-4 space-y-4">
           <div>
             <label className="text-sm font-semibold text-gray-800" htmlFor="answer-context">About you</label>
             <textarea id="answer-context" rows={2} className="input-standard mt-1 w-full" value={about ?? ""} onChange={(e) => setAbout(e.target.value)} />
@@ -115,7 +92,7 @@ export default function SavedAnswersCard({ uid, notify }) {
           {APPLICANT_QUESTIONS.map((q) => (
             <div key={q.key}>
               <label className="text-sm font-semibold text-gray-800" htmlFor={`fact-${q.key}`}>{q.title}</label>
-              <p className="text-xs text-gray-500">{q.hint}</p>
+              <p className="text-xs text-gray-400">{q.hint}</p>
               <textarea
                 id={`fact-${q.key}`} rows={3} className="input-standard mt-1 w-full"
                 value={facts?.[q.key] ?? ""} onChange={(e) => setFacts((f) => ({ ...(f || {}), [q.key]: e.target.value }))}
@@ -123,23 +100,20 @@ export default function SavedAnswersCard({ uid, notify }) {
             </div>
           ))}
         </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" className="btn-secondary" disabled={drafting || facts === null} onClick={fillFromResume}>
-            {drafting ? "Filling from your resume…" : "Fill from my resume"}
-          </button>
-          <button type="button" className="btn-primary" disabled={saving || facts === null || about === null} onClick={save}>
-            {saving ? "Saving…" : "Save answers"}
-          </button>
-        </div>
+        <button type="button" className="btn-primary mt-4" disabled={saving || facts === null || about === null} onClick={save}>
+          {saving ? "Saving…" : "Save answers"}
+        </button>
       </div>
 
       {old.saved + old.missing > 0 && (
-        <div className="rounded-xl border border-amber-100 bg-amber-50/40 p-4">
-          <p className="text-sm font-semibold text-gray-900">Old saved and waiting questions</p>
-          <p className="mt-0.5 text-xs text-gray-500">
-            {old.saved} answers learned from forms and {old.missing} waiting questions, one per wording, with many duplicates. Forms no longer use them; your answers above replace them.
-          </p>
-          <button type="button" className="btn-secondary mt-3" disabled={clearing} onClick={clearOld}>
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Old saved and waiting questions</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {old.saved} answers learned from forms and {old.missing} waiting questions, one per wording, with many duplicates. Forms no longer use them; your answers above replace them.
+            </p>
+          </div>
+          <button type="button" className="btn-secondary flex-shrink-0" disabled={clearing} onClick={clearOld}>
             {clearing ? "Deleting…" : `Delete all ${old.saved + old.missing}`}
           </button>
         </div>

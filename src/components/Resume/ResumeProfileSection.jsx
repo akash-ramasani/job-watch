@@ -289,7 +289,7 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
   // ── Reading a PDF/Word file ──
   if (view === "reading") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white py-14 flex flex-col items-center gap-3 text-center">
+      <div className="rounded-2xl border border-gray-100 bg-white shadow-sm py-14 flex flex-col items-center gap-3 text-center">
         <Spinner className="h-7 w-7" />
         <p className="text-sm font-semibold text-gray-900">Reading your resume…</p>
         <p className="text-xs text-gray-500">{readingName} · this takes about 15 seconds</p>
@@ -301,7 +301,7 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
   if (view === "editing") {
     const header = draft.header || {};
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white">
+      <div className="rounded-2xl border border-gray-100 bg-white shadow-sm">
         <div className="px-5 sm:px-6 py-4 border-b border-gray-100">
           <p className="text-sm font-bold text-gray-900">{origin === "import" ? "Check your resume" : "Edit your resume"}</p>
           <p className="text-xs text-gray-500 mt-0.5">
@@ -466,7 +466,7 @@ export default function ResumeProfileSection({ saved, contact = {}, onReadFile, 
 
   return (
     <div>
-      <div className="rounded-2xl border border-gray-200 bg-white">
+      <div className="rounded-2xl border border-gray-100 bg-white shadow-sm">
         <div className="px-5 sm:px-6 py-5">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
             <div className="min-w-0">
