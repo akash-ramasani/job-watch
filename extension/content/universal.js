@@ -330,11 +330,13 @@
     const st = await gen("workdayAuthState").catch(() => ({ mode: null, errors: [], message: "" }));
     const said = `${st.errors.join(" ")} ${st.message}`.trim();
     let mode = mem.mode || (creds.hasAccount ? "signin" : "create");
+    if (mem.mode === "reset") return setNewPassword(mem, creds); // the page from the reset email
     if (mem.mode === "create" && EXISTS.test(said)) { mode = "signin"; sendMsg({ type: "WORKDAY_ACCOUNT" }); }
-    else if (LOCKED.test(said)) { authSave(mem); return autoReport("needs_attention", `Workday account at ${header.companyName || "this company"} is locked: ${said.slice(0, 160)}`); }
-    else if (mem.mode === "signin" && WRONG.test(said)) {
+    else if (mem.mode === "signin" && (WRONG.test(said) || LOCKED.test(said))) {
+      // An older account with another password (or locked): reset it to the saved one, once.
+      if (!mem.resetAt) return resetPassword(mem, creds);
       authSave(mem);
-      return autoReport("needs_attention", `Workday at ${header.companyName || "this company"} refused the saved password (an older account?). Sign in or reset the password here: ${said.slice(0, 120)}`);
+      return autoReport("needs_attention", `Workday at ${header.companyName || "this company"} still refuses the saved password after a reset: ${said.slice(0, 140)}`);
     }
     else if (mem.mode && VERIFY.test(said)) return verifyEmail(mem);
     else if (mem.mode === "create" && st.mode === "signin") mode = "signin"; // made the account; Workday moved on to Sign In
@@ -355,6 +357,41 @@
     const after = await gen("workdayAuthState").catch(() => ({ errors: [], message: "" }));
     if (mode === "create" && VERIFY.test(`${after.errors.join(" ")} ${after.message}`)) return verifyEmail(mem);
     // Anything else the page said is read on the next tick.
+  }
+
+  /** "Forgot your password?", then the reset email's link opens in this tab. */
+  async function resetPassword(mem, creds) {
+    mem.resetAt = Date.now();
+    authSave(mem);
+    banner("Auto-apply: Workday refused the saved password. Resetting it to your saved one…");
+    const r = await gen("workdayForgot", creds.email).catch((e) => ({ ok: false, error: e.message }));
+    if (!r?.ok) return autoReport("needs_attention", `Workday password reset: ${r?.error || "could not start"}`);
+    for (let i = 0; i < 18; i++) { // three minutes
+      await sleep(10000);
+      const m = await sendMsg({ type: "WORKDAY_VERIFY_LINK", kind: "reset", since: mem.resetAt });
+      if (!m?.ok) return autoReport("needs_attention", `Workday reset email: ${m?.error || "Gmail unavailable"}`);
+      if (m.link) {
+        authSave({ ...mem, mode: "reset" });
+        location.href = m.link;
+        return;
+      }
+    }
+    autoReport("needs_attention", "Workday's password reset email did not arrive within three minutes");
+  }
+  /** On the reset email's page: the saved password, then back to the application. */
+  async function setNewPassword(mem, creds) {
+    banner("Auto-apply: setting your Workday password…");
+    const r = await gen("workdaySetPassword", { email: creds.email, password: creds.password }).catch((e) => ({ ok: false, error: e.message }));
+    if (!r?.ok) return autoReport("needs_attention", `Workday password reset: ${r?.error}`);
+    await sleep(5000);
+    const after = await gen("workdayAuthState").catch(() => ({ errors: [] }));
+    if (after.errors.length && await gen("hasPassword").catch(() => false) && after.mode !== "signin") {
+      return autoReport("needs_attention", `Workday did not take the new password: ${after.errors.join(" ").slice(0, 160)}`);
+    }
+    sendMsg({ type: "WORKDAY_ACCOUNT" });
+    authSave({ ...mem, mode: "signin" });
+    banner("Auto-apply: password set. Signing in…");
+    location.href = AUTO?.applyUrl || location.href;
   }
 
   /** Workday emailed a verification link: open it from Gmail, then sign in. */
@@ -439,7 +476,8 @@
   async function tick() {
     if (stopped || busy) return;
     if (AUTO && await gen("workdayClosed").catch(() => false)) { stopped = true; return autoReport("error", "job closed: no longer available"); }
-    if (!onApplyFlow()) return;
+    const resetting = !!AUTO && authMem().mode === "reset";
+    if (!onApplyFlow() && !resetting) return;
     if (manual()) { window.__jwManualStart = false; forced = true; armNext = true; }
     if (!started && !forced && (!formish() || pageSig() === notAFormSig)) return;
     busy = true;
@@ -456,8 +494,17 @@
         banner("JobWatch: choose Autofill with Resume or Apply Manually. JobWatch fills each step after you sign in.");
         return;
       }
-      // Auto-apply: the account form first (whatever the scan makes of it).
+      // Auto-apply: Workday's cookie banner, then the account form (whatever the scan makes of it).
+      if (AUTO) await gen("workdayPress", "legalNoticeAcceptButton", "^accept cookies$").catch(() => false);
       if (AUTO && await gen("hasPassword").catch(() => false)) return await autoAuth();
+      if (resetting) {
+        // The reset page has not shown its password boxes: give it a minute.
+        const mem = authMem();
+        mem.resetWaits = (mem.resetWaits || 0) + 1;
+        authSave(mem);
+        if (mem.resetWaits > 40) autoReport("needs_attention", "Workday's password reset page did not open (the link may have expired)");
+        return;
+      }
       const step = await gen("stepName").catch(() => "");
       // Auto-apply on Review (a page with no questions): stop for the person.
       if (AUTO && started && await gen("onReviewStep").catch(() => false)) return await autoAdvance(step);

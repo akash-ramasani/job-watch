@@ -835,6 +835,37 @@
     press1(submit);
     return { ok: true };
   }
+  /** "Forgot your password?" on the Sign In form, then send the reset email. */
+  async function workdayForgot(email) {
+    const link = vis("[data-automation-id=forgotPasswordLink]")[0] || buttonByText(/^forgot (your )?password\??$/i);
+    if (!link) return { ok: false, error: "no Forgot your password? link" };
+    press1(link);
+    await sleep(1500);
+    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]")[0] || vis("input[type=text]")[0];
+    if (!emailEl) return { ok: false, error: "no email box on the reset form" };
+    await typeInto(emailEl, email, { keys: true });
+    emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
+    await sleep(300);
+    const submit = vis("[data-automation-id=resetPasswordSubmitButton], [data-automation-id=forgotPasswordSubmitButton]")[0]
+      || buttonByText(/^(submit|reset password|send|send email|continue)$/i);
+    if (!submit) return { ok: false, error: "no submit button on the reset form" };
+    press1(submit);
+    return { ok: true };
+  }
+  /** The page from the reset email: the new password in every password box. */
+  async function workdaySetPassword({ email, password }) {
+    const pws = vis("input[type=password]");
+    if (!pws.length) return { ok: false, error: "no password boxes on the reset page" };
+    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email]")[0];
+    if (emailEl && !emailEl.value) await typeInto(emailEl, email, { keys: true });
+    for (const p of pws) { await typeInto(p, password, { keys: true }); p.dispatchEvent(new Event("blur", { bubbles: true })); }
+    await sleep(300);
+    const submit = vis("[data-automation-id=resetPasswordSubmitButton], [data-automation-id=changePasswordSubmitButton], [data-automation-id=submitButton]")[0]
+      || buttonByText(/^(submit|reset password|change password|save|update password|continue)$/i);
+    if (!submit) return { ok: false, error: "no submit button on the reset page" };
+    press1(submit);
+    return { ok: true };
+  }
   /** Press a Workday button by automation id or text ("applyManually"). */
   function workdayPress(id, textRe = null) {
     const el = vis(`[data-automation-id="${CSS.escape(id)}"]`)[0] || (textRe ? buttonByText(new RegExp(textRe, "i")) : null);
@@ -858,5 +889,5 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayAuth, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayAuth, workdayForgot, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
 })();

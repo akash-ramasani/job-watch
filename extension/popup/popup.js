@@ -219,17 +219,25 @@ function refreshWorkday() {
     $("wd-pill").textContent = res.set ? "On" : "Off";
     $("wd-pill").className = `auto-pill${res.set ? " on" : ""}`;
     $("wd-password").placeholder = res.set ? "Saved. Type a new one to change it" : "Workday password";
-    if (!$("wd-status").dataset.msg) $("wd-status").textContent = res.set ? `Accounts made or signed in: ${res.accounts}.` : "Off: Workday jobs are skipped until a password is saved.";
+    const email = res.email || res.profileEmail;
+    if (!$("wd-email").value && document.activeElement !== $("wd-email")) $("wd-email").value = email;
+    if ($("wd-status").dataset.msg) return;
+    // Workday's verification and reset emails are read from the connected Gmail.
+    const other = res.gmailEmail && email && res.gmailEmail.toLowerCase() !== email.toLowerCase();
+    $("wd-status").style.color = other ? "#b45309" : "";
+    $("wd-status").textContent = other ? `Gmail is connected to ${res.gmailEmail}, but Workday uses ${email}: its verification and reset emails would not be found. Use the same address for both.`
+      : res.set ? `Accounts made or signed in: ${res.accounts}.` : "Off: Workday jobs are skipped until a password is saved.";
   });
 }
 $("btn-wd-save").addEventListener("click", () => {
   const password = $("wd-password").value;
-  if (!password) return;
-  chrome.runtime.sendMessage({ type: "WORKDAY_SET", password }, (res) => {
+  const email = $("wd-email").value.trim();
+  if (!password && !email) return;
+  chrome.runtime.sendMessage({ type: "WORKDAY_SET", password, email }, (res) => {
     const st = $("wd-status");
     st.dataset.msg = "1";
     st.style.color = res?.ok ? "#065f46" : "#dc2626";
-    st.textContent = res?.ok ? "Saved. Workday jobs join auto-apply." : (res?.error || chrome.runtime.lastError?.message || "Could not save.");
+    st.textContent = res?.ok ? "Saved. Every Workday account uses this email and password." : (res?.error || chrome.runtime.lastError?.message || "Could not save.");
     if (res?.ok) $("wd-password").value = "";
     setTimeout(() => { delete st.dataset.msg; st.style.color = ""; refreshWorkday(); }, 4000);
   });

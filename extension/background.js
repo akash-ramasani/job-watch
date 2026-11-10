@@ -1083,8 +1083,10 @@ async function greenhouseCode(sinceMs, retried = false, { tabId = null, company 
 }
 
 // ─── Workday accounts ────────────────────────────────────────────────────────
-// One password for every company's Workday account (chrome.storage.local
-// jwWorkday, this computer only, set in the popup). The email is the Profile's.
+// One email and one password for every company's Workday account
+// (chrome.storage.local jwWorkday, this computer only, set in the popup; the
+// email falls back to the Profile's). An account that refuses the password is
+// reset to it through "Forgot your password?" and the email's link.
 // jwWorkday.tenants remembers the companies that already have an account, so
 // those sign in instead of trying to make one.
 async function workdayState() { const { jwWorkday } = await chrome.storage.local.get("jwWorkday"); return jwWorkday || {}; }
@@ -1097,15 +1099,18 @@ const workdayTenantOf = (url) => {
     return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
   } catch { return ""; }
 };
-/** The newest Workday "verify your account" link for this tenant received after
- *  `sinceMs`, or "". Each link is handed out once. */
-async function workdayVerifyLink(sinceMs, tenant, retried = false) {
+/** The newest Workday "verify your account" (kind "verify") or "reset your
+ *  password" (kind "reset") link for this tenant received after `sinceMs`, or
+ *  "". Each link is handed out once. */
+async function workdayVerifyLink(sinceMs, tenant, kind = "verify", retried = false) {
   const token = await gmailToken(false);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
-  const q = encodeURIComponent("newer_than:1d (verify OR verification OR activate OR confirm) (workday OR myworkday OR myworkdayjobs)");
+  const q = encodeURIComponent(kind === "reset"
+    ? "newer_than:1d (password OR reset) (workday OR myworkday OR myworkdayjobs)"
+    : "newer_than:1d (verify OR verification OR activate OR confirm) (workday OR myworkday OR myworkdayjobs)");
   const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=8`, auth).then((r) => r.json());
   if (list.error) {
-    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return workdayVerifyLink(sinceMs, tenant, true); }
+    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return workdayVerifyLink(sinceMs, tenant, kind, true); }
     throw new Error(`Gmail: ${list.error.message || list.error.code} (reconnect Gmail in the JobWatch popup)`);
   }
   const { jwWdLinks = {} } = await chrome.storage.local.get("jwWdLinks");
@@ -1117,8 +1122,11 @@ async function workdayVerifyLink(sinceMs, tenant, retried = false) {
     let raw = "";
     const walk = (p) => { if (!p) return; if (p.body?.data && /text\/(plain|html)/.test(p.mimeType || "")) raw += " " + b64urlText(p.body.data); (p.parts || []).forEach(walk); };
     walk(msg.payload);
+    const subject = (msg.payload?.headers || []).find((h) => /^subject$/i.test(h.name))?.value || "";
+    const aboutReset = /password|reset/i.test(subject);
+    if ((kind === "reset") !== aboutReset) continue; // a verify email is not a reset email
     const links = [...raw.matchAll(/https:\/\/[^\s"'<>]+/g)].map((x) => x[0].replace(/&amp;/g, "&").replace(/[).,]+$/, ""))
-      .filter((u) => /myworkdayjobs\.com|myworkdaysite\.com|myworkday\.com/i.test(u) && /activat|verif|confirm|token/i.test(u));
+      .filter((u) => /myworkdayjobs\.com|myworkdaysite\.com|myworkday\.com/i.test(u) && /activat|verif|confirm|token|reset|password/i.test(u));
     const link = links.find((u) => !tenant || workdayTenantOf(u) === tenant || u.toLowerCase().includes(tenant)) || "";
     if (!link || jwWdLinks[link]) continue;
     jwWdLinks[link] = Date.now();
@@ -1229,17 +1237,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Workday account: the password only goes to an auto-apply tab on Workday.
       if (message.type === "WORKDAY_STATUS") {
         const w = await workdayState();
-        sendResponse({ ok: true, set: !!w.password, accounts: Object.keys(w.tenants || {}).length });
+        const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
+        sendResponse({ ok: true, set: !!w.password, email: w.email || "", profileEmail: jwCachedUserDoc?.email || "", gmailEmail: (await gmailState()).email || "", accounts: Object.keys(w.tenants || {}).length });
         return;
       }
       if (message.type === "WORKDAY_SET") {
         const password = String(message.password || "");
+        const email = String(message.email ?? "").trim().toLowerCase();
+        if (email && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(email)) { sendResponse({ ok: false, error: "That email does not look right." }); return; }
         if (password && (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password))) {
           sendResponse({ ok: false, error: "Workday asks for at least 8 characters with an upper-case letter, a lower-case letter, a number and a symbol." });
           return;
         }
         const w = await workdayState();
-        await chrome.storage.local.set({ jwWorkday: { ...w, password } });
+        await chrome.storage.local.set({ jwWorkday: { ...w, ...(password ? { password } : {}), ...(email ? { email } : {}) } });
         if (password) { autoQueue = { at: 0, list: [], answersUpdatedAt: 0 }; autoTick(); }
         sendResponse({ ok: true });
         return;
@@ -1250,8 +1261,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!job || job.source !== "workday" || !tenant) { sendResponse({ ok: false, error: "not an auto-apply Workday tab" }); return; }
         const w = await workdayState();
         const { jwCachedUserDoc } = await chrome.storage.local.get("jwCachedUserDoc");
-        const email = String(jwCachedUserDoc?.email || "").trim();
-        if (!w.password || !email) { sendResponse({ ok: false, error: !w.password ? "no Workday password saved in the JobWatch popup" : "no email on your Profile" }); return; }
+        const email = String(w.email || jwCachedUserDoc?.email || "").trim();
+        if (!w.password || !email) { sendResponse({ ok: false, error: !w.password ? "no Workday password saved in the JobWatch popup" : "no Workday email saved in the JobWatch popup" }); return; }
         sendResponse({ ok: true, email, password: w.password, hasAccount: !!w.tenants?.[tenant] });
         return;
       }
@@ -1266,7 +1277,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "WORKDAY_VERIFY_LINK") {
         try {
-          const link = await workdayVerifyLink(Number(message.since) || Date.now() - 600000, workdayTenantOf(sender?.tab?.url || ""));
+          const link = await workdayVerifyLink(Number(message.since) || Date.now() - 600000, workdayTenantOf(sender?.tab?.url || ""), message.kind === "reset" ? "reset" : "verify");
           if (link && message.open) {
             // Open it beside the application (the link may live on another Workday
             // host), give it time to verify, then close it; the application tab signs in.
