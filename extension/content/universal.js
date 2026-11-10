@@ -716,7 +716,13 @@
       // application is computed and recorded once, then Save and Continue.)
       if (!fresh.length && !(AUTO && !started) && !(isWorkday && newStep && /experience/i.test(step))) {
         lastStep = step;
-        // Auto-apply: a step with nothing left to fill (Workday kept it from before) moves on.
+        // Auto-apply: a step with nothing left to fill (Workday kept it from before)
+        // moves on, after its questions are recorded like any other step's.
+        if (AUTO && started && isWorkday && newStep) {
+          const all = await gen("scan", { readOptions: true }).catch(() => fields);
+          const opts = (f) => (f.options || []).map((o) => (typeof o === "string" ? o : o.label)).slice(0, 120);
+          trace("step", { step, prefilledStep: true, fields: all.map((f) => ({ id: f.id, label: f.label, description: f.description || "", type: f.type, widget: f.widget || "", required: !!f.required, filledBefore: !!f.filled, section: f.section || "", wd: f.wd || "", domId: f.domId || "", fkit: f.fkit || "", options: opts(f) })), fills: [], results: {}, review: [], attention: [], after: [], errors: [] });
+        }
         if (AUTO && started) await autoAdvance(step);
         return;
       }
