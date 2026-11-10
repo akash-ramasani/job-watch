@@ -208,7 +208,15 @@
   function eduFill(field, ed) {
     const l = nrm(field.label);
     const mk = (kind, value, more = {}) => ({ path: field.id, label: field.label, kind, value, source: "resume", ...more });
-    if (/school|university|institution|college/.test(l)) return ed.school ? mk(field.type === "typeahead" ? "typeahead" : "text", ed.school, { match: ed.school, alternates: ["Other"] }) : null;
+    if (/school|university|institution|college/.test(l)) {
+      if (!ed.school) return null;
+      // A search list (Citi, Cadence): the school's other official names
+      // ("KL University" is "Koneru Lakshmaiah…"), then "Other" where offered.
+      const STOPW = /^(university|college|institute|school|of|the|and|at|for|in|de|education|foundation|deemed|to|be)$/i;
+      const short = (n) => String(n).replace(/\(.*?\)/g, " ").split(/[\s,.-]+/).filter((w) => w.length >= 3 && !STOPW.test(w)).slice(0, 2).join(" ");
+      const alts = [...(ed.aliases || []), ...(ed.aliases || []).map(short), ed.school.replace(/[,.]/g, " ").replace(/\s+/g, " ").trim(), "Other"].filter((x, i, a) => x && a.indexOf(x) === i && nrm(x) !== nrm(ed.school));
+      return mk(field.type === "typeahead" || field.widget === "typeahead" ? "typeahead" : "text", ed.school, { match: ed.school, alternates: alts });
+    }
     if (/^degree$|degree type|degree/.test(l)) {
       if (!ed.degree) return null;
       const exact = pickDegree(ed.degree, field.options);

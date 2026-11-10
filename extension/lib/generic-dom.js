@@ -591,9 +591,23 @@
       await sleep(400);
     };
     const results = () => waitOptions(2500, shownBefore || null);
+    // What Workday picks by itself on Enter must carry the words searched for
+    // (it never settles on "Klaipeda University" for "KL University"); a
+    // stray pick is removed and the next name is tried.
+    const STOP = /^(university|college|institute|school|of|the|and|at|for|in|de)$/;
+    const fits = (term, got) => {
+      const g = ` ${nrm(got).replace(/[^a-z0-9]+/g, " ")} `;
+      const words = nrm(term).replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length >= 2 && !STOP.test(w));
+      return words.length ? words.every((w) => g.includes(` ${w}`)) : nrm(got) === nrm(term);
+    };
+    const unpick = async () => {
+      const del = el.closest("[data-automation-id^=formField-]")?.querySelector("[data-automation-id=selectedItem] [data-automation-id=DELETE_charm], [data-automation-id=DELETE_charm]");
+      if (del) { realClick(del); await sleep(500); }
+    };
     await search(value);
     // Workday picks the one exact match on Enter and closes the list.
-    if (chosen()) { await closeList(el); return { ok: true, picked: chosen() }; }
+    if (chosen() && fits(value, chosen())) { await closeList(el); return { ok: true, picked: chosen() }; }
+    if (chosen()) await unpick();
     let opts = await results();
     // Only an exact suggestion here: "Job Board" must not take "Online Source -
     // Asia Job Boards" (State Street, 2026-11-10).
@@ -611,7 +625,8 @@
       if (nrm(alt) === nrm(value)) continue;
       setNative(el, "");
       await search(alt);
-      if (chosen()) { await closeList(el); return { ok: true, picked: chosen() }; }
+      if (chosen() && fits(alt, chosen())) { await closeList(el); return { ok: true, picked: chosen() }; }
+      if (chosen()) { await unpick(); continue; }
       const found = exact(await results(), alt);
       if (found && !isCategory(found)) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
       if (found && !laterCategory) laterCategory = optText(found);
@@ -873,7 +888,7 @@
       const ctl = box?.querySelector("[data-jw-id]");
       return ctl?.getAttribute("data-jw-id") || "";
     };
-    for (const el of document.querySelectorAll("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert], .error-message, .field-error, .invalid-feedback, .help-block.error, [class*=errorMessage], [class*=error-text], [class*=ErrorMessage]")) {
+    for (const el of document.querySelectorAll("[data-automation-id=errorMessage], [data-automation-id=inputAlert], [data-automation-id=inputError], [role=alert], .error-message, .field-error, .invalid-feedback, .help-block.error, [class*=errorMessage], [class*=error-text], [class*=ErrorMessage]")) {
       if (!visible(el)) continue;
       const text = clean(textOf(el));
       if (!text || text.length > 220) continue;
@@ -976,7 +991,7 @@
     // Workday's first screen (2026): Apple / Google / LinkedIn / "Sign in with email", no boxes yet.
     const chooser = !pw.length && !!vis("[data-automation-id=SignInWithEmailButton]").length;
     const mode = chooser ? "chooser" : !pw.length ? null : (pw.length >= 2 || vis("[data-automation-id=verifyPassword], [data-automation-id=createAccountSubmitButton]").length) ? "create" : "signin";
-    const errs = vis("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert], [data-automation-id=errorBanner]")
+    const errs = vis("[data-automation-id=errorMessage], [data-automation-id=inputAlert], [data-automation-id=inputError], [role=alert], [data-automation-id=errorBanner]")
       .map((e) => clean(textOf(e))).filter((t) => t && t.length < 300);
     const body = clean((document.body?.innerText || "").slice(0, 4000));
     const message = (body.match(/[^.]*\b(verify|verification|activate)\b[^.]*(email|account)[^.]*\./i) || [""])[0].slice(0, 240);
@@ -1087,7 +1102,7 @@
       if (!box || seen.has(box)) return;
       seen.add(box);
       const html = box.outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, "<svg/>").replace(/ style="[^"]*"/g, "").replace(/ class="[^"]*"/g, "").replace(/\s+/g, " ").slice(0, 12000);
-      const err = clean(textOf(box.querySelector("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert]")));
+      const err = clean(textOf(box.querySelector("[data-automation-id=errorMessage], [data-automation-id=inputAlert], [data-automation-id=inputError], [role=alert]")));
       out.push({ id, why, wd: box.getAttribute("data-automation-id") || "", label: clean(textOf(box.querySelector("label, legend"))).slice(0, 200), error: err.slice(0, 300), html });
     };
     const boxOf = (el) => el?.closest?.("[data-automation-id^=formField-]") || el?.closest?.("fieldset, [role=group]") || el?.parentElement;
@@ -1096,7 +1111,7 @@
       const el = (r && (r.inputs?.[0] || r.el)) || document.querySelector(`[data-jw-id="${CSS.escape(id)}"]`);
       if (el) take(boxOf(el), "asked", id);
     }
-    for (const e of document.querySelectorAll("[data-automation-id=errorMessage], [data-automation-id=inputError], [aria-invalid=true]")) {
+    for (const e of document.querySelectorAll("[data-automation-id=errorMessage], [data-automation-id=inputAlert], [data-automation-id=inputError], [aria-invalid=true]")) {
       if (!visible(e) && e.getAttribute("aria-invalid") !== "true") continue;
       take(boxOf(e), "flagged by Workday", e.closest("[data-jw-id]")?.getAttribute("data-jw-id") || boxOf(e)?.querySelector?.("[data-jw-id]")?.getAttribute("data-jw-id") || "");
     }
