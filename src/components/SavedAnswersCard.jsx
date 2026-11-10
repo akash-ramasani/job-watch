@@ -55,7 +55,12 @@ export default function SavedAnswersCard({ uid, notify }) {
   }, [uid]);
 
   const missing = useMemo(() => Object.entries(data.missing).filter(([, v]) => v?.question).sort((a, b) => (b[1].count || 0) - (a[1].count || 0) || toMs(b[1].at) - toMs(a[1].at)), [data.missing]);
-  const saved = useMemo(() => Object.entries(data.saved).filter(([, v]) => v?.question).sort((a, b) => toMs(b[1].at) - toMs(a[1].at)), [data.saved]);
+  const allSaved = useMemo(() => Object.entries(data.saved).filter(([, v]) => v?.question).sort((a, b) => toMs(b[1].at) - toMs(a[1].at)), [data.saved]);
+  // Your own answers are listed; the ones learned automatically stay in use
+  // but are folded away (one per wording of a question, so there are many).
+  const [showLearned, setShowLearned] = useState(false);
+  const learnedCount = allSaved.filter(([, v]) => v.source !== "you").length;
+  const saved = showLearned ? allSaved : allSaved.filter(([, v]) => v.source === "you");
 
   async function save(key, question) {
     const answer = String(drafts[key] ?? "").trim();
@@ -82,6 +87,8 @@ export default function SavedAnswersCard({ uid, notify }) {
       const clean = Object.fromEntries(APPLICANT_QUESTIONS.map((q) => [q.key, String(facts?.[q.key] || "").trim()]));
       await updateDoc(doc(db, "users", uid), { applicantFacts: clean, answerContext: String(about || "").trim(), answersUpdatedAt: serverTimestamp() });
       notify?.("Saved. Every application uses these answers from now on, and jobs that waited on you are retried.", "success");
+      // Clear the waiting list with them: duplicates merged, answerable ones answered.
+      if (missing.length) await answerWithAi();
     } catch (e) {
       notify?.(`Could not save: ${e.message}`, "error");
     } finally {
@@ -176,8 +183,13 @@ export default function SavedAnswersCard({ uid, notify }) {
 
       <div className="pt-2 border-t border-gray-100">
         <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-3">Saved answers {saved.length > 0 && <span className="ml-1 text-gray-500">{saved.length}</span>}</p>
+        {learnedCount > 0 && (
+          <button type="button" className="mb-3 text-xs font-semibold text-indigo-600 hover:underline" onClick={() => setShowLearned((x) => !x)}>
+            {showLearned ? "Show only your answers" : `Also show ${learnedCount} learned automatically`}
+          </button>
+        )}
         {saved.length === 0 ? (
-          <p className="text-sm text-gray-500">None yet. Answers the AI finishes on a form, and answers you type into fields JobWatch could not fill, are saved here and reused.</p>
+          <p className="text-sm text-gray-500">{learnedCount ? "None of your own yet. Answers you type into fields JobWatch could not fill show up here." : "None yet. Answers the AI finishes on a form, and answers you type into fields JobWatch could not fill, are saved here and reused."}</p>
         ) : (
           <ul className="divide-y divide-gray-100">
             {saved.map(([key, v]) => (
