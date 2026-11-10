@@ -281,11 +281,12 @@ ${richLatex(resume.summary)}
 
 \resumeSubHeadingListStart
 `);
+    // Education dates stay off the resume (the person's choice); forms still get them.
     for (const e of resume.education) {
       out.push(`
 \\resumeSubheading
     {${escapeLatex(e.institution)}}
-    {${dateRange(e.startDate, e.endDate)}}
+    {}
     {${escapeLatex(e.degree)}}
     {${escapeLatex(e.location)}}
 `);
