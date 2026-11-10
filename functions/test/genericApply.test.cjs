@@ -122,7 +122,8 @@ test("workday: scanned form end to end on the shared engine", async () => {
   assert.equal(by["phone-device-type:select#1"].value, "Mobile");
   assert.equal(by["country-phone-code:typeahead#1"].kind, "typeahead");
   assert.match(by["country-phone-code:typeahead#1"].match, /United States of America \(\+1\)/);
-  assert.equal(by["phone-number:tel#1"].value, "415-555-0100");
+  // Workday has its own Country Phone Code box: the number alone, 10 digits (State Street, 2026-11-10).
+  assert.equal(by["phone-number:tel#1"].value, "4155550100");
   assert.equal(by["phone-extension:text#1"], undefined);
   assert.equal(by["how-did-you-hear:typeahead#1"].kind, "typeahead");
   assert.match(by["how-did-you-hear:typeahead#1"].value, /linkedin/i);

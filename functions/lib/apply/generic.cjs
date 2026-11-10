@@ -18,6 +18,7 @@
 
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
+const { nationalPhone } = require("./prepare.cjs");
 const { aiContext, answerFreeText, pool } = require("./ai-text.cjs");
 
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -111,7 +112,7 @@ function pickOption(q, wants) {
  * A fill for a field the engine would park or get wrong, or null to let the
  * engine answer it. `dom` is the scanned field.
  */
-function presetFill(q, dom, profile, startDateFor = null) {
+function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) {
   const l = nrm(q.label);
   const base = { path: q.path, label: q.label, source: "rule" };
   const hasOpts = (dom.options || []).length > 0;
@@ -130,14 +131,31 @@ function presetFill(q, dom, profile, startDateFor = null) {
     }
     return { ...base, kind: "typeahead", value: us ? "United States of America" : country, match: us ? "United States of America (+1)" : country };
   }
-  // "How did you hear" as a search picker (Workday's category tree): search
-  // for the person's answer, then fall back to the categories it offers.
+  // "How did you hear" as a search picker (Workday's category tree: "Online
+  // Source" > LinkedIn / Indeed / Glassdoor). Workday picks a board the moment
+  // its exact name is searched, so the names come first, then the categories
+  // offered, browsed down to the same names (State Street, 2026-11-10).
   if (dom.widget === "typeahead" && /how did you (hear|find|learn)|hear about|referral source|^source$/.test(l)) {
     const heard = profile.heardAboutUs || "LinkedIn";
     const cats = (dom.options || []).map((o) => o.label);
-    const prefer = [/job board/i, /social/i, /online|internet|website/i, /linkedin/i, /other/i];
-    const alternates = [...prefer.map((re) => cats.find((c) => re.test(c))).filter(Boolean), "Job Board", "Social Media", "Other"];
+    const boards = ["LinkedIn", "Indeed", "Glassdoor", "Company Website", "Careers Website", "Company Careers Site"];
+    // Categories to browse: the plain ones first, never a region's own boards ("Online Source - Asia Job Boards").
+    const regional = /asia|europe|emea|apac|latam|latin|china|india|japan|poland|canada|uk\b|mexico|brazil|germany|france/i;
+    const prefer = [/^(online )?job boards?$|^job sites?$/i, /^online( source)?$|^internet$|^(company )?website$|^web ?site$/i, /^social media$/i, /job board|online|internet|website|web site/i, /social/i, /^other$/i];
+    const alternates = [...boards, ...prefer.map((re) => cats.find((c) => re.test(c) && !regional.test(c))).filter(Boolean), "Job Board", "Social Media", "Other"];
     return { ...base, kind: "typeahead", value: heard, match: heard, alternates: [...new Set(alternates)] };
+  }
+  // Workday "Type to Add Skills" (required on My Experience): a search that
+  // lists matches without picking one. The resume's short, standard skill
+  // names, each searched and picked only on an exact match (State Street).
+  if (dom.widget === "typeahead" && /^(type to add )?skills?$|^add skills$/.test(l)) {
+    const skills = (profile.skills || []).map((x) => String(x || "").trim())
+      .filter((x) => x && x.length <= 24 && !/[(),/]/.test(x) && x.split(/\s+/).length <= 3);
+    return skills.length ? { ...base, kind: "multi", values: [...new Set(skills)].slice(0, 10) } : null;
+  }
+  // Workday asks the phone's country in its own box: the number alone, 10 digits.
+  if (source === "workday" && /^(phone number|phone|mobile( phone)?( number)?)$/.test(l) && profile.phone) {
+    return { ...base, kind: "text", value: nationalPhone(profile.phone) };
   }
   // "Date Available" / "Earliest start date" as a date or mm/dd/yyyy box: the
   // engine's start date (next Monday, or the person's own date).
@@ -214,11 +232,12 @@ function historyOf(resume, user) {
       description: String(r.description || "").replace(/\*\*/g, "").trim().slice(0, 2000),
     };
   }).filter((r) => r.title || r.company);
-  const education = (resume.education || []).slice(0, 4).map((e) => ({
+  const education = (resume.education || []).slice(0, 4).map((e, i) => ({
     school: e.institution || e.school || "",
     degree: e.degree || "",
     field: e.field || e.major || (String(e.degree || "").split(/,\s*| in /i)[1] || ""),
-    gpa: e.gpa || "",
+    // The Profile's GPA (Application Defaults) belongs to the latest school.
+    gpa: e.gpa || (i === 0 ? user?.gpa || "" : ""),
     from: parseMonthYear(e.startDate),
     to: parseMonthYear(e.endDate),
   })).filter((e) => e.school);
@@ -292,7 +311,10 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   if (resumeUrl) {
     try { resumeB64 = Buffer.from(await (await fetchFn(resumeUrl)).arrayBuffer()).toString("base64"); } catch (_) { /* content script reports it */ }
   }
-  const resumeName = user.resumeFileName || resume.fileName || "resume.pdf";
+  // The saved name can be the LaTeX source's ("Akash_Ramasani.tex") while the
+  // file is the PDF: name it for what it is, or Workday refuses the upload.
+  let resumeName = user.resumeFileName || resume.fileName || "resume.pdf";
+  if (resumeB64 && Buffer.from(resumeB64.slice(0, 8), "base64").toString().startsWith("%PDF") && !/\.pdf$/i.test(resumeName)) resumeName = resumeName.replace(/\.[a-z0-9]+$/i, "") + ".pdf";
   const base = {
     source,
     jobTitle: job.title,
@@ -315,7 +337,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   const presetPaths = new Set();
   for (const q of all) {
     const dom = domById.get(q.path) || {};
-    const f = presetFill(q, dom, profile, startDateFor);
+    const f = presetFill(q, dom, profile, startDateFor, { source });
     if (f) { presetPaths.add(q.path); if (f.kind !== "skip") fills.push(f); continue; }
     if (dom.type === "location") {
       const lf = locationFill(q.path, job.locationName, { ...profile, locationStrategy: profile.locationStrategy || "profile" });

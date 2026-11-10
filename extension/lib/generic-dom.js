@@ -45,10 +45,11 @@
   /** Bot traps: "Please leave this field blank", aria-hidden boxes, password-manager-ignored decoys. */
   function honeypot(el) {
     if (el.type !== "file" && el.closest("[aria-hidden=true]")) return true;
-    const hint = `${el.name || ""} ${el.id || ""} ${el.getAttribute("autocomplete") || ""}`;
-    if (/honeypot|_hp[a-z]*\b|hp_?field|nickname_hp/i.test(hint)) return true;
-    const l = el.id ? textOf(forLabel(el)) : "";
-    return /leave (this|it)? ?(field )?(blank|empty)|do not (fill|complete|enter)|if you are (a )?human/i.test(l);
+    const hint = `${el.name || ""} ${el.id || ""} ${el.getAttribute("autocomplete") || ""} ${el.getAttribute("data-automation-id") || ""}`;
+    if (/honeypot|_hp[a-z]*\b|hp_?field|nickname_hp|beecatcher/i.test(hint)) return true;
+    // The warning may sit in a label tied by id, or just beside the box (Workday's, 2026-11-10).
+    const l = `${el.id ? textOf(forLabel(el)) : ""} ${textOf(el.closest("label")) || ""} ${el.parentElement ? textOf(el.parentElement).slice(0, 200) : ""}`;
+    return /leave (this|it)? ?(field )?(blank|empty)|do not (fill|complete|enter)|if you('| a)re (a )?human|for robots only/i.test(l);
   }
   function outOfScope(el) {
     return !!el.closest("header, nav, footer, [role=banner], [role=navigation], [role=search], [data-automation-id=header], [id^=jw-], [class*=cookie], [id*=cookie], [aria-modal=true][class*=cookie]");
@@ -160,14 +161,19 @@
   }
 
   // ── Options ──────────────────────────────────────────────────────────────
+  // Workday shows what is already chosen as a listbox of its own ("selectedItemList",
+  // the "+1" pill of Country Phone Code): never an open list (State Street, 2026-11-10).
+  const PICKED = "[data-automation-id=selectedItemList], [data-automation-id=selectedItem]";
   function openOptions() {
-    const lists = [...document.querySelectorAll("[role=listbox]")].filter(visible);
+    const lists = [...document.querySelectorAll("[role=listbox]")].filter((l) => visible(l) && !l.matches(PICKED));
     const opts = [];
-    for (const l of lists) for (const o of l.querySelectorAll("[role=option]")) if (visible(o)) opts.push(o);
-    if (!opts.length) for (const o of document.querySelectorAll("[data-automation-id=promptOption], [data-automation-id=menuItem], [role=menu] [role=menuitem], [role=menu] [role=menuitemradio], [role=menu] [role=option]")) if (visible(o)) opts.push(o);
+    for (const l of lists) for (const o of l.querySelectorAll("[role=option]")) if (visible(o) && !o.closest(PICKED)) opts.push(o);
+    if (!opts.length) for (const o of document.querySelectorAll("[data-automation-id=promptOption], [data-automation-id=menuItem], [role=menu] [role=menuitem], [role=menu] [role=menuitemradio], [role=menu] [role=option]")) if (visible(o) && !o.closest(PICKED)) opts.push(o);
     return opts;
   }
-  const optText = (o) => clean(o.getAttribute("data-automation-label") || o.getAttribute("aria-label") || textOf(o));
+  // Workday's tree items say "Online Source not checked" in aria-label; the name is on the inner promptOption.
+  const optText = (o) => clean(o.getAttribute("data-automation-label") || o.querySelector?.("[data-automation-id=promptOption]")?.getAttribute("data-automation-label")
+    || o.getAttribute("aria-label") || textOf(o)).replace(/\s+(not )?checked$/i, "");
   async function waitOptions(ms = 1800, prev = null) {
     const t0 = Date.now();
     for (;;) {
@@ -198,12 +204,18 @@
   /** Choose an open option: click it, else focus it and press Enter. */
   async function chooseOption(hit, done) {
     hit.scrollIntoView({ block: "nearest" });
-    realClick(hit);
+    realClick(optTarget(hit));
     await sleep(350);
     if (done()) return;
     hit.focus?.();
     press(hit, "Enter");
     await sleep(300);
+  }
+  /** Where to click an option: Workday's tree items only react on the inner
+   *  name (promptLeafNode / promptOption), not on the role=option wrapper
+   *  (Field of Study never took "Computer Science", 2026-11-10). */
+  function optTarget(o) {
+    return o.querySelector?.("[data-automation-id=promptLeafNode], [data-automation-id=promptOption]") || o;
   }
   function realClick(el) {
     const r = el.getBoundingClientRect();
@@ -269,12 +281,20 @@
       seenIds.set(base, n);
       const id = `${base}#${n}`;
       rec.id = id;
+      rec.domId = (rec.inputs?.[0] || rec.el)?.id || ""; // Workday's ids survive a redraw
       reg.set(id, rec);
       (rec.inputs?.[0] || rec.el).setAttribute?.("data-jw-id", id);
       out.push({ id, ...field });
     };
-    const candidates = deepAll(scope, "input, select, textarea, button[aria-haspopup=listbox], button[aria-haspopup=true], button[aria-haspopup=menu], [role=combobox]:not(input)")
+    const findCandidates = () => deepAll(root(), "input, select, textarea, button[aria-haspopup=listbox], button[aria-haspopup=true], button[aria-haspopup=menu], [role=combobox]:not(input)")
       .filter((el) => el.tagName !== "BUTTON" || el.getAttribute("aria-haspopup") === "listbox" || selectLikeButton(el));
+    // Workday redraws whole sections while lists are being read (the Phone
+    // boxes vanished from the scan, 2026-11-10): a second pass picks up the new
+    // elements whose questions were not read yet.
+    let candidates = findCandidates();
+    const labelsDone = new Set();
+    for (let pass = 0; pass < 2; pass++) {
+    if (pass === 1) candidates = findCandidates().filter((el) => !seenEls.has(el) && el.isConnected && !labelsDone.has(nrm(labelFor(el))));
     for (const el of candidates) {
       if (seenEls.has(el) || outOfScope(el)) continue;
       const tag = el.tagName;
@@ -291,7 +311,7 @@
         let label = labelFor(el);
         if (!label || /^(select files?|upload|browse|choose file|drop files? here.*)$/i.test(label)) label = textOf(box?.querySelector("label, legend, h3, h4")) || "Resume/CV";
         if (/^(attach|upload|drop|select)\b/i.test(label) && !/resume|cv|cover/i.test(label)) label = `Resume/CV (${label})`;
-        const shown = box?.querySelector("[data-automation-id=file-upload-successful], [data-automation-id=fileName], [class*=file-name], [class*=filename]");
+        const shown = box?.querySelector("[data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName], [class*=file-name], [class*=filename]");
         add({ type: "file", el, box }, { label: stripLabel(label), description: "", type: "file", required: requiredOf(el, label, box), options: [], filled: !!(el.files && el.files.length) || !!(shown && textOf(shown)), section: sectionFor(box || el) });
         continue;
       }
@@ -384,6 +404,8 @@
       const type = t === "email" ? "email" : t === "tel" ? "tel" : t === "url" ? "url" : t === "number" ? "number" : "text";
       add({ type: "text", el }, { label: stripLabel(label), description: descriptionFor(el), type, required: requiredOf(el, label), options: [], filled: !!clean(el.value), section: sectionFor(el) });
     }
+    for (const f of out) labelsDone.add(nrm(f.label));
+    }
     return out.filter((f) => f.label);
   }
   function optionLabel(input) {
@@ -444,16 +466,28 @@
   function record(id) {
     let r = reg.get(id);
     if (r && (r.inputs?.[0] || r.el).isConnected) return r;
+    // Redrawn (Workday re-renders a section when the one above it is checked):
+    // the same element by its id, for single-element fields.
+    const again = r?.domId && !r.inputs && document.getElementById(r.domId);
+    if (again && visible(again)) { r.el = again; again.setAttribute("data-jw-id", id); return r; }
     return null;
   }
 
   async function fillText(r, value) {
-    const node = r.el;
+    let node = r.el;
     node.scrollIntoView({ block: "center" });
     node.click();
     await sleep(80);
     await typeInto(node, value);
     await sleep(100);
+    // Redrawn while typing (a Website URL kept only "htt"): type again into the live box.
+    if (!node.isConnected && r.domId && document.getElementById(r.domId)) {
+      node = r.el = document.getElementById(r.domId);
+      node.setAttribute("data-jw-id", r.id);
+      await sleep(300);
+      await typeInto(node, value);
+      await sleep(100);
+    }
     node.dispatchEvent(new Event("blur", { bubbles: true }));
     node.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
     if (node.value !== String(value ?? "")) { setNative(node, String(value ?? "")); node.dispatchEvent(new Event("change", { bubbles: true })); }
@@ -495,41 +529,73 @@
     const pick = async (opts, wants) => {
       for (const w of wants) {
         const hit = bestMatch(opts, w, optText);
-        if (hit) { hit.scrollIntoView({ block: "nearest" }); realClick(hit); await sleep(500); return optText(hit); }
+        if (hit) { hit.scrollIntoView({ block: "nearest" }); realClick(optTarget(hit)); await sleep(500); return optText(hit); }
       }
       return null;
     };
     const finish = async (picked) => {
       // A category opens a sub-list: take the leaf that matches, else the first.
-      const sub = openOptions();
+      await sleep(400);
+      const sub = chosen() ? [] : openOptions();
       if (sub.length && picked) {
-        const leaf = bestMatch(sub, match || value, optText) || sub[0];
-        realClick(leaf);
+        let leaf = null;
+        for (const w of [match, value, ...alternates].filter(Boolean)) if ((leaf = exact(sub, w) || null)) break;
+        for (const w of [match, value, ...alternates].filter(Boolean)) if (!leaf && (leaf = bestMatch(sub, w, optText))) break;
+        leaf = leaf || sub[0];
+        realClick(optTarget(leaf));
         await sleep(450);
         picked = `${picked} > ${optText(leaf)}`;
       }
       await closeList(el);
       el.dispatchEvent(new Event("blur", { bubbles: true }));
       await sleep(200);
-      return { ok: typeaheadFilled(el), picked };
+      return { ok: typeaheadFilled(el), picked: chosen() || picked };
     };
-    el.scrollIntoView({ block: "center" });
-    el.focus();
-    realClick(el);
-    await sleep(150);
-    await typeInto(el, value, { keys: true });
-    await sleep(250);
-    press(el, "Enter");
-    let opts = await waitOptions(2500);
-    let picked = opts.length ? await pick(opts, [match, value].filter(Boolean)) : null;
-    if (picked) return finish(picked);
+    const chosen = () => clean(el.closest("[data-automation-id^=formField-]")?.querySelector("[data-automation-id=selectedItem] [data-automation-id=promptOption]")?.getAttribute("data-automation-label")
+      || el.closest("[data-automation-id^=formField-]")?.querySelector("[data-automation-id=selectedItem]")?.textContent || "");
+    // Clicking the box opens Workday's whole list; the search results replace it
+    // after Enter. Wait for that change, not for any open list (Field of Study
+    // read the A–Z list and missed "Computer Science", 2026-11-10).
+    let shownBefore = "";
+    const search = async (term) => {
+      el.scrollIntoView({ block: "center" });
+      el.focus();
+      realClick(el);
+      await sleep(150);
+      await typeInto(el, term, { keys: true });
+      await sleep(250);
+      shownBefore = openOptions().map(optText).join("|");
+      press(el, "Enter");
+      await sleep(400);
+    };
+    const results = () => waitOptions(2500, shownBefore || null);
+    await search(value);
+    // Workday picks the one exact match on Enter and closes the list.
+    if (chosen()) { await closeList(el); return { ok: true, picked: chosen() }; }
+    let opts = await results();
+    // Only an exact suggestion here: "Job Board" must not take "Online Source -
+    // Asia Job Boards" (State Street, 2026-11-10).
+    const exact = (os, w) => os.find((o) => nrm(optText(o)) === nrm(w));
+    let hit = opts.length ? (exact(opts, match || value) || exact(opts, value)) : null;
+    if (hit) { hit.scrollIntoView({ block: "nearest" }); realClick(optTarget(hit)); await sleep(500); return finish(optText(hit)); }
+    // Other names to search ("LinkedIn", "Indeed"…), each picked the same way.
+    for (const alt of alternates.slice(0, 6)) {
+      if (nrm(alt) === nrm(value)) continue;
+      setNative(el, "");
+      await search(alt);
+      if (chosen()) { await closeList(el); return { ok: true, picked: chosen() }; }
+      const found = exact(await results(), alt);
+      if (found) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
+    }
+    let picked = null;
     // Nothing matched the search: clear it and walk the list the widget offers.
     setNative(el, "");
     await sleep(200);
     realClick(el);
     opts = await waitOptions(1500);
     if (opts.length) {
-      picked = await pick(opts, [match, value, ...alternates].filter(Boolean));
+      // Browsing: the fallbacks the server ordered (exact categories first), then the person's words.
+      picked = await pick(opts, [...alternates, match, value].filter(Boolean));
       if (picked) return finish(picked);
     }
     await closeList(el);
@@ -540,6 +606,39 @@
       return { ok: !!clean(el.value), picked: el.value, typedOnly: true };
     }
     return { ok: false, error: "no matching suggestion", want: value, seen: opts.map(optText).slice(0, 12) };
+  }
+  /** Several picks in one search box (Workday "Type to Add Skills"): clear,
+   *  search each value, take only an exact match ("Python", or "Python
+   *  (Programming Language)"), next. The search text stays in the box after a
+   *  pick, so it is cleared every time. */
+  async function fillMultiSearch(r, values) {
+    const el = r.el;
+    const picked = [];
+    const base = (t) => nrm(t).replace(/\s*\([^)]*\)$/, "");
+    for (const v of values) {
+      el.scrollIntoView({ block: "center" });
+      el.focus();
+      realClick(el);
+      await sleep(150);
+      await typeInto(el, v, { keys: true });
+      await sleep(300);
+      const before = openOptions().map(optText).join("|");
+      press(el, "Enter");
+      await sleep(400);
+      const opts = await waitOptions(2500, before || null);
+      const hit = opts.find((o) => nrm(optText(o)) === nrm(v)) || opts.find((o) => base(optText(o)) === nrm(v));
+      if (hit) {
+        hit.scrollIntoView({ block: "nearest" });
+        realClick(optTarget(hit));
+        await sleep(600);
+        picked.push(optText(hit));
+      }
+      setNative(el, "");
+      await closeList(el);
+      await sleep(200);
+    }
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    return { ok: picked.length > 0 && typeaheadFilled(el), picked: picked.join("; "), seen: picked.length ? undefined : values.slice(0, 5) };
   }
   async function clickInput(input) {
     const target = input.closest("label") || (input.id && forLabel(input)) || input;
@@ -623,6 +722,13 @@
   }
   async function fillFile(r, b64, fileName) {
     const node = r.el;
+    const SHOWN = "[data-automation-id=file-upload-successful], [data-automation-id=file-upload-item-name], [data-automation-id=fileName]";
+    // Workday redraws the upload box once the file is in: look at the live one.
+    const liveBox = () => (node.isConnected ? (r.box || node.parentElement)
+      : document.querySelector("input[data-automation-id=file-upload-input-ref]")?.closest("[data-automation-id^=formField-]")) || r.box || node.parentElement;
+    let box = liveBox();
+    // Already there (a pass before this one uploaded it): not a second copy.
+    if (box?.querySelector(SHOWN)) return { ok: true, actual: textOf(box.querySelector("[data-automation-id=file-upload-item-name], [data-automation-id=fileName]")) || fileName };
     const ext = (fileName || "file.pdf").split(".").pop().toLowerCase();
     const mime = ext === "pdf" ? "application/pdf" : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/octet-stream";
     const bin = atob(b64);
@@ -633,15 +739,17 @@
     node.files = dt.files;
     node.dispatchEvent(new Event("input", { bubbles: true }));
     node.dispatchEvent(new Event("change", { bubbles: true }));
-    await sleep(1200);
-    const box = r.box || node.parentElement;
     const zone = box?.querySelector("[data-automation-id=file-upload-drop-zone], [class*=drop-zone], [class*=dropzone]");
-    const done = () => (node.files && node.files.length) || box?.querySelector("[data-automation-id=file-upload-successful], [data-automation-id=fileName]");
-    if (zone && !box.querySelector("[data-automation-id=file-upload-successful], [data-automation-id=fileName]")) {
+    if (!zone) { await sleep(1200); return { ok: !!(node.files && node.files.length) || !!box?.querySelector(SHOWN), actual: fileName }; }
+    // Workday: "Successfully Uploaded!" shows a few seconds later (State Street,
+    // 2026-11-10: checking after a second dropped the file three times).
+    const shown = async (ms) => { for (const t0 = Date.now(); Date.now() - t0 < ms;) { box = liveBox(); if (box?.querySelector(SHOWN) || box?.querySelector("[data-automation-id=file-upload-item]")) return true; await sleep(300); } return false; };
+    if (!(await shown(6000)) && zone.isConnected) {
       for (const type of ["dragenter", "dragover", "drop"]) zone.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }));
-      await sleep(1500);
+      await shown(6000);
     }
-    return { ok: !!done(), actual: fileName };
+    for (let i = 0; i < 30 && !liveBox()?.querySelector(SHOWN); i++) await sleep(300); // still uploading
+    return { ok: !!liveBox()?.querySelector(SHOWN), actual: fileName };
   }
 
   /** Put one computed fill into its field. extra = { resumeB64, resumeName }. */
@@ -657,6 +765,7 @@
         return await fillText(r, f.match || f.value);
       }
       const values = f.values || [f.value];
+      if (f.kind === "multi" && r.type === "typeahead") return await fillMultiSearch(r, values);
       switch (r.type) {
         case "select": return await fillSelect(r, values[0]);
         case "typeahead": return await fillTypeahead(r, values[0], f.match, f.alternates || []);
@@ -737,7 +846,10 @@
     return d ? clean(textOf(d)).slice(0, 20000) : "";
   }
   function pageJob() {
-    const title = clean(textOf(document.querySelector("[data-automation-id=jobPostingHeader], h1, [class*=job-title], [class*=jobTitle]"))).slice(0, 200);
+    // Not the cookie notice (Workday's legal notice is an h1 on some sites: "Click 'Accept Cookies'…").
+    const titleEl = [...document.querySelectorAll("[data-automation-id=jobPostingHeader], h1, [class*=job-title], [class*=jobTitle]")]
+      .find((e) => visible(e) && textOf(e) && !e.closest("[data-automation-id*=legalNotice], [class*=cookie], [id*=cookie]") && !/cookie/i.test(textOf(e)));
+    const title = clean(textOf(titleEl)).slice(0, 200);
     // og:site_name, else the part of the tab title that is not the job or a
     // generic page word ("Application", "Careers").
     const generic = /^(apply|application|job application|careers?( site| page)?|jobs?|job details|home|workday|icims|smartrecruiters|workable|bamboohr)$/i;
@@ -793,15 +905,26 @@
    *  { mode: "create" | "signin" | null, errors: [text], message } */
   function workdayAuthState() {
     const pw = vis("input[type=password]");
-    const mode = !pw.length ? null : (pw.length >= 2 || vis("[data-automation-id=verifyPassword], [data-automation-id=createAccountSubmitButton]").length) ? "create" : "signin";
+    // Workday's first screen (2026): Apple / Google / LinkedIn / "Sign in with email", no boxes yet.
+    const chooser = !pw.length && !!vis("[data-automation-id=SignInWithEmailButton]").length;
+    const mode = chooser ? "chooser" : !pw.length ? null : (pw.length >= 2 || vis("[data-automation-id=verifyPassword], [data-automation-id=createAccountSubmitButton]").length) ? "create" : "signin";
     const errs = vis("[data-automation-id=errorMessage], [data-automation-id=inputError], [role=alert], [data-automation-id=errorBanner]")
       .map((e) => clean(textOf(e))).filter((t) => t && t.length < 300);
     const body = clean((document.body?.innerText || "").slice(0, 4000));
     const message = (body.match(/[^.]*\b(verify|verification|activate)\b[^.]*(email|account)[^.]*\./i) || [""])[0].slice(0, 240);
     return { mode, errors: [...new Set(errs)], message };
   }
+  /** Open the email form from the chooser screen; true when it opened. */
+  async function workdayEmailForm() {
+    const b = vis("[data-automation-id=SignInWithEmailButton]")[0];
+    if (!b) return !!vis("input[type=password]").length;
+    press1(b);
+    for (let i = 0; i < 10 && !vis("input[type=password]").length; i++) await sleep(300);
+    return !!vis("input[type=password]").length;
+  }
   /** Fill and send the account form: { email, password, mode }. */
   async function workdayAuth({ email, password, mode }) {
+    if (workdayAuthState().mode === "chooser" && !(await workdayEmailForm())) return { ok: false, error: "the Sign in with email form did not open" };
     const st = workdayAuthState();
     if (st.mode !== mode) {
       // Switch forms: "Sign In" link on Create Account, "Create Account" on Sign In.
@@ -810,10 +933,12 @@
       if (!link) return { ok: false, error: `no ${mode === "signin" ? "Sign In" : "Create Account"} link` };
       press1(link);
       await sleep(1500);
+      // "Sign In" from Create Account goes back to the chooser first.
+      if (workdayAuthState().mode === "chooser") await workdayEmailForm();
       if (workdayAuthState().mode !== mode) return { ok: false, error: `the ${mode} form did not open` };
     }
     const form = vis("input[type=password]")[0]?.closest("form, [data-automation-id=signInContent], [data-automation-id=createAccountContent], [role=dialog], main") || document.body;
-    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]").find((e) => form.contains(e)) || [...form.querySelectorAll("input[type=text]")].find(visible);
+    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]").find((e) => form.contains(e) && !honeypot(e)) || [...form.querySelectorAll("input[type=text]")].find((e) => visible(e) && !honeypot(e));
     const pws = vis("input[type=password]").filter((e) => form.contains(e));
     if (!emailEl || !pws.length) return { ok: false, error: "account form fields not found" };
     await typeInto(emailEl, email, { keys: true });
@@ -837,16 +962,17 @@
   }
   /** "Forgot your password?" on the Sign In form, then send the reset email. */
   async function workdayForgot(email) {
+    if (workdayAuthState().mode === "chooser") await workdayEmailForm();
     const link = vis("[data-automation-id=forgotPasswordLink]")[0] || buttonByText(/^forgot (your )?password\??$/i);
     if (!link) return { ok: false, error: "no Forgot your password? link" };
     press1(link);
     await sleep(1500);
-    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]")[0] || vis("input[type=text]")[0];
+    const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]").find((e) => !honeypot(e));
     if (!emailEl) return { ok: false, error: "no email box on the reset form" };
     await typeInto(emailEl, email, { keys: true });
     emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
     await sleep(300);
-    const submit = vis("[data-automation-id=resetPasswordSubmitButton], [data-automation-id=forgotPasswordSubmitButton]")[0]
+    const submit = vis("[data-automation-id=resetPasswordButton], [data-automation-id=resetPasswordSubmitButton], [data-automation-id=forgotPasswordSubmitButton]")[0]
       || buttonByText(/^(submit|reset password|send|send email|continue)$/i);
     if (!submit) return { ok: false, error: "no submit button on the reset form" };
     press1(submit);
@@ -889,5 +1015,5 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayAuth, workdayForgot, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayEmailForm, workdayAuth, workdayForgot, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
 })();
