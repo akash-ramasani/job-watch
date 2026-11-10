@@ -336,7 +336,8 @@
         }
       } catch (e) { warn("phone country:", e.message); }
     }
-    if (data.fills.some((f) => f.name === "phone")) await setPhoneCountry();
+    PHONE_WANT = String(data.fills.find((f) => f.name === "phone")?.value || "");
+    if (PHONE_WANT) { watchPhone(); phoneStep = "phone country"; await setPhoneCountry(); }
     let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
     for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
       if (pass > 1) {
@@ -346,7 +347,7 @@
       const stillFailing = [];
       for (const f of pending) {
         try {
-          hl.focus(blockFor(f), `Filling: ${f.label}`);
+          hl.focus(blockFor(f), `Filling: ${f.label}`); phoneStep = `filling ${f.label}`;
           await bringIntoView(f);
           const res = await fillOne(f);
           await sleep(260);
@@ -398,15 +399,7 @@
     } catch (e) { warn("phone flag:", e.message); }
     // Picking a country can write its dial code into the number box: put the
     // number back as computed when the digits no longer match.
-    try {
-      const pf = data.fills.find((f) => f.name === "phone");
-      const ph = document.getElementById("phone") || document.querySelector("input[type=tel]");
-      const want = String(pf?.value || "");
-      if (pf && ph && ph.id && ph.value.replace(/\D/g, "") !== want.replace(/\D/g, "")) {
-        await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: ph.id, value: want });
-        log("phone restored:", ph.value);
-      }
-    } catch (e) { warn("phone restore:", e.message); }
+    try { await fixPhone("after the fill"); } catch (e) { warn("phone fix:", e.message); }
     // A second Education block the board added from a saved MyGreenhouse
     // profile, with its School left empty, would hold the application back.
     // JobWatch fills one education entry: remove the empty extras.
@@ -511,7 +504,7 @@
           || (/^location\b/i.test(p.label || "") ? data.fills.find((x) => x.kind === "location") : undefined);
         if (!f) continue;
         try {
-          hl.focus(blockFor(f), `Fixing: ${f.label}`);
+          hl.focus(blockFor(f), `Fixing: ${f.label}`); phoneStep = `fixing ${f.label}`;
           await bringIntoView(f);
           const res = await fillOne(f);
           await sleep(300);
@@ -638,6 +631,7 @@
       prefix: auto ? "Auto-apply" : "JobWatch",
       say: (t, items) => banner(t, items ? { items, action: submitAction("", items) } : {}),
       button: ghSubmitButton,
+      beforeClick: async () => { phoneStep = "Submit"; try { await fixPhone("before Submit"); } catch (e) { warn("phone fix:", e.message); } },
       submitted: () => confirmed() && !codeInputs().length,
       errors: () => ghProblems().filter((p) => p.error).map((p) => ({ label: p.label, text: p.error, path: p.id })),
       empty: () => ghProblems().filter((p) => p.empty && !p.error).map((p) => p.label),
@@ -752,7 +746,40 @@
 
   // The JobWatch card, bottom right (content/notify.js).
   function banner(text, { action = null, items = null } = {}) {
+    phoneStep = String(text || "").slice(0, 80);
     window.__jwNotify.show(text, undefined, { action, items });
+  }
+
+  // ── Phone guard ───────────────────────────────────────────────────────────
+  // "5109356846+1" keeps turning up on Greenhouse's phone box (Smartsheet,
+  // CoreWeave, C3 AI, 2026-11-09) and could not be reproduced in a clean
+  // browser. Every change to the box is logged with the step JobWatch was on,
+  // and the number is typed again whenever its digits are wrong: after the
+  // fill and before every Submit press.
+  let PHONE_WANT = "";
+  let phoneStep = "";
+  let phoneWatch = null;
+  const phoneBox = () => document.getElementById("phone") || document.querySelector("input[type=tel]");
+  const phoneOk = (v) => { const d = String(v || "").replace(/\D/g, ""); const w = PHONE_WANT.replace(/\D/g, ""); return !!w && (d === w || d === `1${w}`); };
+  function watchPhone() {
+    if (phoneWatch) return;
+    let last = phoneBox()?.value ?? "";
+    phoneWatch = setInterval(() => {
+      const v = phoneBox()?.value ?? "";
+      if (v !== last) { console.log(`[JobWatch/GH] phone box: "${last}" -> "${v}" (during: ${phoneStep || "?"})`); last = v; }
+    }, 250);
+    setTimeout(() => { clearInterval(phoneWatch); }, 20 * 60 * 1000);
+  }
+  async function fixPhone(why) {
+    const ph = phoneBox();
+    if (!PHONE_WANT || !ph?.id || phoneOk(ph.value)) return false;
+    console.warn(`[JobWatch/GH] phone was "${ph.value}" (${why}): typing ${PHONE_WANT} again`);
+    const prev = phoneStep; phoneStep = `fixPhone: ${why}`;
+    await sendMsg({ type: "EXEC_MAIN_WORLD", action: "typeHuman", id: ph.id, value: PHONE_WANT });
+    await sleep(300);
+    if (!phoneOk(ph.value)) await sendMsg({ type: "EXEC_MAIN_WORLD", action: "setInput", id: ph.id, value: PHONE_WANT });
+    phoneStep = prev;
+    return phoneOk(ph.value);
   }
   function ghSubmitButton() {
     return document.querySelector("#submit_app, button#submit_app, input#submit_app")
