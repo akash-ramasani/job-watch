@@ -428,7 +428,9 @@
     let mode = mem.mode || "signin";
     // The company's own password rules ("Password must include: A minimum of 12
     // characters", Citi): only a new saved password helps.
-    const rule = said.match(/password must (include|contain|be)[^.]*|minimum of \d+ characters/i);
+    // Only the refusal ("Error: Password must include: A minimum of 12 characters"),
+    // never the requirements list every Create Account page shows (Cadence).
+    const rule = said.match(/password must (include|contain|be|have)\b[^.]*/i);
     if (rule) {
       authSave(mem);
       return autoReport("needs_attention", `${header.companyName || "This company"} refuses the saved Workday password: ${said.replace(/\s+/g, " ").slice(0, 160)}. Save a longer one in the JobWatch popup.`);
