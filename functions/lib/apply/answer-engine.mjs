@@ -621,7 +621,11 @@ export function classifyQuestion(q) {
 export function answerQuestion(q, profile, ai, ctx = {}) {
   // Saved answers (Profile > Saved answers, and what the AI rescue or the
   // person filled before): the person's own come first, the AI's fill gaps.
-  const saved = savedAnswerFor(q, profile);
+  // Name, email and phone come from the Profile, never from a saved answer
+  // (a learned "5109356846+1" filled every phone box, 2026-11-09).
+  const stdName = (q.fields || [])[0]?.name || "";
+  const contact = ["first_name", "last_name", "email", "phone", "preferred_name"].includes(stdName) || ["phone", "email"].includes(classifyQuestion(q));
+  const saved = contact ? null : savedAnswerFor(q, profile);
   if (saved && saved.source === "you") { const s = applySaved(q, saved); if (s) return s; }
   const a = answerQuestionGuarded(q, profile, ai, ctx);
   if (!a.answers.length && saved) { const s = applySaved(q, saved); if (s) return s; }

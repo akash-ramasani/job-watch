@@ -33,6 +33,10 @@ function learnable({ question, answer, companyName = "" }) {
   if (q.length < 3 || q.length > 600 || !a || a.length > 300) return false;
   if (/\.(pdf|docx?)$/i.test(a) || /^\(ai rescue\)$/i.test(a)) return false;
   if (JOB_SPECIFIC.test(q)) return false;
+  // Contact details come from the Profile only: a phone read off the page
+  // took the Country picker's "+1" with it ("5109356846+1") and then filled
+  // every form after it (2026-11-09).
+  if (/^((legal |preferred |full )?(first |last )?name|(your )?(phone|mobile|cell|telephone)( number)?|e-?mail( address)?|country)$/.test(q)) return false;
   const co = normQuestion(companyName);
   if (co.length >= 3 && q.includes(co)) return false;
   return true;

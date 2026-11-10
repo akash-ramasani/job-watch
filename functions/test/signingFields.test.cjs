@@ -38,3 +38,12 @@ test("one-box Legal Address gets the whole address; with City/ZIP boxes only the
   const street = { label: "Street Address", required: true, fields: [{ name: "question_23", type: "input_text" }] };
   assert.equal(engine.mapForm([street], p, null).answers[0].answers[0].value, "1025 Sutter St");
 });
+
+test("a saved Phone answer never overrides the Profile phone, and phone is not learned", () => {
+  const p = { ...profile, phone: "+15109356846", savedAnswers: { phone: { question: "Phone", answer: "5109356846+1", source: "you" } } };
+  const m = engine.mapForm([{ label: "Phone", required: true, fields: [{ name: "phone", type: "input_text" }] }], p, null);
+  assert.equal(m.answers[0].answers[0].value, "+15109356846");
+  const { learnable } = require("../lib/apply/savedAnswers.cjs");
+  assert.equal(learnable({ question: "Phone", answer: "5109356846+1" }), false);
+  assert.equal(learnable({ question: "Are you open to relocation?", answer: "Yes" }), true);
+});
