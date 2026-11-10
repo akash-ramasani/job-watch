@@ -19,7 +19,7 @@
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
 const { nationalPhone } = require("./prepare.cjs");
-const { aiContext, answerFreeText, pool } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption: aiPickOption, pool } = require("./ai-text.cjs");
 
 const DEFAULT_FETCH = (...a) => fetch(...a);
 
@@ -174,7 +174,7 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
   }
   // Desired salary as ranges ("$140,000-$160,000"): the range holding the
   // person's number (Salary Expectation, else hourly rate x 2080), CACI.
-  if (hasOpts && /desired (salary|pay|compensation)|salary (expectation|requirement|range)|expected (salary|compensation)|compensation expectation/.test(l)) {
+  if (hasOpts && /(desired|ideal|target|expected|base) (salary|pay|compensation)|salary (expectation|requirement|range)|compensation expectation/.test(l)) {
     const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
     let want = num(profile.salaryExpectation);
     if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
@@ -190,6 +190,27 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
       const hit = ranges.find((r) => want >= r.lo && want <= r.hi) || ranges.find((r) => want >= r.lo && want < r.hi + 1);
       if (hit) return { ...base, kind: "select", value: hit.label };
     }
+  }
+  // Voluntary Disclosures (optional, so the engine skipped them, Kyndryl
+  // 2026-11-10): "Hispanic or Latino?" Yes/No from the ethnicity answer, and a
+  // veteran-status list in any wording ("I AM NOT A VETERAN") from the veteran
+  // answer. A non-veteran is never "a veteran, just not a protected veteran".
+  if (hasOpts && /hispanic|latino|latinx/.test(l) && (dom.options || []).some((o) => /^(yes|no)\b/i.test(o.label))) {
+    const eth = String(profile.eeoEthnicity || "");
+    if (eth) {
+      const v = /decline|not wish|prefer not/i.test(eth) ? pickOption(q, [/decline|not wish|prefer not|do not want/i])
+        : pickOption(q, /hispanic|latin/i.test(eth) ? [/^yes\b/i] : [/^no\b/i]);
+      if (v) return { ...base, kind: "select", value: v };
+    }
+  }
+  if (hasOpts && /veteran/.test(l) && !/(served|serving)\b.{0,50}(military|armed forces)/.test(l)) {
+    const vet = String(profile.eeoVeteran || "");
+    let wants = null;
+    if (/not a (protected )?veteran|^no\b|i am not/i.test(vet)) wants = [/^i am not a veteran\b/i, /\bnot a veteran\b/i, /^i am not a protected veteran/i, /^no\b/i];
+    else if (/decline|not wish|prefer not|do not want/i.test(vet)) wants = [/do not wish|decline|prefer not|choose not/i];
+    else if (/protected veteran|identify as one or more|^yes/i.test(vet)) wants = [/identify as one or more|one or more of the classifications|^i am a protected veteran/i, /^yes\b/i];
+    const v = wants && pickOption(q, wants);
+    if (v) return { ...base, kind: "select", value: v };
   }
   // County (Workday asks it beside the address): from the city when it is a known one.
   if (/^county$|^county\/parish$/.test(l) && ["text", "select"].includes(dom.type || "text")) {
@@ -453,10 +474,48 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
     if (which && q.required && ["text", "url"].includes(dom.type)) fills.push({ path: q.path, label: q.label, kind: "text", value: BARE_LINKS[which], source: "rule" });
   }
 
+  // 6. Choice questions no rule maps (Workday's "Are you 18 or older?", "Do you
+  //    have a family member who works here?", "Are you under a non-compete?",
+  //    "Do you have refugee status?"): the AI picks the true option from the
+  //    profile and resume, as on Ashby (2026-11-10: 30 Workday sites left these
+  //    for the person). Then short text boxes no rule knows get an AI answer.
+  const aiPicked = new Set();
+  const qOf = (r) => questions[mapped.answers.indexOf(r)];
+  if (openai) {
+    const choiceParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
+      .filter(({ r, q }) => q && !fills.some((f) => f.path === q.path) && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
+    await pool(choiceParked, 4, async ({ r, q }) => {
+      try {
+        const opts = q.fields[0].values;
+        const kind = fieldKind(q.fields[0]);
+        const p = await aiPickOption({ ...q, fields: [{ ...q.fields[0], type: kind === "multiselect" ? "multi" : "single" }] }, ctx, profile, aiDeps);
+        if (!p.values.length) { aiNotes.set(r.label, p.reason); return; }
+        const value = kind === "multiselect" ? undefined : p.values[0];
+        fills.push({ path: q.path, label: q.label, source: "ai", note: `AI pick: ${p.why || ""}`.trim(), kind: kind === "boolean" ? "boolean" : kind === "multiselect" ? "multiselect" : "select",
+          ...(kind === "multiselect" ? { values: p.values } : { value: kind === "boolean" ? (/^y/i.test(value) ? "Yes" : /^n/i.test(value) ? "No" : value) : (opts.find((o) => o.label === value)?.label ?? value) }) });
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+    const openParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
+      .filter(({ r, q }) => q && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+    await pool(openParked, 4, async ({ r, q }) => {
+      try {
+        const num = fieldKind(q.fields[0]) === "number";
+        const a = await answerFreeText({ ...q, ashbyType: num ? "Number" : q.ashbyType, description: [q.description, num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" ") }, ctx, aiDeps);
+        const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;
+        if (!value) { aiNotes.set(r.label, a.reason || "AI gave no answer"); return; }
+        const dom = domById.get(q.path) || {};
+        const f = { path: q.path, label: q.label, source: "ai", note: "AI answer", kind: num ? "number" : "text", value };
+        fills.push(dom.type === "typeahead" ? typeaheadFrom(f) : f);
+        aiPicked.add(r.label);
+      } catch (e) { aiNotes.set(r.label, `AI failed: ${String(e?.message || e).slice(0, 80)}`); }
+    });
+  }
+
   const filledPaths = new Set(fills.map((f) => f.path));
   const review = mapped.review
     .map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path || "" }))
-    .filter((r) => !filledPaths.has(r.path));
+    .filter((r) => !filledPaths.has(r.path) && !aiPicked.has(r.label));
   return {
     ...base,
     ready: verdict.ok && review.length === 0,

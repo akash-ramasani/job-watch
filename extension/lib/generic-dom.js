@@ -544,7 +544,9 @@
         let leaf = null;
         for (const w of [match, value, ...alternates].filter(Boolean)) if ((leaf = exact(sub, w) || null)) break;
         for (const w of [match, value, ...alternates].filter(Boolean)) if (!leaf && (leaf = bestMatch(sub, w, optText))) break;
-        leaf = leaf || sub[0];
+        // No named board inside: "Other" before the first entry ("104", a
+        // Taiwanese job site, under Kyndryl's "Job Board", 2026-11-10).
+        leaf = leaf || sub.find((o) => /^other\b/i.test(optText(o))) || sub[0];
         realClick(optTarget(leaf));
         await sleep(450);
         picked = `${picked} > ${optText(leaf)}`;
@@ -579,7 +581,13 @@
     // Only an exact suggestion here: "Job Board" must not take "Online Source -
     // Asia Job Boards" (State Street, 2026-11-10).
     const exact = (os, w) => os.find((o) => nrm(optText(o)) === nrm(w));
+    // A category (it opens a sub-list: Workday's side arrow) is opened only
+    // when no board name can be searched: Kyndryl's "Job Board" held "104"
+    // first while "Indeed" sat at the top level.
+    const isCategory = (o) => !!o.querySelector?.("[data-uxi-multiselectlistitem-hassidecharm=true]");
     let hit = opts.length ? (exact(opts, match || value) || exact(opts, value)) : null;
+    let laterCategory = null;
+    if (hit && isCategory(hit) && alternates.length) { laterCategory = optText(hit); hit = null; }
     if (hit) { hit.scrollIntoView({ block: "nearest" }); realClick(optTarget(hit)); await sleep(500); return finish(optText(hit)); }
     // Other names to search ("LinkedIn", "Indeed"…), each picked the same way.
     for (const alt of alternates.slice(0, 6)) {
@@ -588,7 +596,8 @@
       await search(alt);
       if (chosen()) { await closeList(el); return { ok: true, picked: chosen() }; }
       const found = exact(await results(), alt);
-      if (found) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
+      if (found && !isCategory(found)) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
+      if (found && !laterCategory) laterCategory = optText(found);
     }
     let picked = null;
     // Nothing matched the search: clear it and walk the list the widget offers.
@@ -598,7 +607,7 @@
     opts = await waitOptions(1500);
     if (opts.length) {
       // Browsing: the fallbacks the server ordered (exact categories first), then the person's words.
-      picked = await pick(opts, [...alternates, match, value].filter(Boolean));
+      picked = await pick(opts, [...alternates, laterCategory, match, value].filter(Boolean));
       if (picked) return finish(picked);
     }
     await closeList(el);

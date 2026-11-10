@@ -58,3 +58,6 @@ private/
 
 # Nightly self-test output
 worker/selftest/reports/
+
+# Raw Workday page dumps and screenshots (personal data): local reference only
+research/
