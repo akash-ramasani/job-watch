@@ -12,7 +12,8 @@
 // below deletes what is left of them.
 import React, { useEffect, useState } from "react";
 import { doc, onSnapshot, updateDoc, deleteField, serverTimestamp } from "firebase/firestore";
-import { db } from "../firebase";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../firebase";
 
 // Prefilled once; what you write here is saved with your account.
 const DEFAULT_ABOUT = "I am an F-1 OPT student from India, currently in the USA. I completed my Master's in Computer Science (MS CS) at California State University, East Bay (CSU East Bay).";
@@ -38,6 +39,7 @@ export default function SavedAnswersCard({ uid, notify }) {
   const [old, setOld] = useState({ saved: 0, missing: 0 });
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [drafting, setDrafting] = useState(false);
 
   useEffect(() => {
     if (!uid) return undefined;
@@ -59,6 +61,27 @@ export default function SavedAnswersCard({ uid, notify }) {
       notify?.(`Could not save: ${e.message}`, "error");
     } finally {
       setSaving(false);
+    }
+  }
+
+  // "Fill from my resume": the AI drafts each answer from the resume and
+  // Profile; only empty boxes are filled, nothing is saved until you press Save.
+  async function fillFromResume() {
+    setDrafting(true);
+    try {
+      const { data: r } = await httpsCallable(functions, "draftApplicantFacts", { timeout: 120000 })({});
+      let n = 0;
+      const next = { ...(facts || {}) };
+      for (const q of APPLICANT_QUESTIONS) {
+        const v = String(r?.facts?.[q.key] || "").trim();
+        if (v && !String(next[q.key] || "").trim()) { next[q.key] = v; n++; }
+      }
+      setFacts(next);
+      notify?.(n ? `Filled ${n} from your resume. Read them, edit anything that is not right, then press Save answers.` : "Nothing new to fill: every box already has your answer.", "success");
+    } catch (e) {
+      notify?.(`Could not fill: ${e.message}`, "error");
+    } finally {
+      setDrafting(false);
     }
   }
 
@@ -100,9 +123,14 @@ export default function SavedAnswersCard({ uid, notify }) {
             </div>
           ))}
         </div>
-        <button type="button" className="btn-primary mt-3" disabled={saving || facts === null || about === null} onClick={save}>
-          {saving ? "Saving…" : "Save answers"}
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" className="btn-secondary" disabled={drafting || facts === null} onClick={fillFromResume}>
+            {drafting ? "Filling from your resume…" : "Fill from my resume"}
+          </button>
+          <button type="button" className="btn-primary" disabled={saving || facts === null || about === null} onClick={save}>
+            {saving ? "Saving…" : "Save answers"}
+          </button>
+        </div>
       </div>
 
       {old.saved + old.missing > 0 && (
