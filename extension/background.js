@@ -792,7 +792,10 @@ async function openJobTabNow(url) {
     // new job opens as a background tab there, so their tab does not switch.
     if (win.focused) return await chrome.tabs.create({ windowId: win.id, url, active: false });
     // Restored but in the background: tuck it away again before adding a job.
-    if (win.state !== "minimized") await chrome.windows.update(win.id, { state: "minimized" }).catch(() => {});
+    // Only a normal window is tucked away: one the person made full screen
+    // or maximized is theirs to leave as it is (minimizing a full-screen
+    // window flashed Edge's "To exit full screen" banner).
+    if (win.state === "normal") await chrome.windows.update(win.id, { state: "minimized" }).catch(() => {});
     return await chrome.tabs.create({ windowId: win.id, url, active: true });
   } catch (err) {
     console.warn("[JobWatch] job window unavailable, using a tab:", err.message);
@@ -2182,6 +2185,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: true, boxes: boxes.length };
         };
 
+        // Diagnosis: log every write to the phone box with the code that made it
+        // (stack), so a "+1" written by the page, an autofill or JobWatch shows its source.
+        const ghPhoneTrap = () => {
+          const el = document.getElementById("phone") || document.querySelector("input[type=tel]");
+          if (!el || el.__jwTrap) return { ok: !!el };
+          const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+          Object.defineProperty(el, "value", {
+            configurable: true,
+            get() { return d.get.call(this); },
+            set(v) {
+              const before = d.get.call(this);
+              d.set.call(this, v);
+              if (/\+\d\s*$/.test(String(v)) || (/\d/.test(String(v)) && String(v).replace(/\D/g, "").length > 10)) {
+                console.warn(`[JobWatch/GH] phone written: "${before}" -> "${v}"`, new Error("who wrote the phone").stack);
+              }
+            },
+          });
+          el.__jwTrap = true;
+          el.addEventListener("input", (e) => { if (/\+\d\s*$/.test(el.value)) console.warn(`[JobWatch/GH] phone input event (${e.isTrusted ? "real" : "script"}, ${e.inputType || "-"}): "${el.value}"`); }, true);
+          return { ok: true };
+        };
+
         let funcToRun = setReactFile;
         let argsToRun = [id, b64Data, fileName, which];
         if (action === "setInput") { funcToRun = setReactValue; argsToRun = [id, value]; }
@@ -2194,6 +2219,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (action === "ghCoverText") { funcToRun = ghCoverText; argsToRun = [id, value]; }
         if (action === "ghCheck") { funcToRun = ghCheck; argsToRun = [id]; }
         if (action === "ghCode") { funcToRun = ghCode; argsToRun = [value]; }
+        if (action === "ghPhoneTrap") { funcToRun = ghPhoneTrap; argsToRun = []; }
         if (action === "extractSchema") { funcToRun = extractSchema; argsToRun = []; }
 
         chrome.scripting.executeScript({ target: { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] }, world: "MAIN", files: ["lib/wait-main.js"] }).then(() => chrome.scripting.executeScript({

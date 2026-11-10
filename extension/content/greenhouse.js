@@ -346,7 +346,7 @@
       } catch (e) { warn("phone country:", e.message); }
     }
     PHONE_WANT = String(data.fills.find((f) => f.name === "phone")?.value || "");
-    if (PHONE_WANT) { watchPhone(); phoneStep = "phone country"; await setPhoneCountry(); }
+    if (PHONE_WANT) { sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghPhoneTrap" }).catch(() => {}); watchPhone(); phoneStep = "phone country"; await setPhoneCountry(); }
     let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
     for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
       if (pass > 1) {
@@ -775,7 +775,7 @@
     let last = phoneBox()?.value ?? "";
     phoneWatch = setInterval(() => {
       const v = phoneBox()?.value ?? "";
-      if (v !== last) { console.log(`[JobWatch/GH] phone box: "${last}" -> "${v}" (during: ${phoneStep || "?"})`); last = v; }
+      if (v !== last) { console.log(`[JobWatch/GH ${chrome.runtime.getManifest().version}] phone box: "${last}" -> "${v}" (during: ${phoneStep || "?"})`); last = v; }
     }, 250);
     setTimeout(() => { clearInterval(phoneWatch); }, 20 * 60 * 1000);
   }
