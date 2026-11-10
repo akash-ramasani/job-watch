@@ -24,40 +24,18 @@ test("learnable: short reusable facts only", () => {
   assert.equal(sa.learnable({ question: "Shirt size", answer: "x".repeat(400) }), false);
 });
 
-test("savedIndex: the person's answer wins over a learned one", () => {
-  const idx = sa.savedIndex({ savedAnswers: { a: { question: "T-shirt size?", answer: "M", source: "ai" }, b: { question: "t-shirt size", answer: "L", source: "you" }, c: { question: "Blank", answer: "" } } });
-  assert.deepEqual(idx, { "t-shirt size": { answer: "L", source: "you" } });
-});
-
-test("engine: a saved answer fills a question no rule knows, and picks the matching option", async () => {
+test("one source of truth: saved answers from pages are not used, and nothing is learned", async () => {
+  const user = { savedAnswers: { k: { question: "What is your T-shirt size?", answer: "Medium", source: "ai" }, p: { question: "Phone", answer: "5109356846+1", source: "you" } } };
+  assert.deepEqual(sa.savedIndex(user), {});
   const { answerQuestion } = await engine();
-  const profile = buildProfileForJob({ savedAnswers: { k: { question: "What is your T-shirt size?", answer: "Medium", source: "ai" }, j: { question: "Which shift do you prefer?", answer: "Night", source: "you" } } }, {}, { companyName: "X" });
+  const profile = buildProfileForJob(user, {}, { companyName: "X" });
   const text = answerQuestion({ label: "What is your T-shirt size? *", required: true, fields: [{ name: "q1", type: "input_text" }] }, profile, null);
-  assert.deepEqual(text.answers, [{ name: "q1", value: "Medium" }]);
-  const sel = answerQuestion({ label: "Which shift do you prefer?", required: true, fields: [{ name: "q2", type: "multi_value_single_select", values: [{ label: "Day", value: "1" }, { label: "Night shift", value: "2" }] }] }, profile, null);
-  assert.deepEqual(sel.answers, [{ name: "q2", value: "2" }]);
-  // No option fits: the saved answer is not forced.
-  const none = answerQuestion({ label: "What is your T-shirt size?", required: true, fields: [{ name: "q3", type: "multi_value_single_select", values: [{ label: "S", value: "s" }, { label: "XL", value: "xl" }] }] }, profile, null);
-  assert.equal(none.answers.length, 0);
-});
-
-test("learn: writes saved and missing, never overwrites the person's own answer with the AI's", async () => {
+  assert.equal(text.answers.length, 0);
   const writes = [];
-  const user = { savedAnswers: { [sa.keyOf("Shirt size")]: { question: "Shirt size", answer: "L", source: "you" } } };
-  const ref = { get: async () => ({ exists: true, data: () => user }), update: async (u) => writes.push(u) };
-  const db = { collection: () => ({ doc: () => ref }) };
-  const FieldValue = { delete: () => "DEL", increment: (n) => `INC${n}` };
-  const r = await sa.learn(db, "U", {
-    saved: [{ question: "Shirt size", answer: "S", source: "ai" }, { question: "Which school did you attend?", answer: "CSU East Bay", source: "you" }],
-    missing: [{ question: "Security clearance number", why: "not in profile", companyName: "Anduril" }, { question: "Resume/CV", why: "x" }],
-  }, { FieldValue });
-  assert.deepEqual(r, { saved: 1, missing: 1 });
-  const u = writes[0];
-  const k = sa.keyOf("Which school did you attend?");
-  assert.equal(u[`savedAnswers.${k}`].answer, "CSU East Bay");
-  assert.equal(u[`missingAnswers.${k}`], "DEL");
-  assert.equal(u[`missingAnswers.${sa.keyOf("Security clearance number")}.count`], "INC1");
-  assert.ok(u.answersUpdatedAt instanceof Date);
+  const db = { collection: () => ({ doc: () => ({ get: async () => ({ exists: true, data: () => ({}) }), update: async (u) => writes.push(u) }) }) };
+  const r = await sa.learn(db, "U", { saved: [{ question: "Which school?", answer: "CSU East Bay", source: "you" }], missing: [{ question: "Clearance number" }] }, { FieldValue: {} });
+  assert.deepEqual(r, { saved: 0, missing: 0 });
+  assert.equal(writes.length, 0);
 });
 
 test("Lever jobs get their application page", () => {

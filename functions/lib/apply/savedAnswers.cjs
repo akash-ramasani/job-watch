@@ -44,61 +44,20 @@ function learnable({ question, answer, companyName = "" }) {
 
 /** savedAnswers as the engine reads it: normalized question -> { answer, source }. */
 function savedIndex(user) {
-  const out = {};
-  const map = user && typeof user.savedAnswers === "object" ? user.savedAnswers : {};
-  for (const v of Object.values(map || {})) {
-    if (!v || !String(v.answer || "").trim() || !v.question) continue;
-    const k = normQuestion(v.question);
-    // The person's own answer wins over a learned one for the same question.
-    if (!out[k] || (v.source === "you" && out[k].source !== "you")) out[k] = { answer: String(v.answer), source: v.source === "you" ? "you" : "ai" };
-  }
-  return out;
+  // One source of truth (2026-11-09): forms are answered from the Profile and
+  // the "Questions only you can answer" (applicantNotes.cjs) only. Answers
+  // learned from pages, one per wording of a question, piled up as duplicates
+  // and one of them put "5109356846+1" in every phone box. They are no longer used.
+  return {};
 }
-
 /**
  * Write what the extension learned. saved: [{ question, answer, source,
  * companyName }]; missing: [{ question, why, companyName, jobTitle }].
  * Returns { saved, missing } counts actually written.
  */
 async function learn(db, uid, { saved = [], missing = [] } = {}, { FieldValue }) {
-  const ref = db.collection("users").doc(uid);
-  const snap = await ref.get();
-  const user = snap.exists ? snap.data() || {} : {};
-  const have = user.savedAnswers || {};
-  const update = {};
-  let nSaved = 0, nMissing = 0, byYou = false;
-  for (const s of (Array.isArray(saved) ? saved : []).slice(0, 40)) {
-    const source = s?.source === "you" ? "you" : "ai";
-    if (!learnable(s || {})) continue;
-    const key = keyOf(s.question);
-    const prev = have[key];
-    if (prev?.source === "you" && source === "ai") continue; // never overwrite the person's own
-    if (prev && prev.answer === String(s.answer).trim() && prev.source === source) continue;
-    update[`savedAnswers.${key}`] = { question: String(s.question).trim().slice(0, 600), answer: String(s.answer).trim().slice(0, 300), source, at: new Date() };
-    update[`missingAnswers.${key}`] = FieldValue.delete();
-    if (source === "you") byYou = true;
-    nSaved++;
-  }
-  for (const m of (Array.isArray(missing) ? missing : []).slice(0, 40)) {
-    const q = String(m?.question || "").trim();
-    // Uploads are not answers: the resume is attached, a cover letter is written per job.
-    if (normQuestion(q).length < 3 || JOB_SPECIFIC.test(normQuestion(q)) || FILE_FIELD.test(normQuestion(q))) continue;
-    const key = keyOf(q);
-    if (have[key] || update[`savedAnswers.${key}`]) continue;
-    update[`missingAnswers.${key}.question`] = q.slice(0, 600);
-    update[`missingAnswers.${key}.why`] = String(m.why || "").slice(0, 300);
-    update[`missingAnswers.${key}.companyName`] = String(m.companyName || "").slice(0, 120);
-    update[`missingAnswers.${key}.jobTitle`] = String(m.jobTitle || "").slice(0, 200);
-    update[`missingAnswers.${key}.at`] = new Date();
-    update[`missingAnswers.${key}.count`] = FieldValue.increment(1);
-    nMissing++;
-  }
-  if (byYou) update.answersUpdatedAt = new Date();
-  if (Object.keys(update).length) {
-    if (snap.exists) await ref.update(update);
-    else await ref.set({}, { merge: true }).then(() => ref.update(update));
-  }
-  return { saved: nSaved, missing: nMissing };
+  // Nothing is learned from pages any more (see savedIndex): no saved answers,
+  // no waiting questions. The Profile is the one place answers come from.
+  return { saved: 0, missing: 0 };
 }
-
 module.exports = { normQuestion, keyOf, learnable, savedIndex, learn };
