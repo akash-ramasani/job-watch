@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.11.52",
+  "version": "1.11.53",
   "description": "Apply to jobs from JobWatch: auto-apply on Ashby, Greenhouse and Lever with a tailored resume, and Autofill on Lever, Workday and every other job board.",
   "permissions": [
     "storage",
@@ -11,7 +11,8 @@
     "identity",
     "alarms",
     "notifications",
-    "power"
+    "power",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "*://*/*",
@@ -181,5 +182,14 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "block_mygreenhouse_autofill",
+        "enabled": true,
+        "path": "rules/block-mygreenhouse.json"
+      }
+    ]
   }
 }
