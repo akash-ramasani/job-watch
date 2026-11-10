@@ -103,6 +103,9 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   ]);
   // Companies the person hid on the Jobs page (settings/preferences.excludedCompanies).
   const minScore = Number.isFinite(Number(prefs?.autoApplyMinScore)) ? Number(prefs.autoApplyMinScore) : MIN_SCORE;
+  // Boards auto-apply takes (settings/preferences.autoApplyBoards, e.g. ["workday"]
+  // while Workday is being tested, 2026-11-10); unset or empty: every board.
+  const boardsOn = new Set((Array.isArray(prefs?.autoApplyBoards) ? prefs.autoApplyBoards : []).map((x) => String(x).toLowerCase()));
   const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
   const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
@@ -130,7 +133,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const src = String(j.source || "").toLowerCase();
     // Ashby, Greenhouse, Lever (back on after its 50-form test, 2026-11-02) and Workday.
     const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
-    if (!board) continue;
+    if (!board || (boardsOn.size && !boardsOn.has(board))) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     // The US filter again, as it reads today: jobs saved under an older one

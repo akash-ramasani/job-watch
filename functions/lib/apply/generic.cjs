@@ -153,6 +153,60 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
       .filter((x) => x && x.length <= 24 && !/[(),/]/.test(x) && x.split(/\s+/).length <= 3);
     return skills.length ? { ...base, kind: "multi", values: [...new Set(skills)].slice(0, 10) } : null;
   }
+  // "How did you hear" as a plain list (Chewy, CACI, Travelers): the person's
+  // answer, else a job board by name, else the closest plain category.
+  if (dom.widget !== "typeahead" && hasOpts && /how did you (hear|find|learn)|hear about|referral source|^source$/.test(l)) {
+    const regional = /asia|europe|emea|apac|latam|latin|china|india|japan|poland|canada|mexico|brazil|germany|france/i;
+    const opts = (dom.options || []).map((o) => o.label).filter((x) => !regional.test(x));
+    const heard = String(profile.heardAboutUs || "").trim();
+    const wants = [heard && new RegExp(`^${heard.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"), /^linkedin$/i, /^indeed$/i, /^glassdoor$/i, /^linkedin/i,
+      /^(online )?job boards?$|^job sites?$|^career web ?sites?$/i, /job board|job site|career web ?site/i, /internet|online|web ?site/i, /social/i, /^other$/i].filter(Boolean);
+    for (const re of wants) { const hit = opts.find((o) => re.test(o)); if (hit) return { ...base, kind: "select", value: hit }; }
+  }
+  // "Have you ever served in the U.S. military?" as Yes / No (CACI): from the
+  // Profile's veteran answer; the EEO veteran-status list is the engine's.
+  if (hasOpts && /(served|serving|serve)\b.{0,50}(military|armed forces)|military service\b|member of the (u\.?s\.? )?(military|armed forces)/.test(l)) {
+    const vet = String(profile.eeoVeteran || profile.veteranStatus || "");
+    if (/not a (protected )?veteran|^no\b|i am not/i.test(vet)) {
+      const v = pickOption(q, [/^no$/i, /^no\b/i]);
+      if (v) return { ...base, kind: "select", value: v };
+    }
+  }
+  // Desired salary as ranges ("$140,000-$160,000"): the range holding the
+  // person's number (Salary Expectation, else hourly rate x 2080), CACI.
+  if (hasOpts && /desired (salary|pay|compensation)|salary (expectation|requirement|range)|expected (salary|compensation)|compensation expectation/.test(l)) {
+    const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
+    let want = num(profile.salaryExpectation);
+    if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
+    if (want) {
+      const ranges = (dom.options || []).map((o) => {
+        const t = String(o.label).replace(/,/g, "");
+        const ns = [...t.matchAll(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/gi)].map((m) => Number(m[1]) * (m[2] ? 1000 : 1)).filter((n) => n >= 1000);
+        if (!ns.length) return null;
+        const lo = /up to|under|less than|below/i.test(t) ? 0 : ns[0];
+        const hi = /\+|or more|and above|above|over|plus/i.test(t) && ns.length === 1 ? Infinity : ns[ns.length - 1];
+        return { label: o.label, lo, hi };
+      }).filter(Boolean);
+      const hit = ranges.find((r) => want >= r.lo && want <= r.hi) || ranges.find((r) => want >= r.lo && want < r.hi + 1);
+      if (hit) return { ...base, kind: "select", value: hit.label };
+    }
+  }
+  // County (Workday asks it beside the address): from the city when it is a known one.
+  if (/^county$|^county\/parish$/.test(l) && ["text", "select"].includes(dom.type || "text")) {
+    const county = countyOf(profile.city, profile.region || profile.state);
+    if (county) {
+      if (!hasOpts) return { ...base, kind: "text", value: county };
+      const v = pickOption(q, [new RegExp(`^${county}( county)?$`, "i"), new RegExp(county, "i")]);
+      if (v) return { ...base, kind: "select", value: v };
+    }
+  }
+  // Workday's LinkedIn box ("Social Network URLs") refuses anything but
+  // https://www.linkedin.com/in/<name> ("Invalid LinkedIn URL", Kyndryl 2026-11-10).
+  if (source === "workday" && /linkedin/.test(l) && ["text", "url"].includes(dom.type || "text") && profile.linkedin) {
+    const raw = String(profile.linkedin).trim();
+    const handle = raw.match(/linkedin\.com\/(in|pub)\/([^/?#\s]+)/i) || (/^[\w-]{3,100}$/.test(raw) ? [raw, "in", raw] : null);
+    if (handle) return { ...base, kind: "text", value: `https://www.linkedin.com/${handle[1].toLowerCase()}/${handle[2]}` };
+  }
   // Workday asks the phone's country in its own box: the number alone, 10 digits.
   if (source === "workday" && /^(phone number|phone|mobile( phone)?( number)?)$/.test(l) && profile.phone) {
     return { ...base, kind: "text", value: nationalPhone(profile.phone) };
@@ -188,6 +242,23 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
     }
   }
   return null;
+}
+
+// The county of a city, for "County" boxes: the places applications come from
+// most, by state. Unknown: the question goes to the engine as before.
+const COUNTIES = {
+  CA: { "san francisco": "San Francisco", oakland: "Alameda", berkeley: "Alameda", fremont: "Alameda", hayward: "Alameda", "san leandro": "Alameda", pleasanton: "Alameda", livermore: "Alameda", dublin: "Alameda",
+    "san jose": "Santa Clara", "santa clara": "Santa Clara", sunnyvale: "Santa Clara", "mountain view": "Santa Clara", "palo alto": "Santa Clara", cupertino: "Santa Clara", milpitas: "Santa Clara",
+    "redwood city": "San Mateo", "san mateo": "San Mateo", "menlo park": "San Mateo", "foster city": "San Mateo", "south san francisco": "San Mateo", tracy: "San Joaquin", stockton: "San Joaquin",
+    "los angeles": "Los Angeles", "santa monica": "Los Angeles", pasadena: "Los Angeles", irvine: "Orange", "san diego": "San Diego", sacramento: "Sacramento", "walnut creek": "Contra Costa", "san ramon": "Contra Costa" },
+  WA: { seattle: "King", bellevue: "King", redmond: "King", kirkland: "King" }, NY: { "new york": "New York", brooklyn: "Kings" },
+  TX: { austin: "Travis", dallas: "Dallas", houston: "Harris", plano: "Collin" }, MA: { boston: "Suffolk", cambridge: "Middlesex" }, IL: { chicago: "Cook" },
+};
+const STATE_CODES = { california: "CA", washington: "WA", "new york": "NY", texas: "TX", massachusetts: "MA", illinois: "IL" };
+function countyOf(city, state) {
+  const st = String(state || "").trim();
+  const code = st.length === 2 ? st.toUpperCase() : STATE_CODES[st.toLowerCase()];
+  return COUNTIES[code]?.[String(city || "").trim().toLowerCase()] || "";
 }
 
 /** The engine's text answer for a field shown as a search-as-you-type picker. */

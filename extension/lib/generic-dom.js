@@ -1031,6 +1031,15 @@
     press1(submit);
     return { ok: true };
   }
+  /** "Verify your account before you sign in or request a verification email":
+   *  press the request link so a new email comes (the first may be old). */
+  function workdayResendVerify() {
+    const el = [...document.querySelectorAll("[data-automation-id=errorMessage] a, [data-automation-id=errorMessage] button, a, button, [role=button]")]
+      .filter(visible).find((b) => /request a (new )?verification email|resend (the )?(verification )?email|send (a )?(new )?verification/i.test(clean(textOf(b))));
+    if (!el) return false;
+    press1(el);
+    return true;
+  }
   /** Press a Workday button by automation id or text ("applyManually"). */
   function workdayPress(id, textRe = null) {
     const el = vis(`[data-automation-id="${CSS.escape(id)}"]`)[0] || (textRe ? buttonByText(new RegExp(textRe, "i")) : null);
@@ -1054,5 +1063,5 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayEmailForm, workdayAuth, workdayForgot, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
 })();

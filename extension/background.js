@@ -907,7 +907,7 @@ async function autoTick() {
           const st = await autoState();
           if (st.aiDownSince) { delete st.aiDownSince; await saveAuto(st); notify("Auto-apply is back on", "The AI is answering again; applications carry on."); }
         });
-        const tab = await openJobTab(job.applyUrl);
+        const tab = await openJobTab(job.source === "workday" ? workdayLoginUrl(job.applyUrl) : job.applyUrl);
         await withAutoLock(async () => {
           const st = await autoState();
           const r = st.running.find((x) => x.jobId === job.jobId);
@@ -1099,6 +1099,19 @@ const workdayTenantOf = (url) => {
     return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
   } catch { return ""; }
 };
+/** Workday's own Sign In page that returns to the application once signed in
+ *  (2026-11-10): <origin>/[locale/]<site>/login?redirect=<apply path>. It opens
+ *  on Sign In (not Create Account), and lands on the saved application where
+ *  the Apply Manually link says "Something went wrong". */
+function workdayLoginUrl(applyUrl) {
+  try {
+    const u = new URL(applyUrl);
+    const parts = u.pathname.split("/").filter(Boolean);
+    const at = parts.findIndex((x) => x === "job" || x === "details");
+    if (at < 1) return applyUrl;
+    return `${u.origin}/${parts.slice(0, at).join("/")}/login?redirect=${encodeURIComponent(u.pathname)}`;
+  } catch { return applyUrl; }
+}
 /** The newest Workday "verify your account" (kind "verify") or "reset your
  *  password" (kind "reset") link for this tenant received after `sinceMs`, or
  *  "". Each link is handed out once. */

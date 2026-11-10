@@ -726,6 +726,19 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return out([{ name, value: kinds[0] === "date" ? `${y}-${m}-${d}` : `${m}/${d}/${y}` }], SOURCE.RULE, 1, "today's date (signature)");
   }
 
+  // A typed signature: the legal name, and today's date when the box asks for
+  // both ("I certify that the foregoing answers are true… Signature and Date",
+  // Marvell 2026-11-10; "Electronic signature", "Signature (type your full name)").
+  if (["text", "longtext"].includes(kinds[0]) && /\b(signature|e-?signature|electronic(ally)? sign|sign (here|below)|type your (full )?(legal )?name)\b/.test(ll)
+    && !/\b(date signed|signed date|signature date|date of signature)\b$/.test(ll)) {
+    const nameFull = [profile.firstName, profile.lastName].filter(Boolean).join(" ") || profile.fullName || "";
+    if (nameFull) {
+      const [y, m, d] = String(profile.todayISO || new Date().toISOString().slice(0, 10)).split("-");
+      const withDate = /signature\s*(and|&|\/)\s*date|name\s*(and|&|\/)\s*date|date and signature/.test(ll);
+      return out([{ name, value: withDate ? `${nameFull}, ${m}/${d}/${y}` : nameFull }], SOURCE.RULE, 1, "typed signature");
+    }
+  }
+
   // "Please provide details, including the name of the organization…" right
   // after a Yes/No we answered No: nothing to detail, so "N/A".
   if (["text", "longtext"].includes(kinds[0]) && ctx.prev?.answers?.length
@@ -1148,7 +1161,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     if (status === "none") {
       if (isSelect) {
         const m = matchOption(primary, "No")
-          || findOnly(primary, [/^none\b/, /n\/?a/, /not applicable/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/, /do not (have|hold|currently)|don't (have|hold)|not active|no (active )?clearance|not cleared|none held|i do not/]);
+          // "N/A" only as a whole word: /n\/?a/ took "NACI", a clearance type
+          // (CACI, 2026-11-10). The plain "I do not have one" wording comes first.
+          || findOnly(primary, [/^none\b/, /^no\b.{0,40}(do not|don'?t) (possess|have|hold)/, /(^|\s)n\/a\b|^na$/, /not applicable/, /never held/, /\bno\b(?!.{0,60}(yes|held))/, /not eligible/, /do not (have|hold|currently|possess)|don't (have|hold|possess)|not active|no (active )?clearance|not cleared|none held|i do not/]);
         return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "no security clearance")
           : unanswered("no matching no-clearance option");
       }

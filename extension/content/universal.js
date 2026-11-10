@@ -198,6 +198,8 @@
     if (/school|university|institution|college/.test(l)) return ed.school ? mk(field.type === "typeahead" ? "typeahead" : "text", ed.school, { match: ed.school, alternates: ["Other"] }) : null;
     if (/^degree$|degree type|degree/.test(l)) {
       if (!ed.degree) return null;
+      const exact = pickDegree(ed.degree, field.options);
+      if (exact) return mk("select", exact);
       const d = nrm(ed.degree);
       const want = /ph\.?d|doctor/.test(d) ? "Doctor" : /master|m\.?s\b|mba|m\.?eng/.test(d) ? "Master" : /bachelor|b\.?s\b|b\.?a\b|b\.?tech|b\.?e\b/.test(d) ? "Bachelor" : /associate/.test(d) ? "Associate" : ed.degree;
       return mk("select", want);
@@ -213,6 +215,36 @@
     if (/^from$|start/.test(l)) return ed.from ? mk("date", `01/${ed.from.year}`) : null;
     if (/^to\b|end|graduat|expected/.test(l)) return ed.to ? mk("date", `${ed.to.month ? MONTH(ed.to.month) : "05"}/${ed.to.year}`) : null;
     return null;
+  }
+
+  /** The option that names the resume's degree, from lists as different as
+   *  "Master's Degree" (State Street), "MS" (Aerospace) and "Masters of Science"
+   *  next to "Master of Strategic Leadership" (Wolters Kluwer), 2026-11-10:
+   *  the same degree by name or letters, else the same subject at that level
+   *  (B.Tech: technology, then engineering, then science), else the plain
+   *  level ("Bachelor's Degree"), never a law, medicine or business degree
+   *  the person does not have. */
+  function pickDegree(degree, options) {
+    const opts = (options || []).map((o) => (typeof o === "string" ? o : o?.label)).filter(Boolean);
+    if (!opts.length) return null;
+    const k = (x) => nrm(x).replace(/[.']/g, "").replace(/\bmasters\b/g, "master").replace(/\bbachelors\b/g, "bachelor").replace(/\s+degree$/, "").trim();
+    const d = k(String(degree).split(/,| in /i)[0]);
+    const level = /phd|doctor|dsc/.test(d) ? "doctor" : /master|^m(s|sc|tech|eng|e|a|ba)$/.test(d) ? "master"
+      : /bachelor|^b(s|sc|tech|e|eng|a|ba|as)$/.test(d) ? "bachelor" : /associate|^a(s|a)$/.test(d) ? "associate" : "";
+    if (!level) return null;
+    const subj = /technolog|tech$/.test(d) ? "tech" : /engineer|eng$|^[mb]e$/.test(d) ? "eng" : /science|^[mb]sc?$/.test(d) ? "sci" : /arts|^[mb]a$/.test(d) ? "arts" : /business|^mba$|^bba$/.test(d) ? "bus" : "";
+    const short = { master: "m", bachelor: "b", doctor: "d", associate: "a" }[level];
+    const SUBJ = { tech: new RegExp(`^${short}tech$|technolog`), eng: new RegExp(`^${short}(e|eng)$|engineering`), sci: new RegExp(`^${short}sc?$|science`), arts: new RegExp(`^${short}a$|\\barts\\b`), bus: /business|mba|bba/ };
+    const ofLevel = (o) => { const x = k(o); return x.startsWith(level) || (level === "doctor" && /^(phd|doctorate|dsc)/.test(x)) || new RegExp(`^${short}(s|sc|tech|e|eng|a|as|ba)$`).test(x) || (level === "master" && x === "mba"); };
+    const others = /laws?\b|medicine|\bmd\b|\bjd\b|commerce|leadership|management|accountancy|divinity|nursing|education|fine arts|social work|public health/;
+    const own = (o) => !others.test(k(o)) && (subj === "bus" || !/business|mba|bba/.test(k(o)));
+    const same = opts.find((o) => k(o) === d);
+    if (same) return same;
+    const order = { tech: ["tech", "eng", "sci"], eng: ["eng", "tech", "sci"], sci: ["sci", "eng", "tech"], arts: ["arts"], bus: ["bus"] }[subj] || [];
+    for (const sj of order) { const hit = opts.find((o) => ofLevel(o) && own(o) && SUBJ[sj].test(k(o))); if (hit) return hit; }
+    const plain = opts.find((o) => new RegExp(`^${level}( degree)?$`).test(k(o)));
+    if (plain) return plain;
+    return opts.find((o) => ofLevel(o) && own(o) && !/ of /.test(k(o))) || opts.find((o) => ofLevel(o) && own(o)) || null;
   }
 
   async function workdayExperience(pkg) {
@@ -350,7 +382,8 @@
     }
     else if (mem.mode === "create" && EXISTS.test(said)) { sendMsg({ type: "WORKDAY_ACCOUNT" }); return resetPassword(mem, creds); }
     else if (mem.mode && VERIFY.test(said)) return verifyEmail(mem);
-    else if (mem.mode === "create" && st.mode === "signin") mode = "signin"; // made the account; Workday moved on to Sign In
+    // Made the account; Workday moved on to Sign In, or to its "Sign in with email" chooser (Workday, Jabil).
+    else if (mem.mode === "create" && (st.mode === "signin" || st.mode === "chooser") && !st.errors.length) mode = "signin";
     if (mode === "create") mem.triedCreate = true;
     mem.mode = mode; mem.at = mem.at || Date.now();
     authSave(mem);
@@ -359,7 +392,8 @@
     if (!r?.ok) { warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
     for (let i = 0; i < 10; i++) {
       await sleep(1000);
-      if (!(await gen("hasPassword").catch(() => true))) { // in: the account form is gone
+      // In: no account form and not back on the "Sign in with email" chooser.
+      if (!(await gen("hasPassword").catch(() => true)) && (await gen("workdayAuthState").catch(() => ({})))?.mode !== "chooser") {
         sendMsg({ type: "WORKDAY_ACCOUNT" });
         authSave({ done: true });
         log("workday: signed in");
@@ -403,12 +437,15 @@
     sendMsg({ type: "WORKDAY_ACCOUNT" });
     authSave({ ...mem, mode: "signin" });
     banner("Auto-apply: password set. Signing in…");
-    location.href = AUTO?.applyUrl || location.href;
+    location.href = loginUrl();
   }
 
   /** Workday emailed a verification link: open it from Gmail, then sign in. */
   async function verifyEmail(mem) {
     sendMsg({ type: "WORKDAY_ACCOUNT" });
+    // An account made earlier and never verified: ask for a new email, so the
+    // link looked for is one sent from now on.
+    if (await gen("workdayResendVerify").catch(() => false)) { mem.at = Date.now(); authSave(mem); await sleep(2000); }
     banner("Auto-apply: Workday sent a verification email. Opening its link from Gmail…");
     for (let i = 0; i < 18; i++) { // three minutes
       const r = await sendMsg({ type: "WORKDAY_VERIFY_LINK", since: mem.at || Date.now() - 600000, open: true });
@@ -417,12 +454,23 @@
         authSave({ ...mem, mode: "signin", verified: true });
         banner("Auto-apply: account verified. Signing in…");
         await sleep(1500);
-        location.href = AUTO?.applyUrl || location.href;
+        location.href = loginUrl();
         return;
       }
       await sleep(10000);
     }
     autoReport("needs_attention", "Workday's verification email did not arrive within three minutes");
+  }
+
+  /** Workday's Sign In page that returns to this application (background.js workdayLoginUrl). */
+  function loginUrl() {
+    const apply = AUTO?.applyUrl || location.href;
+    try {
+      const u = new URL(apply);
+      const parts = u.pathname.split("/").filter(Boolean);
+      const at = parts.findIndex((x) => x === "job" || x === "details");
+      return at < 1 ? apply : `${u.origin}/${parts.slice(0, at).join("/")}/login?redirect=${encodeURIComponent(u.pathname)}`;
+    } catch { return apply; }
   }
 
   /** The step is filled: Save and Continue, or stop on Review. */

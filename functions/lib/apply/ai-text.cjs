@@ -127,6 +127,9 @@ async function answerFreeText(q, ctx, { openai, writeModel = WRITE_MODEL, saniti
       if (c2 && (readability(c2).simple || readability(c2).avgWords < readability(clean).avgWords)) clean = c2;
     }
   }
+  // A one-fact answer is a value, not a sentence: "San Francisco." -> "San
+  // Francisco", "Wolters Kluwer." -> "Wolters Kluwer" (Workday, 2026-11-10).
+  if (clean && !long && clean.split(/\s+/).length <= 5 && !/[.!?].+[.!?]$/.test(clean)) clean = clean.replace(/[.。]+$/, "");
   return clean ? { answer: clean } : { answer: null, reason: "AI answer was empty after cleanup" };
 }
 
