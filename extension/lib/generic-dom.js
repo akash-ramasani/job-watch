@@ -440,6 +440,12 @@
   }
   function groupLabel(grp, el) {
     if (!grp) return labelFor(el);
+    // Workday nests the boxes in a fieldset with no heading of its own: the
+    // question is its formField's label ("Please check one of the boxes below",
+    // Micron's disability form named it after its first box, 2026-11-10).
+    const wdBox = grp.closest?.("[data-automation-id^=formField-]");
+    const wdLabel = wdBox && textOf(wdBox.querySelector(":scope > fieldset > legend, :scope > label, :scope > fieldset > legend label, legend label, label[id^=label]"));
+    if (wdLabel && wdLabel.length > 2) return wdLabel;
     const lg = grp.querySelector(":scope > legend, legend, [data-automation-id=richText], label:not(:has(input))");
     if (lg && textOf(lg)) return textOf(lg);
     if (grp.getAttribute?.("aria-labelledby")) { const t = byIds(grp.getAttribute("aria-labelledby")); if (t) return t; }

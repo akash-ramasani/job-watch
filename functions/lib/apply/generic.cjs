@@ -234,6 +234,25 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
     const v = wants && pickOption(q, wants);
     if (v) return { ...base, kind: "select", value: v };
   }
+  // Self-identification of disability (Workday's "Please check one of the boxes
+  // below", options "Yes, I have a disability… / No, I do not have a disability…
+  // / I do not want to answer"): from the Profile's disability answer.
+  if (hasOpts && (dom.options || []).some((o) => /disability/i.test(o.label)) && (dom.options || []).length <= 4) {
+    const dis = String(profile.eeoDisability || "");
+    const wants = /^no\b|do not have|don'?t have/i.test(dis) ? [/^no\b/i]
+      : /decline|not want|prefer not|not wish/i.test(dis) ? [/do not want|decline|prefer not|not wish/i]
+      : /^yes\b|have a disability/i.test(dis) ? [/^yes\b/i] : null;
+    const v = wants && pickOption(q, wants);
+    if (v) return { ...base, kind: dom.type === "checkbox" ? "multiselect" : "select", ...(dom.type === "checkbox" ? { values: [v] } : { value: v }) };
+  }
+  // Desired salary as a typed number (WellSky: "Open to discussion" did not stay
+  // in a number box): Salary Expectation, else hourly rate x 2080.
+  if (!hasOpts && ["text", "number"].includes(dom.type || "text") && /(desired|ideal|target|expected|base) (annual )?(salary|pay|compensation)|salary (expectation|requirement)|compensation expectation/.test(l)) {
+    const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
+    let want = num(profile.salaryExpectation);
+    if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
+    if (want) return { ...base, kind: "text", value: String(want) };
+  }
   // County (Workday asks it beside the address): from the city when it is a known one.
   if (/^county$|^county\/parish$/.test(l) && ["text", "select"].includes(dom.type || "text")) {
     const county = countyOf(profile.city, profile.region || profile.state);

@@ -548,6 +548,9 @@
   /** The step is filled: Save and Continue, or stop on Review. */
   const stepPresses = new Map();
   async function autoAdvance(step) {
+    // A page still loading has no step name: wait for it, never press Save and
+    // Continue there (Micron used up its three presses on a blank page).
+    if (!step && !(await gen("onReviewStep").catch(() => false))) return;
     if (await gen("onReviewStep").catch(() => false)) {
       // The whole Review page, to check every answer as Workday will send it.
       trace("review", { text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.slice(0, 60000) });
