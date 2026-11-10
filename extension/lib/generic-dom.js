@@ -456,10 +456,22 @@
     if (node._valueTracker) node._valueTracker.setValue(old);
     node.dispatchEvent(new Event("input", { bubbles: true }));
   }
+  // Auto-apply runs in a minimized window: the tab never really gains or loses
+  // focus, and React only commits some widgets (Workday's dates) on a bubbling
+  // focusout. Ohio State refused dates it showed correctly (2026-11-10).
+  function focusIn(node) {
+    node.focus?.();
+    node.dispatchEvent(new FocusEvent("focus", { bubbles: false }));
+    node.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+  }
+  function focusOut(node) {
+    node.dispatchEvent(new FocusEvent("blur", { bubbles: false }));
+    node.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+  }
   /** Type like a person, faster for long answers (about a second and a half). */
   async function typeInto(node, value, { keys = false } = {}) {
     const text = String(value ?? "");
-    node.focus();
+    focusIn(node);
     setNative(node, "");
     const perChar = Math.max(6, Math.min(35, Math.round(1400 / Math.max(1, text.length))));
     let typed = "";
@@ -508,8 +520,7 @@
       await typeInto(node, value);
       await sleep(100);
     }
-    node.dispatchEvent(new Event("blur", { bubbles: true }));
-    node.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    focusOut(node);
     if (node.value !== String(value ?? "")) { setNative(node, String(value ?? "")); node.dispatchEvent(new Event("change", { bubbles: true })); }
     await sleep(60);
     // Masked inputs reformat what was typed ("4155550100" -> "415-555-0100").
@@ -569,7 +580,7 @@
         picked = `${picked} > ${optText(leaf)}`;
       }
       await closeList(el);
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      focusOut(el);
       await sleep(200);
       return { ok: typeaheadFilled(el), picked: chosen() || picked };
     };
@@ -646,7 +657,7 @@
     // A plain autocomplete box keeps typed text; that is an answer too.
     if (!el.closest("[data-automation-id^=formField-]") && el.getAttribute("data-uxi-widget-type") !== "selectinput") {
       await typeInto(el, value);
-      el.dispatchEvent(new Event("blur", { bubbles: true }));
+      focusOut(el);
       return { ok: !!clean(el.value), picked: el.value, typedOnly: true };
     }
     return { ok: false, error: "no matching suggestion", want: value, seen: opts.map(optText).slice(0, 12) };
@@ -681,7 +692,7 @@
       await closeList(el);
       await sleep(200);
     }
-    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    focusOut(el);
     // Workday redraws the box after picks: judge by the live one.
     const live = (el.isConnected ? el : (r.domId && document.getElementById(r.domId))) || el;
     const shown = live.closest?.("[data-automation-id^=formField-]")?.querySelectorAll("[data-automation-id=selectedItem]").length || 0;
@@ -762,7 +773,7 @@
         const v = /Month/.test(which) ? mm : /Day/.test(which) ? dd : /Year/.test(which) ? yyyy : "";
         if (!v) continue;
         p.scrollIntoView({ block: "center" });
-        p.focus();
+        focusIn(p);
         realClick(p);
         await sleep(80);
         for (const ch of v) {
@@ -773,9 +784,13 @@
         }
         if (p.value !== v) setNative(p, v);
         p.dispatchEvent(new Event("change", { bubbles: true }));
-        p.dispatchEvent(new Event("blur", { bubbles: true }));
+        focusOut(p);
         await sleep(100);
       }
+      // Leave the whole date widget, as a click elsewhere would.
+      const wrap = r.inputs[0]?.closest("[data-automation-id=dateInputWrapper]") || r.inputs[0]?.parentElement;
+      if (wrap) wrap.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      document.activeElement?.blur?.();
       await sleep(400);
       if (shownOk()) break;
       }
@@ -1033,8 +1048,8 @@
     const pws = vis("input[type=password]").filter((e) => form.contains(e));
     if (!emailEl || !pws.length) return { ok: false, error: "account form fields not found" };
     await typeInto(emailEl, email, { keys: true });
-    emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
-    for (const p of pws) { await typeInto(p, password, { keys: true }); p.dispatchEvent(new Event("blur", { bubbles: true })); }
+    focusOut(emailEl);
+    for (const p of pws) { await typeInto(p, password, { keys: true }); focusOut(p); }
     if (mode === "create") {
       // "I agree to the terms" and similar: every unchecked box on the account form.
       for (const cb of [...form.querySelectorAll("input[type=checkbox]")].filter((c) => !c.checked)) {
@@ -1061,7 +1076,7 @@
     const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email], input[name*=mail i]").find((e) => !honeypot(e));
     if (!emailEl) return { ok: false, error: "no email box on the reset form" };
     await typeInto(emailEl, email, { keys: true });
-    emailEl.dispatchEvent(new Event("blur", { bubbles: true }));
+    focusOut(emailEl);
     await sleep(300);
     const submit = vis("[data-automation-id=resetPasswordButton], [data-automation-id=resetPasswordSubmitButton], [data-automation-id=forgotPasswordSubmitButton]")[0]
       || buttonByText(/^(submit|reset password|send|send email|continue)$/i);
@@ -1075,7 +1090,7 @@
     if (!pws.length) return { ok: false, error: "no password boxes on the reset page" };
     const emailEl = vis("input[data-automation-id=email], input[type=email], input[autocomplete=email]")[0];
     if (emailEl && !emailEl.value) await typeInto(emailEl, email, { keys: true });
-    for (const p of pws) { await typeInto(p, password, { keys: true }); p.dispatchEvent(new Event("blur", { bubbles: true })); }
+    for (const p of pws) { await typeInto(p, password, { keys: true }); focusOut(p); }
     await sleep(300);
     const submit = vis("[data-automation-id=resetPasswordSubmitButton], [data-automation-id=changePasswordSubmitButton], [data-automation-id=submitButton]")[0]
       || buttonByText(/^(submit|reset password|change password|save|update password|continue)$/i);

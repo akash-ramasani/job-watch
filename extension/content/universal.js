@@ -163,7 +163,7 @@
 
   /** Compute and fill what is empty on the page now. Returns the scanned fields. */
   async function fillPage(domFields, { onlyIds = null } = {}) {
-    const sendable = domFields.filter((d) => !d.filled && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || "")));
+    const sendable = domFields.filter((d) => (!d.filled || refill.has(d.id)) && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || "")));
     if (!sendable.length && pkgCache) return [];
     banner("JobWatch is working out your answers.");
     const res = await sendMsg({
@@ -537,6 +537,10 @@
     } catch { return apply; }
   }
 
+  // Fields Workday refused although they had a value (a phone saved earlier as
+  // "+1 (510) 935-6846", Analog Devices 2026-11-10): computed and filled again.
+  const refill = new Set();
+
   /** The step is filled: Save and Continue, or stop on Review. */
   const stepPresses = new Map();
   async function autoAdvance(step) {
@@ -582,7 +586,7 @@
     trace("advance", { step, press: n, moved: false, errors: errs, banner: pageSays.errors, problems: await gen("fieldHtml", errs.map((e) => e.path).filter(Boolean)).catch(() => []) });
     log(`workday: ${step} refused`, errs);
     for (const e of errs) {
-      if (e.path) done.delete(e.path);
+      if (e.path) { done.delete(e.path); refill.add(e.path); }
       attention.set(e.label || e.path || e.text, { path: e.path || "", note: `The form says: ${e.text}` });
     }
     await rescueStuck();
@@ -693,7 +697,7 @@
       // Ids come from labels, so a new wizard step can reuse one ("Resume/CV"
       // on My Information and on My Experience): forget the last step's.
       if (newStep && started) done.clear();
-      const fresh = fields.filter((f) => !done.has(f.id) && !f.filled);
+      const fresh = fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id)));
       // (Auto-apply's first step goes on even when Workday filled all of it: the
       // application is computed and recorded once, then Save and Continue.)
       if (!fresh.length && !(AUTO && !started) && !(isWorkday && newStep && /experience/i.test(step))) {
@@ -732,9 +736,10 @@
       banner(`JobWatch is reading the form${step ? `: ${step}` : ""}…`);
       // Read options of the fresh pick lists (opens each dropdown once).
       fields = await gen("scan", { readOptions: true }).catch(() => fields);
-      const ids = new Set(fields.filter((f) => !done.has(f.id) && !f.filled).map((f) => f.id));
+      const ids = new Set(fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id))).map((f) => f.id));
       ids.forEach((id) => done.add(id));
       const fills = (await fillPage(fields, { onlyIds: ids })) || [];
+      ids.forEach((id) => refill.delete(id));
       if (stopped) return;
       if (isWorkday && /experience/i.test(step) && pkgCache) {
         await workdayExperience(pkgCache);
