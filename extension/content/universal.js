@@ -552,7 +552,16 @@
       await sleep(2000);
       r = await gen("workdayNext").catch((e) => ({ ok: false, error: e.message }));
     }
-    if (!r?.ok) return autoReport("needs_attention", `${step || "step"}: ${r?.error || "could not press Save and Continue"}`);
+    if (!r?.ok) {
+      // Stuck with no message: what the page shows, for the fix.
+      trace("stuck", {
+        step, error: r?.error || "",
+        buttons: [...document.querySelectorAll("button, [role=button]")].filter((x) => x.offsetParent).map((x) => `${x.getAttribute("data-automation-id") || ""}|${(x.innerText || x.getAttribute("aria-label") || "").trim().slice(0, 60)}|${x.disabled || x.getAttribute("aria-disabled") === "true" ? "disabled" : ""}`).slice(0, 80),
+        problems: await gen("fieldHtml", []).catch(() => []),
+        html: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, "<svg/>").replace(/ (style|class)="[^"]*"/g, "").replace(/\s+/g, " ").slice(0, 300000),
+      });
+      return autoReport("needs_attention", `${step || "step"}: ${r?.error || "could not press Save and Continue"}`);
+    }
     for (let i = 0; i < 20; i++) {
       await sleep(1000);
       const now = await gen("stepName").catch(() => step);
