@@ -259,6 +259,13 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
     if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
     if (want) return { ...base, kind: "text", value: String(want) };
   }
+  // An attachment's "Category" (Workday's Additional Documents; the AI answered
+  // Proofpoint's with "Expanded"): the resume's category, else the only one.
+  if (/^(document |attachment |file )?(category|type)$/.test(l) && /attach/i.test(String(q.path || "") + String(dom.section || "") + String(dom.description || "") + l) || (/^category$/.test(l) && hasOpts)) {
+    const opts = (dom.options || []).map((o) => o.label);
+    const v = opts.find((o) => /resume|\bcv\b|curriculum/i.test(o)) || (opts.length === 1 ? opts[0] : null);
+    if (v) return { ...base, kind: dom.widget === "typeahead" ? "typeahead" : "select", value: v, match: v };
+  }
   // County (Workday asks it beside the address): from the city when it is a known one.
   if (/^county$|^county\/parish$/.test(l) && ["text", "select"].includes(dom.type || "text")) {
     const county = countyOf(profile.city, profile.region || profile.state);
