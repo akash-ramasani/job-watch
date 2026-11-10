@@ -284,7 +284,11 @@
       rec.domId = (rec.inputs?.[0] || rec.el)?.id || ""; // Workday's ids survive a redraw
       reg.set(id, rec);
       (rec.inputs?.[0] || rec.el).setAttribute?.("data-jw-id", id);
-      out.push({ id, ...field });
+      // Workday's own names for the field (traces and future rules): the
+      // formField-… container and the input's id, e.g. "formField-source".
+      const node = rec.inputs?.[0] || rec.el;
+      const wd = node?.closest?.("[data-automation-id^=formField-]")?.getAttribute("data-automation-id") || "";
+      out.push({ id, ...field, wd, domId: node?.id || "", fkit: node?.closest?.("[data-fkit-id]")?.getAttribute("data-fkit-id") || "" });
     };
     const findCandidates = () => deepAll(root(), "input, select, textarea, button[aria-haspopup=listbox], button[aria-haspopup=true], button[aria-haspopup=menu], [role=combobox]:not(input)")
       .filter((el) => el.tagName !== "BUTTON" || el.getAttribute("aria-haspopup") === "listbox" || selectLikeButton(el));

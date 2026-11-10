@@ -696,7 +696,7 @@ async function autoNextJob(st, busy = new Set()) {
   }
   // Workday: only with its password saved, and while few wait on Review.
   const { jwWorkday } = await chrome.storage.local.get("jwWorkday");
-  const reviewOpen = Object.values(st.results).filter((r) => r.status === "review" && r.tabId).length;
+  const reviewOpen = Object.values(st.results).filter((r) => r.status === "review" && r.tabId && !r.test).length;
   const workdayOk = !!jwWorkday?.password && reviewOpen < WORKDAY_MAX_REVIEW;
   for (const j of autoQueue.list) {
     if (j.source === "workday" && !workdayOk) continue;
@@ -744,6 +744,18 @@ async function autoFinishNow(result, tabId, jobId) {
   const prev = st.results[cur.jobId];
   const tries = (prev?.tries || 0) + 1;
   const note = String(result.note || "").slice(0, 300);
+  // A test run (autoApplyTest): traced, tab closed, never retried or submitted.
+  if (cur.test) {
+    st.results[cur.jobId] = { status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries: AUTO_MAX_TRIES, test: true };
+    st.running = st.running.filter((j) => j !== cur);
+    st.nextAt = Date.now() + AUTO_GAP_MS[0];
+    await saveAuto(st);
+    if (cur.tabId) chrome.tabs.remove(cur.tabId).catch(() => {});
+    console.log(`[JobWatch] Workday test ${result.status}: ${cur.companyName} | ${cur.title} ${note}`);
+    setTimeout(autoTick, 1500);
+    chrome.alarms.create("jwAutoKick", { when: Date.now() + 30000 });
+    return;
+  }
   st.results[cur.jobId] = {
     status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries,
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
@@ -1286,6 +1298,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await chrome.storage.local.set({ jwWorkday: { ...w, tenants: { ...(w.tenants || {}), [tenant]: Date.now() } } });
         }
         sendResponse({ ok: true });
+        return;
+      }
+      // A Workday trace (account step, form step, result) into users/{uid}/workdayTraces.
+      if (message.type === "WORKDAY_TRACE") {
+        try {
+          const { idToken, uid } = await getFreshToken();
+          const job = await autoJobForTab(sender?.tab?.id);
+          const tenant = workdayTenantOf(sender?.tab?.url || "") || workdayTenantOf(job?.applyUrl || "");
+          await fsAdd(`users/${uid}`, "workdayTraces", {
+            kind: String(message.kind || ""), tenant, jobId: job?.jobId || "", companyName: job?.companyName || "", title: job?.title || "",
+            test: !!job?.test, url: String(sender?.tab?.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version,
+            json: JSON.stringify(message.data || {}).slice(0, 900000),
+          }, idToken);
+          sendResponse({ ok: true });
+        } catch (err) { sendResponse({ ok: false, error: err.message }); }
         return;
       }
       if (message.type === "WORKDAY_VERIFY_LINK") {

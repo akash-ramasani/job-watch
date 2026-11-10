@@ -106,6 +106,12 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   // Boards auto-apply takes (settings/preferences.autoApplyBoards, e.g. ["workday"]
   // while Workday is being tested, 2026-11-10); unset or empty: every board.
   const boardsOn = new Set((Array.isArray(prefs?.autoApplyBoards) ? prefs.autoApplyBoards : []).map((x) => String(x).toLowerCase()));
+  // Test runs (settings/preferences.autoApplyTest = { board: "workday", limit: 60,
+  // perCompany: 2 }): the newest jobs of that board, any score, a few per
+  // company, each marked test: filled to Review, traced, never submitted.
+  const test = prefs?.autoApplyTest && typeof prefs.autoApplyTest === "object" ? prefs.autoApplyTest : null;
+  const testBoard = test ? String(test.board || "workday").toLowerCase() : "";
+  const perCompany = new Map();
   const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
   const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
@@ -134,19 +140,25 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     // Ashby, Greenhouse, Lever (back on after its 50-form test, 2026-11-02) and Workday.
     const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
     if (!board || (boardsOn.size && !boardsOn.has(board))) continue;
+    if (test && board !== testBoard) continue;
     if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     // The US filter again, as it reads today: jobs saved under an older one
     // ("-REMOTE, BULGARIA-" passed on its bare "REMOTE") are left out.
     if (typeof locationOk === "function" && j.locationName && !locationOk(j.locationName)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
-    if (!isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
+    if (!test && !isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
     // Not scored yet (the AI is behind or down): only titles wholly in the
     // person's job types. "GTM Systems Engineer" is software and sales;
     // "Test & Launch Operations Engineer" is operations (2026-11-03).
-    if (!scores[j.id] && Array.isArray(jobTypes) && jobTypes.length && fam.length && !fam.every((f) => jobTypes.includes(f))) continue;
-    // A matching job only; an unscored one waits for its score.
-    if (minScore > 0 && !(typeof scores[j.id]?.score === "number" && scores[j.id].score >= minScore)) continue;
+    if (!test && !scores[j.id] && Array.isArray(jobTypes) && jobTypes.length && fam.length && !fam.every((f) => jobTypes.includes(f))) continue;
+    // A matching job only; an unscored one waits for its score (not in a test run).
+    if (!test && minScore > 0 && !(typeof scores[j.id]?.score === "number" && scores[j.id].score >= minScore)) continue;
+    if (test) {
+      const co = String(j.companyKey || j.companyName || "").toLowerCase();
+      if ((perCompany.get(co) || 0) >= Math.max(1, Number(test.perCompany) || 2)) continue;
+      perCompany.set(co, (perCompany.get(co) || 0) + 1);
+    }
     const st = stats[board];
     st.total++;
     if (applied.ids.has(j.id)) { st.applied++; continue; }
@@ -164,13 +176,13 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     out.push({
       jobId: j.id, source: board, applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
-      locationName: j.locationName || "", postedAt, score,
+      locationName: j.locationName || "", postedAt, score, ...(test ? { test: true } : {}),
     });
   }
   // Newest day first; within a day, the best match first; then the newest.
   const day = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
   out.sort((a, b) => day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
-  const list = out.slice(0, limit);
+  const list = out.slice(0, test ? Math.max(1, Number(test.limit) || 60) : limit);
   stats.ashby.left = out.filter((j) => j.source === "ashby").length;
   stats.greenhouse.left = out.filter((j) => j.source === "greenhouse").length;
   stats.lever.left = out.filter((j) => j.source === "lever").length;

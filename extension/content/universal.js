@@ -123,6 +123,16 @@
     return r || { ok: false, error: "no result" };
   }
 
+  // ── Workday traces (users/{uid}/workdayTraces): every account step and form
+  //    step of an auto-apply run, field by field, for measuring and fixing.
+  const fillResults = {}; // path -> { ok, error, picked, value, kind, source, label }
+  const stepFills = [];   // the computed fills of this step
+  const stepReview = [];  // what the server left for the person on this step
+  function trace(kind, data) {
+    if (!AUTO || !isWorkday) return;
+    sendMsg({ type: "WORKDAY_TRACE", kind, data: { ...data, page: location.href.slice(0, 300) } }).catch?.(() => {});
+  }
+
   async function fillFields(fills, pkg, order) {
     let pending = fills.filter((f) => order.has(f.path)).sort((a, b) => order.get(a.path) - order.get(b.path));
     const failures = [];
@@ -132,6 +142,7 @@
       for (const f of pending) {
         hl.focus(elOf(f.path), `Filling: ${f.label || f.path}`);
         const r = await applyWithRetry(f, pkg);
+        fillResults[f.path] = { label: f.label, kind: f.kind, source: f.source || "", value: f.values || f.value, ok: !!r.ok, error: r.error || "", picked: r.picked || r.actual || "", seen: r.ok ? undefined : r.seen, pass };
         await sleep(220);
         hl.mark(!!r.ok);
         if (r.ok) {
@@ -157,7 +168,7 @@
     banner("JobWatch is working out your answers.");
     const res = await sendMsg({
       type: "GET_GENERIC_FILL_DATA", source, applyUrl: location.href, formKey: formKeyNow()?.formKey || "",
-      externalId: postingKey()?.id || "", domFields: sendable.map(({ section: _s, parts: _p, filled: _f, ...d }) => d),
+      externalId: postingKey()?.id || "", domFields: sendable.map(({ section: _s, parts: _p, filled: _f, wd: _w, domId: _d, fkit: _k, ...d }) => d),
       ...header, descriptionText: await gen("descriptionText").catch(() => ""),
     });
     if (!res?.ok || !res.data) { banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); autoReport("error", `could not compute the application: ${res?.error || "unknown error"}`); return null; }
@@ -168,6 +179,8 @@
     if (pkg.jobTitle) header.jobTitle = pkg.jobTitle;
     if (pkg.companyName) header.companyName = pkg.companyName;
     for (const r of pkg.review || []) attention.set(r.label, { path: r.path || "", note: r.note || "needs you" });
+    stepFills.push(...pkg.fills.map((f) => ({ path: f.path, label: f.label, kind: f.kind, source: f.source || "", value: f.values || f.value, match: f.match, note: f.note })));
+    stepReview.push(...(pkg.review || []));
     log(`computed: ${pkg.answered} fills for ${pkg.total} fields, review=${pkg.review?.length || 0}`, pkg.review);
 
     const order = new Map(domFields.map((d, i) => [d.id, i]));
@@ -347,6 +360,7 @@
   let AUTO = null; // the runner's job when this tab is one of its own
   function autoReport(status, note) {
     if (!AUTO) return;
+    trace("result", { status, note: String(note || "").slice(0, 500), step: lastStep });
     AUTO = null; // the tab is the person's from here on
     sendMsg({ type: "AUTO_RESULT", status, note: String(note || "").slice(0, 300) });
   }
@@ -385,22 +399,25 @@
     // Made the account; Workday moved on to Sign In, or to its "Sign in with email" chooser (Workday, Jabil).
     else if (mem.mode === "create" && (st.mode === "signin" || st.mode === "chooser") && !st.errors.length) mode = "signin";
     if (mode === "create") mem.triedCreate = true;
+    trace("auth", { phase: "decide", screen: st.mode, errors: st.errors, message: st.message, decided: mode, tries: mem.tries, hasAccount: !!creds.hasAccount, resetAt: mem.resetAt || 0 });
     mem.mode = mode; mem.at = mem.at || Date.now();
     authSave(mem);
     banner(mode === "create" ? "Auto-apply: creating your Workday account for this company." : "Auto-apply: signing in to Workday.");
     const r = await gen("workdayAuth", { email: creds.email, password: creds.password, mode }).catch((e) => ({ ok: false, error: e.message }));
-    if (!r?.ok) { warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
+    if (!r?.ok) { trace("auth", { phase: "action failed", did: mode, error: r?.error }); warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
     for (let i = 0; i < 10; i++) {
       await sleep(1000);
       // In: no account form and not back on the "Sign in with email" chooser.
       if (!(await gen("hasPassword").catch(() => true)) && (await gen("workdayAuthState").catch(() => ({})))?.mode !== "chooser") {
         sendMsg({ type: "WORKDAY_ACCOUNT" });
+        trace("auth", { phase: "signed in", did: mode, tries: mem.tries, viaReset: !!mem.resetAt, viaCreate: !!mem.triedCreate, verified: !!mem.verified });
         authSave({ done: true });
         log("workday: signed in");
         return;
       }
     }
     const after = await gen("workdayAuthState").catch(() => ({ errors: [], message: "" }));
+    trace("auth", { phase: "after action", did: mode, screen: after.mode, errors: after.errors, message: after.message });
     if (mode === "create" && VERIFY.test(`${after.errors.join(" ")} ${after.message}`)) return verifyEmail(mem);
     // Anything else the page said is read on the next tick.
   }
@@ -411,12 +428,14 @@
     authSave(mem);
     banner("Auto-apply: this Workday account has another password. Resetting it to your saved one…");
     const r = await gen("workdayForgot", creds.email).catch((e) => ({ ok: false, error: e.message }));
+    trace("auth", { phase: "reset requested", ok: !!r?.ok, error: r?.error || "" });
     if (!r?.ok) return autoReport("needs_attention", `Workday password reset: ${r?.error || "could not start"}`);
     for (let i = 0; i < 18; i++) { // three minutes
       await sleep(10000);
       const m = await sendMsg({ type: "WORKDAY_VERIFY_LINK", kind: "reset", since: mem.resetAt });
       if (!m?.ok) return autoReport("needs_attention", `Workday reset email: ${m?.error || "Gmail unavailable"}`);
       if (m.link) {
+        trace("auth", { phase: "reset email found", afterSeconds: Math.round((Date.now() - mem.resetAt) / 1000) });
         authSave({ ...mem, mode: "reset" });
         location.href = m.link;
         return;
@@ -428,6 +447,7 @@
   async function setNewPassword(mem, creds) {
     banner("Auto-apply: setting your Workday password…");
     const r = await gen("workdaySetPassword", { email: creds.email, password: creds.password }).catch((e) => ({ ok: false, error: e.message }));
+    trace("auth", { phase: "new password set", ok: !!r?.ok, error: r?.error || "" });
     if (!r?.ok) return autoReport("needs_attention", `Workday password reset: ${r?.error}`);
     await sleep(5000);
     const after = await gen("workdayAuthState").catch(() => ({ errors: [] }));
@@ -451,6 +471,7 @@
       const r = await sendMsg({ type: "WORKDAY_VERIFY_LINK", since: mem.at || Date.now() - 600000, open: true });
       if (!r?.ok) return autoReport("needs_attention", `Workday verification email: ${r?.error || "Gmail unavailable"}`);
       if (r.link) {
+        trace("auth", { phase: "verification email found", afterSeconds: Math.round((Date.now() - (mem.at || Date.now())) / 1000) });
         authSave({ ...mem, mode: "signin", verified: true });
         banner("Auto-apply: account verified. Signing in…");
         await sleep(1500);
@@ -477,6 +498,8 @@
   const stepPresses = new Map();
   async function autoAdvance(step) {
     if (await gen("onReviewStep").catch(() => false)) {
+      // The whole Review page, to check every answer as Workday will send it.
+      trace("review", { text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.slice(0, 60000) });
       banner("Auto-apply filled every step. This is the Review page: check each answer, then press Submit yourself.");
       return autoReport("review", "filled to Review: check it and press Submit");
     }
@@ -492,11 +515,13 @@
     for (let i = 0; i < 20; i++) {
       await sleep(1000);
       const now = await gen("stepName").catch(() => step);
-      if (now !== step) return; // the next tick fills the new step
+      if (now !== step) { trace("advance", { step, press: n, moved: true, next: now }); return; } // the next tick fills the new step
     }
     // Same step: what Workday flags is filled again on the next tick, and the
     // AI reads what it still refuses.
     const errs = await gen("errors").catch(() => []);
+    const pageSays = await gen("workdayAuthState").catch(() => ({ errors: [] }));
+    trace("advance", { step, press: n, moved: false, errors: errs, banner: pageSays.errors });
     log(`workday: ${step} refused`, errs);
     for (const e of errs) {
       if (e.path) done.delete(e.path);
@@ -666,6 +691,20 @@
       // Ids seen after filling (conditional questions that just appeared are new).
       const seenNow = await gen("scan", { readOptions: false }).catch(() => []);
       for (const f of seenNow) if (f.filled) done.add(f.id);
+      if (AUTO && isWorkday) {
+        const opts = (f) => (f.options || []).map((o) => (typeof o === "string" ? o : o.label)).slice(0, 120);
+        trace("step", {
+          step,
+          fields: fields.map((f) => ({ id: f.id, label: f.label, description: f.description || "", type: f.type, widget: f.widget || "", required: !!f.required, filledBefore: !!f.filled, section: f.section || "", wd: f.wd || "", domId: f.domId || "", fkit: f.fkit || "", options: opts(f) })),
+          fills: stepFills.splice(0),
+          results: Object.fromEntries(Object.entries(fillResults)),
+          review: stepReview.splice(0),
+          attention: [...attention.entries()].map(([label, v]) => ({ label, note: v.note })),
+          after: seenNow.map((f) => ({ id: f.id, label: f.label, type: f.type, required: !!f.required, filled: !!f.filled, wd: f.wd || "" })),
+          errors: await gen("errors").catch(() => []),
+        });
+        for (const k of Object.keys(fillResults)) delete fillResults[k];
+      }
       // Auto-apply: new questions that just appeared are filled first (next tick);
       // otherwise Save and Continue, or stop on Review.
       if (AUTO && !seenNow.some((f) => !f.filled && !done.has(f.id))) await autoAdvance(step);
