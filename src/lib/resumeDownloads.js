@@ -203,8 +203,7 @@ export function drawResumePdfLocally(resume, contact, fileBase) {
   if (resume.education?.length) {
     section("Education");
     for (const e of resume.education) {
-      // Education dates stay off the resume (the person's choice); forms still get them.
-      twoCol(e.institution, "", 10.5, "bold", "normal");
+      twoCol(e.institution, [e.startDate, e.endDate].filter(Boolean).join(" – "), 10.5, "bold", "normal");
       twoCol(e.degree, e.location, 9.5, "italic", "italic");
       y += 2;
     }
