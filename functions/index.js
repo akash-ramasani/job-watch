@@ -133,6 +133,7 @@ const { prepareLeverApplication } = require("./lib/apply/lever.cjs");
 const { prepareGenericApplication } = require("./lib/apply/generic.cjs");
 const { rescueField: rescueFieldPlan } = require("./lib/apply/rescue.cjs");
 const { reviewForm } = require("./lib/apply/review.cjs");
+const { applicantNotes } = require("./lib/apply/applicantNotes.cjs");
 // A stuck field: one small JSON plan per field, many per application. Haiku.
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
@@ -5049,7 +5050,7 @@ exports.draftMissingAnswers = onCall(
     if (!Object.keys(missing).length) return { answered: 0, waiting: 0, merged: 0 };
     let groups;
     try {
-      ({ groups } = await draftAnswers({ client: requireOpenAI(), model: RESUME_MODEL }, { missing, user, resume: resumeSnap.data() || {}, about: about || user.answerContext || "" }));
+      ({ groups } = await draftAnswers({ client: requireOpenAI(), model: RESUME_MODEL }, { missing, user, resume: resumeSnap.data() || {}, about: [about || user.answerContext || "", applicantNotes({ ...user, answerContext: "" })].filter(Boolean).join("\n") }));
     } catch (err) {
       logger.error("draftMissingAnswers failed:", err);
       if (isOutOfCredits(err)) throw new HttpsError("resource-exhausted", "The AI service is out of credits right now. Try again later.");

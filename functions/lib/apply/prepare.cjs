@@ -125,7 +125,9 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
           if (!p.values.length) { aiNotes.set(r.label, p.reason); return; }
           fills.push({ label: q.label, name: q.fields[0].name, kind, value: p.values[0], ...(kind === "multiselect" ? { values: p.values } : {}), required: !!q.required, source: "ai", note: `AI pick: ${p.why || ""}`.trim() });
           aiPicked.add(r.label);
-        } else if (["text", "longtext", "number"].includes(kind) && !/needs a link|password|no referral|follow-up|salary|compensation/i.test(`${r.note || ""} ${q.label}`)) {
+        } else if (["text", "longtext", "number"].includes(kind) && !/needs a link|password|no referral|follow-up/i.test(`${r.note || ""} ${q.label}`)
+          // Pay only from the person's own answer on the Profile page.
+          && (!/salary|compensation/i.test(`${r.note || ""} ${q.label}`) || String(profileForJob.applicantFacts?.startAndPay || "").trim())) {
           const num = kind === "number";
           const a = await answerFreeText({ label: q.label, description: [stripHtml(q.description || ""), num ? "Reply with a single number only, no words." : ""].filter(Boolean).join(" "), ashbyType: num ? "Number" : kind === "longtext" ? "LongText" : "String" }, ctx, aiDeps);
           const value = num ? String(a.answer || "").match(/-?\d+(\.\d+)?/)?.[0] : a.answer;

@@ -5,6 +5,8 @@
 // not in the person's profile. The extension runs the steps, looks again, and
 // asks for the next round (at most three).
 
+const { applicantNotes } = require("./applicantNotes.cjs");
+
 const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1",
   "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
@@ -44,6 +46,7 @@ You get the applicant's profile and resume, the job, the field's question, and t
 - key: press the key named in "text" (Enter, ArrowDown, Tab, Escape) in the element
 
 Rules:
+- The profile's "inTheirOwnWords" is the applicant's own answer to status, logistics, pay, history, connections, stories and motivation questions: use it first.
 - Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details.
 - A required question about experience, skills or background the resume does not show still gets an honest answer: in a text box, one or two plain first-person sentences that say so (for example "I have not done that myself.") and name the closest related work the resume shows; a Yes/No or option question gets the truthful option (No, None, Less than 1 year).
 - Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number or a reference's contact.
@@ -63,6 +66,8 @@ function profileSummary(user, resume) {
   const roles = (resume.roles || resume.experience || []).slice(0, 6).map((r) => `${r.title || r.role || ""} at ${r.company || r.employer || ""} (${r.startDate || ""} - ${r.endDate || "present"}): ${String(r.description || "").replace(/\*\*/g, "").slice(0, 400)}`);
   const education = (resume.education || []).slice(0, 3).map((e) => `${e.degree || ""}, ${e.institution || ""} ${e.endDate || ""}`.trim());
   const skills = [...(resume.skills || []), ...(resume.skillGroups || []).flatMap((g) => g.skills || [])].slice(0, 60);
+  const notes = applicantNotes(user);
+  if (notes) p.inTheirOwnWords = notes;
   return { profile: p, resume: { summary: String(resume.summary || "").replace(/\*\*/g, "").slice(0, 800), roles, education, skills } };
 }
 
