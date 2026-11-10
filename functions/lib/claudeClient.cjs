@@ -96,7 +96,7 @@ function toCompletion(res, wantsJson) {
  * The client. `anthropic` is an @anthropic-ai/sdk instance; `models` maps the
  * names the code passes (anything not starting with "claude-") to a tier.
  */
-function claudeChatClient(anthropic, { fastModel = "claude-haiku-5-5", smartModel = "claude-opus-5-5" } = {}) {
+function claudeChatClient(anthropic, { fastModel = "claude-haiku-5-5", smartModel = "claude-haiku-5-5" } = {}) {
   const pick = (name) => {
     const n = String(name || "");
     if (n.startsWith("claude-")) return n;

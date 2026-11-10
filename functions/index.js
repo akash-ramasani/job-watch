@@ -69,11 +69,11 @@ const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 // Autofill answers and form mapping; smart tier: tailored resumes and resume
 // parsing; chat: the assistant (multi-step tool use). Override via env.
 const OPENAI_FAST_MODEL = process.env.OPENAI_FAST_MODEL || "claude-haiku-5-5";
-const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "claude-opus-5-5";
-const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "claude-opus-5-5";
+const OPENAI_SMART_MODEL = process.env.OPENAI_SMART_MODEL || "claude-haiku-5-5"; // Haiku 5.5 for everything (cost, 2026-11-10)
+const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || "claude-haiku-5-5";
 // Tailored resumes run on every auto-applied job: Sonnet (half Opus's price)
 // writes them, and its draft-then-verify pair caches the profile part.
-const RESUME_MODEL = process.env.RESUME_MODEL || "claude-sonnet-5-5";
+const RESUME_MODEL = process.env.RESUME_MODEL || "claude-haiku-5-5";
 const ASSISTANT_HISTORY_TURNS = 30; // messages of conversation the model sees
 const ASSISTANT_MESSAGE_MAX_CHARS = 6000;
 const ASSISTANT_TOOL_RESULT_MAX_CHARS = 60000;

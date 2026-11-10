@@ -12,7 +12,7 @@ function fake(replies) {
 
 test("JSON request on the smart tier: system, no temperature, fences stripped", async () => {
   const a = fake([{ id: "m1", model: "claude-opus-5-5", stop_reason: "end_turn", content: [{ type: "thinking", thinking: "" }, { type: "text", text: "```json\n{\"ok\":true}\n```" }], usage: { input_tokens: 10, output_tokens: 5 } }]);
-  const client = claudeChatClient(a);
+  const client = claudeChatClient(a, { smartModel: "claude-opus-5-5" });
   const out = await client.chat.completions.create({ model: "gpt-4o", temperature: 0.2, max_tokens: 3000, response_format: { type: "json_object" }, messages: [{ role: "system", content: "You parse resumes." }, { role: "user", content: "Parse this" }] });
   const body = a.sent[0];
   assert.equal(body.model, "claude-opus-5-5");
