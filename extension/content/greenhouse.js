@@ -313,6 +313,10 @@
       if (f.kind === "select" || f.kind === "multiselect" || f.kind === "boolean" || isCombobox(el)) {
         return fillCombobox(el, f.value);
       }
+      // Already holds this answer (Greenhouse prefilled it from MyGreenhouse):
+      // leave it; typing over prefilled boxes is what garbled the phone.
+      const same = (a, b) => String(a ?? "").replace(/\s+/g, " ").trim().toLowerCase() === String(b ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      if (el.tagName !== "SELECT" && same(el.value, f.value)) return { ok: true, kept: el.value };
       return fillText(el, f.value);
     }
 
