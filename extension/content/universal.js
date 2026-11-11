@@ -438,6 +438,27 @@
     if (mem.mode === "reset") return setNewPassword(mem, creds); // the page from the reset email
     const st = await gen("workdayAuthState").catch(() => ({ mode: null, errors: [], message: "" }));
     const said = `${st.errors.join(" ")} ${st.message}`.trim();
+    // No account form after a reset, a verification or a new account: Workday
+    // often signs in by itself and lands on the posting or the account home
+    // (Allstate, Salesforce, 2026-11-10), where looking for the Sign In form
+    // gave up. Open the application instead (twice at most).
+    if (!st.mode && (mem.resetAt || mem.verified || mem.triedCreate)) {
+      if (await gen("workdayInApp").catch(() => false)) {
+        sendMsg({ type: "WORKDAY_ACCOUNT" });
+        trace("auth", { phase: "signed in", did: "landed", tries: mem.tries, viaReset: !!mem.resetAt, viaCreate: !!mem.triedCreate, verified: !!mem.verified });
+        authSave({ done: true });
+        return;
+      }
+      mem.landings = (mem.landings || 0) + 1;
+      authSave(mem);
+      const target = AUTO?.applyUrl || "";
+      if (mem.landings <= 2 && target && location.href.split("?")[0] !== target.split("?")[0]) {
+        trace("auth", { phase: "no account form; opening the application", landings: mem.landings, from: location.href.slice(0, 200) });
+        banner("Auto-apply: opening the application…");
+        location.href = target;
+        return;
+      }
+    }
     // The flow (2026-11-10): Sign In first with the saved email and password.
     // Refused ("You may have entered the wrong email address or password or
     // your account might be locked"): a company with no account yet gets one
@@ -520,7 +541,7 @@
       return autoReport("needs_attention", `Workday did not take the new password: ${after.errors.join(" ").slice(0, 160)}`);
     }
     sendMsg({ type: "WORKDAY_ACCOUNT" });
-    authSave({ ...mem, mode: "signin" });
+    authSave({ ...mem, mode: "signin", tries: 0 });
     banner("Auto-apply: password set. Signing in…");
     location.href = loginUrl();
   }
