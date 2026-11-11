@@ -76,7 +76,14 @@ async function trackEmails(deps, uid, emails) {
   for (const e of list) {
     if (seen.has(e.id)) continue;
     // An email can only be about an application sent before it arrived.
-    const cands = candidatesFor(e, apps).filter((a) => !a.submittedAt || Date.parse(a.submittedAt) <= e.date + 3600e3).slice(0, 6);
+    // Many roles at one company (14 at Clera): the ones whose title the email
+    // names come first, then the one sent just before it; only 6 go to the AI,
+    // so taking the first six as stored dropped the right one.
+    const text = ` ${words(`${e.subject} ${e.snippet}`)} `;
+    const titleHits = (a) => { const t = words(a.jobTitle).split(" ").filter((w) => w.length > 2 && !GENERIC.has(w)); return t.length ? t.filter((w) => text.includes(` ${w} `)).length / t.length + (text.includes(` ${words(a.jobTitle)} `) ? 1 : 0) : 0; };
+    const gap = (a) => { const t = Date.parse(a.submittedAt || a.appliedAt || ""); return Number.isFinite(t) ? Math.abs(e.date - t) : 9e15; };
+    const cands = candidatesFor(e, apps).filter((a) => !a.submittedAt || Date.parse(a.submittedAt) <= e.date + 3600e3)
+      .sort((a, b) => titleHits(b) - titleHits(a) || gap(a) - gap(b)).slice(0, 6);
     if (cands.length) work.push({ e, cands });
   }
   if (!work.length || !ai) return { updates: [] };

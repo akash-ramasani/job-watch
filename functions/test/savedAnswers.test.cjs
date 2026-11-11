@@ -107,3 +107,14 @@ test("application emails match by the sender's address too (HP, xAI, Workday ten
   assert.equal(names({ from: "no-reply@x.ai", subject: "Thank you for applying to SpaceXSI", snippet: "" }), "xAI");
   assert.equal(names({ from: "Clera Hiring Team <no-reply@ashbyhq.com>", subject: "Thanks for applying to Clera!", snippet: "" }), "Clera");
 });
+
+test("an email about one of many roles at a company reaches the AI with that role first", async () => {
+  const { trackEmails } = require("../lib/apply/emailTracker.cjs");
+  const roles = ["Founding Engineer", "Product Engineer", "Software Engineer", "Founding Cloud Infrastructure Engineer", "Senior Data Integration Engineer", "Forward Deployed Engineer", "Founding Software Engineer", "Member of Technical Staff, Forward Deployed"];
+  const docs = roles.map((t, i) => ({ id: `ashby|clera|${i}`, data: () => ({ companyName: "Clera", org: "clera", jobTitle: t, status: "submitted", submittedAt: `2026-11-1${i < 7 ? 0 : 1}T03:00:00.000Z` }) }));
+  let prompt = "";
+  const db = { collection: () => ({ doc: () => ({ collection: () => ({ where: () => ({ get: async () => ({ docs }) }) }) }) }), batch: () => ({ set() {}, commit: async () => {} }) };
+  const ai = { chat: { completions: { create: async (req) => { prompt = req.messages[1].content; return { choices: [{ message: { content: "{\"results\":[]}" } }] }; } } } };
+  await trackEmails({ db, ai, model: "t" }, "u", [{ id: "m1", from: "Clera Hiring Team <no-reply@ashbyhq.com>", subject: "Thanks for applying to Clera!", snippet: "Thank you for applying for the Member of Technical Staff, Forward Deployed role at Clera!", date: Date.parse("2026-11-11T03:24:18Z") }]);
+  assert.match(prompt, /Applications: 0\. Clera - Member of Technical Staff, Forward Deployed/);
+});

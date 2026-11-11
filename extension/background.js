@@ -1310,20 +1310,20 @@ async function scanApplicationMail() {
   // Every unseen message in the window, page by page: the newest 40 alone missed
   // most confirmations on busy days (about half of 200 a day unmatched,
   // 2026-11-11). The first scan after this change looks back 7 days.
-  const { jwMailSeen = [], jwMailBackfilled } = await chrome.storage.local.get(["jwMailSeen", "jwMailBackfilled"]);
+  const { jwMailSeen = [], jwMailBackfilled2 } = await chrome.storage.local.get(["jwMailSeen", "jwMailBackfilled2"]);
   // The 7-day catch-up reads every message again: ones seen before were matched
   // with the older rules (HP by its address); the server skips ones already recorded.
-  const seen = new Set(jwMailBackfilled ? jwMailSeen : []);
-  const q = encodeURIComponent(`newer_than:${jwMailBackfilled ? 3 : 7}d -in:sent -category:promotions -category:social (application OR applying OR applied OR interview OR candidacy OR "next steps" OR unfortunately OR assessment OR offer OR position OR role)`);
+  const seen = new Set(jwMailBackfilled2 ? jwMailSeen : []);
+  const q = encodeURIComponent(`newer_than:${jwMailBackfilled2 ? 3 : 7}d -in:sent -category:promotions -category:social (application OR applying OR applied OR interview OR candidacy OR "next steps" OR unfortunately OR assessment OR offer OR position OR role)`);
   const fresh = [];
   let pageToken = "";
-  for (let page = 0; page < (jwMailBackfilled ? 4 : 15); page++) {
+  for (let page = 0; page < (jwMailBackfilled2 ? 4 : 15); page++) {
     const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`, auth).then((r) => r.json()).catch(() => ({}));
     for (const m of list.messages || []) if (!seen.has(m.id)) fresh.push(m);
-    if (!list.nextPageToken || fresh.length >= (jwMailBackfilled ? 300 : 1500)) break;
+    if (!list.nextPageToken || fresh.length >= (jwMailBackfilled2 ? 300 : 1500)) break;
     pageToken = list.nextPageToken;
   }
-  if (!fresh.length) { if (!jwMailBackfilled) await chrome.storage.local.set({ jwMailBackfilled: true }); return; }
+  if (!fresh.length) { if (!jwMailBackfilled2) await chrome.storage.local.set({ jwMailBackfilled2: true }); return; }
   let checked = 0, matched = 0;
   // Oldest first, 25 to a call, so a confirmation is matched before a later reply.
   for (const chunk of [...fresh].reverse().reduce((a, m, i) => { if (i % 25 === 0) a.push([]); a[a.length - 1].push(m); return a; }, [])) {
@@ -1347,7 +1347,7 @@ async function scanApplicationMail() {
     }
     checked += emails.length; matched += (out.updates || []).length;
   }
-  if (!jwMailBackfilled) await chrome.storage.local.set({ jwMailBackfilled: true });
+  if (!jwMailBackfilled2) await chrome.storage.local.set({ jwMailBackfilled2: true });
   console.log("[JobWatch] mail scan:", checked, "checked,", matched, "matched");
 }
 
