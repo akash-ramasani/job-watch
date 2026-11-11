@@ -1,0 +1,57 @@
+// Answers the Workday test runs got wrong (audit of 501 saved questions, 2026-11-10).
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const P = {
+  firstName: "Akash", lastName: "Ramasani", requiresSponsorship: "Yes", workAuthorized: "Yes", visaStatus: { student: true },
+  yearsOfExperience: 5, education: [{ degree: "Master of Science", field: "Computer Science" }],
+  resumeText: "Software Engineer. Python, SQL, React, dashboards, ETL pipelines. M.S. Computer Science.",
+};
+const sel = (label, opts) => ({ label, required: true, fields: [{ name: "q", type: "multi_value_single_select", values: opts.map((o) => ({ label: o, value: o })) }] });
+const txt = (label) => ({ label, required: true, fields: [{ name: "q", type: "textarea" }] });
+let ae;
+const val = (q, p = P) => ae.answerQuestion(q, p, null).answers.map((a) => a.value)[0];
+test.before(async () => { ae = await import("../lib/apply/answer-engine.mjs"); });
+
+test("unrestricted authorization is No on F-1 OPT (U.S. Bank)", () => {
+  assert.equal(val(sel('Are you currently authorized for employment in the U.S. without any restrictions to the length of employment period? (Answer "No" if you are in a non-immigrant status such as H, L, E, TN, B or F, including OPT, CPT)', ["Yes", "No"])), "No");
+});
+
+test("'please initial' gets initials, not the current employer (Samsung)", () => {
+  assert.equal(val(txt("By submitting an application, you, the applicant, agree to not disclose to Samsung any confidential or proprietary information belonging to any current or previous employer or other person or entity. Please initial that you acknowledge and understand this statement.")), "AR");
+});
+
+test("driver's license is never answered from the resume", () => {
+  const q = sel("Do you have a valid driver's license in the country this job is based?", ["Yes", "No"]);
+  const a = ae.answerQuestion(q, P, null);
+  assert.equal(a.answers.length, 0);
+  assert.match(a.note, /^Only you can answer/);
+  assert.equal(val(q, { ...P, driversLicense: "Yes" }), "Yes");
+});
+
+test("a degree in another field is No; a matching or related field is Yes", () => {
+  assert.equal(val(sel("Do you have an Associate’s or Bachelor’s degree in a Chemical or Biological science, Clinical Laboratory Science or Medical Technology?", ["Yes", "No"])), "No");
+  assert.equal(val(sel("Do you have a Bachelor's degree in Computer Science, Engineering, or a related field?", ["Yes", "No"])), "Yes");
+  assert.equal(val(sel("Do you have a bachelor's degree in a STEM field?", ["Yes", "No"])), "Yes");
+  assert.equal(val(sel("Do you have a bachelor's degree?", ["Yes", "No"])), "Yes");
+});
+
+test("years in a domain the resume never shows: the no-experience bucket", () => {
+  const boeing = ["No experience", "Less than 1 year", "More than 1 year but less than 3 years", "More than 3 years but less than 5 years", "More than 5 years but less than 10 years", "More than 10 years"];
+  assert.equal(val(sel("How many years of experience do you have in aerospace production and maintenance?", boeing)), "No experience");
+  assert.equal(val(sel("How many years of clinical experience in blood draw/venipuncture do you have?", ["Less than 1 year", "1-3 years", "3-5 years", "5+ years", "No Experience"])), "No Experience");
+  assert.equal(val(sel("How many years experience do you have in claims adjusting?", ["Less than 1 year", "1-3 years", "4-5 years"])), "Less than 1 year");
+  // Shown on the resume, or general: total years.
+  assert.equal(val(sel("How many years of experience do you have with dashboards, reports, and KPIs?", boeing)), "More than 5 years but less than 10 years");
+  assert.equal(val(sel("How many years of experience do you have working both independently and in team environments?", boeing)), "More than 5 years but less than 10 years");
+});
+
+test("month buckets are not years (J&J '0 - 6 months')", () => {
+  assert.equal(val(sel("How many years of experience do you have in roles or projects that closely align with the responsibilities outlined in the job description?", ["0 - 6 months", "6 - 11 months", "1 - 2 years", "3 - 4 years", "5 - 6 years", "7 - 8 years"])), "5 - 6 years");
+});
+
+test("age questions phrased 'N years or older'", () => {
+  assert.equal(val(sel("Are you 18 years or older?", ["Yes", "No"])), "Yes");
+  assert.equal(val(sel("Are you 16 years of age or older?", ["Yes", "No"])), "Yes");
+  assert.notEqual(ae.classifyQuestion(sel("Are you younger than 18 years old?", ["Yes", "No"])), "age18");
+});

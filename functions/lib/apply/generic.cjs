@@ -228,7 +228,7 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
   if (hasOpts && /veteran/.test(l) && !/(served|serving)\b.{0,50}(military|armed forces)/.test(l)) {
     const vet = String(profile.eeoVeteran || "");
     let wants = null;
-    if (/not a (protected )?veteran|^no\b|i am not/i.test(vet)) wants = [/^i am not a veteran\b/i, /\bnot a veteran\b/i, /^i am not a protected veteran/i, /^no\b/i];
+    if (/not a (protected )?veteran|^no\b|i am not/i.test(vet)) wants = [/^i am not a veteran\b/i, /\bnot a veteran\b/i, /^i am not a protected veteran/i, /^i am not a (category|covered) veteran/i, /^no\b/i];
     else if (/decline|not wish|prefer not|do not want/i.test(vet)) wants = [/do not wish|decline|prefer not|choose not/i];
     else if (/protected veteran|identify as one or more|^yes/i.test(vet)) wants = [/identify as one or more|one or more of the classifications|^i am a protected veteran/i, /^yes\b/i];
     const v = wants && pickOption(q, wants);
@@ -547,7 +547,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   const qOf = (r) => questions[mapped.answers.indexOf(r)];
   if (openai) {
     const choiceParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
-      .filter(({ r, q }) => q && !fills.some((f) => f.path === q.path) && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
+      .filter(({ r, q }) => q && !/^only you can answer/i.test(r.note || "") && !fills.some((f) => f.path === q.path) && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
     await pool(choiceParked, 4, async ({ r, q }) => {
       try {
         const opts = q.fields[0].values;
@@ -561,7 +561,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
       } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
     });
     const openParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
-      .filter(({ r, q }) => q && aiMayWrite(q) && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+      .filter(({ r, q }) => q && aiMayWrite(q) && !/^only you can answer/i.test(r.note || "") && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
     await pool(openParked, 4, async ({ r, q }) => {
       try {
         const num = fieldKind(q.fields[0]) === "number";

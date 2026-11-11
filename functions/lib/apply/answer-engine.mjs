@@ -208,6 +208,9 @@ function classify(label, kind = "") {
   // Degree gates: "Do you have a four year degree?", "Master's, PhD or equivalent".
   if (choice && /do you (currently |already |presently )?(have|hold|possess) (a |an )?(.{0,30})?(bachelor|master|phd|ph\.d|doctorate|doctoral|four.year degree|4.year degree|college degree|university degree|degree in|juris doctor|j\.d\.|mba)/.test(l)) return "degreeGate";
   // Licenses and certifications: "Do you have your Series 7 AND Series 63 license?"
+  // A driver's license is not a professional credential: "driver's license"
+  // found "s" in the resume and answered Yes (Allstate, J&J, 2026-11-10).
+  if (/driver'?s?'? ?licen[cs]e|driving licen[cs]e|licensed driver/.test(l)) return "driversLicense";
   if (choice && /do you (have|hold|currently hold|possess) .{0,40}\b(licen[cs]e|certification|certificate|certified|cpa|pmp|series \d+)/.test(l)) return "licenseGate";
   // Relationship with this company or a named one: employee, contractor,
   // customer, user, credentialed, interviewing. No unless the resume says so.
@@ -301,6 +304,10 @@ function classify(label, kind = "") {
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
   if (has("authorized", "work") && l.includes("without") && (l.includes("sponsor") || l.includes("visa"))) return "authorizedWithoutSponsorship";
+  // "Authorized … without any restrictions to the length of employment? (Answer
+  // No if you are in a non-immigrant status such as H, L, F, including OPT)"
+  // (U.S. Bank): a status question; OPT is authorized but time-limited.
+  if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under) a non.?immigrant|unrestricted (work|employment) authori|permanent(ly)? authori[sz]ed to work/.test(l)) return "unrestrictedAuth";
   // "Will you require/need sponsorship" -> requiresSponsorship. Deliberately does
   // NOT match "currently in a sponsored status" (a different, status question).
   if (/(require|need).{0,20}sponsor/.test(l) || /sponsorship.{0,20}(visa|now|future|employment)/.test(l) || has("will you", "sponsorship") || /(commence|sponsor|file) (or sponsor )?an immigration (case|petition)|immigration case|(require|need) (a |an )?(visa|work permit|work visa) (to|in order to)/.test(l)) return "requiresSponsorship";
@@ -342,7 +349,11 @@ function classify(label, kind = "") {
   if (/provide .{0,30}references|professional references/.test(l)) return "referencesWilling";
   // Word-bounded: "current ... company" as substrings misfires on labels like
   // "current employees of a publicly-traded company" (Robinhood COI).
-  if (/\b(current|most recent|present)\s*((\/|or)\s*(previous|past|most recent|last)\s+)?(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
+  // "Please initial that you acknowledge…" (Samsung): the person's initials.
+  if (/please initial\b|\binitial (here|below|that|this|to)\b|(enter|type|provide) your initials|^initials?$/.test(l)) return "initials";
+  // "…belonging to any current or previous employer" names no employer to fill
+  // in (Samsung's confidentiality statement got "Runn Technologies").
+  if (!/\bany (current|former|previous|past|prior)\b/.test(l) && /\b(current|most recent|present)\s*((\/|or)\s*(previous|past|most recent|last)\s+)?(company|employer)\b/.test(l) || /most recently worked|list your most recent employer|^current company$/.test(l)) return "currentCompany";
   if (/security clearance/.test(l)) return "securityClearance";
   // "Select a response that describes your level of experience with AI tools"
   // (Exploratory / Individual / Team / Cross-functional): picked from the resume.
@@ -390,14 +401,14 @@ function classify(label, kind = "") {
   // "Hear about" only as the source of the application: "We would love to
   // hear about why you are interested" (Scale AI) is a motivation question.
   if (any("how did you hear", "how you hear", "referral source") || (/\bhear about (us|this|the|our|scale|[a-z]+ (role|job|position|opening|opportunity))\b/.test(l) && !/\bwhy\b/.test(l))) return "heardAboutUs";
-  if (/(how many )?years of .{0,90}experience/.test(l)) return "yearsExperience";
+  if (/(how many )?years (of )?.{0,90}experience/.test(l)) return "yearsExperience";
   if (l.includes("linkedin")) return "linkedin";
   if (l.includes("github")) return "github";
   if (any("portfolio", "website", "personal site")) return "portfolio";
   if (has("legal", "first name") || has("legal", "given name")) return "legalFirstName";
   if (has("legal", "last name") || has("legal", "family name") || has("legal", "surname")) return "legalLastName";
   if (has("legal", "name") && !l.includes("first") && !l.includes("last")) return "legalFullName";
-  if (/18\+|18 or older|at least 18|over (the age of )?18|18 years of age/.test(l)) return "age18";
+  if (/18\+|18 or older|at least 18|over (the age of )?18|18 years of age|(16|18) years (of age )?or older/.test(l) && !/younger|under (the age of )?18/.test(l)) return "age18";
   if (has("preferred", "name") || has("name", "prefer")) return "preferredName";
   if (any("pronoun")) return "pronouns";
   if (has("gender") || l.includes("gender identity")) return "eeoGender";
@@ -420,7 +431,9 @@ export const BARE_LINKS = { linkedin: "https://www.linkedin.com/", github: "http
 const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "fullAddress", "availability", "noticePeriod", "heardAboutUs", "currentCompany", "conditionalFollowup", "referral", "workSample", "publications", "location", "cityState", "linkedin", "github", "portfolio", "university", "currentTitle",
   "requiresSponsorship", "workAuthorized", "willingToWorkHybrid", "preferredLanguage", "referredYesNo", "notApplicable", "ownWorkStatement", "testScore",
   // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
-  "yearsExperience"]);
+  "yearsExperience",
+  // "Please initial that you acknowledge…" in a paragraph box (Samsung).
+  "initials", "driversLicense", "unrestrictedAuth"]);
 
 // Programming languages, as the resume spells them. Names that are also
 // ordinary words or letters (Go, R, C) count only from the skills list.
@@ -458,6 +471,24 @@ function inResume(rt, term) {
   if (term.length > 3) return rt.includes(term);
   return new RegExp(`(^|[^a-z0-9+#])${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9+#])`).test(rt);
 }
+/** Does the person's degree field match the fields a degree question names
+ *  ("degree in Computer Science, Engineering, or a related field")? true,
+ *  false, or null when the question names no field or the profile has none. */
+const DEGREE_FIELD_STOP = new Set(["a", "an", "the", "of", "in", "and", "or", "related", "field", "fields", "discipline", "disciplines", "area", "areas", "similar", "equivalent", "other", "relevant", "degree", "science", "sciences", "studies", "study", "major", "program", "accredited", "four", "year", "bachelor", "bachelors", "master", "masters", "associate", "associates", "s", "e", "g", "eg", "etc", "such", "as", "like"]);
+const QUANT_FIELD = /computer|software|engineer|math|statistic|physics|data|informatics|information (technology|systems)|electrical|electronics/;
+export function degreeFieldMatches(label, eduText) {
+  const edu = norm(eduText);
+  if (!edu.replace(/[^a-z]/g, "")) return null;
+  const m = norm(label).replace(/[’']/g, "").match(/degree (?:or higher )?in (?:an? |the )?([^?.!]+)/);
+  if (!m || /^(hand|progress|the next|next|\d|one|two|three|four|five|six|twelve|order|addition|lieu)\b/.test(m[1])) return null;
+  if (/related|equivalent|similar/.test(m[1]) && QUANT_FIELD.test(edu) && /stem|technical|quantitative|computer|engineer|math|science/.test(m[1])) return true;
+  const alts = m[1].split(/,|\bor\b|\/|\band\b/).map((a) => a.trim().split(/\s+/).map((w) => w.replace(/[^a-z]/g, "")).filter((w) => w.length > 1 && !DEGREE_FIELD_STOP.has(w))).filter((a) => a.length);
+  if (!alts.length) return null;
+  if (alts.some((a) => a.some((w) => /^(stem|technical|quantitative)$/.test(w))) && QUANT_FIELD.test(edu)) return true;
+  const stem = (w) => w.replace(/(ical|ics|ic|y|al|s)$/, "");
+  return alts.some((a) => a.every((w) => edu.includes(stem(w)))) ? true : false;
+}
+
 export function experienceEvidence(label, resumeText) {
   const rt = norm(resumeText);
   if (!rt) return null;
@@ -1108,9 +1139,16 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
 
   // Years in a specific domain the resume never mentions: the lowest bucket.
   if (key === "yearsExperience" && isSelect) {
-    const domainQ = norm(label).replace(/.*?\byears? of\b/, "experience in");
-    if (/experience in \S/.test(domainQ) && !/relevant|professional|total|overall|work|industry|full.?time|software|engineering/.test(domainQ) && experienceEvidence(domainQ, profile.resumeText || "") === false) {
-      const m = findOnly(primary, [/^(0|none|no |less than|under|<|fewer)/, /^0\s*-|^0–|^0 to/]);
+    // "How many years of clinical experience in blood draw/venipuncture do you
+    // have?" -> "experience in blood draw/venipuncture" (Labcorp, Boeing got the
+    // total years for aerospace maintenance and phlebotomy, 2026-11-10).
+    const what = norm(label).replace(/^.*?\byears?\b\s*(of\s+)?/, "")
+      .replace(/\b(professional|clinical|hands.on|work|working|relevant|direct|practical)?\s*experience\b/, " ")
+      .replace(/\b(do|does) you (currently )?(have|possess)\b|\bhave you (had|got)\b/g, " ")
+      .replace(/\s+/g, " ").trim().replace(/^(in|with|as|at|on|of|doing)\s+/, "");
+    const domainQ = `experience in ${what}`;
+    if (what.length > 2 && !/relevant|professional|total|overall|\bwork\b|industry|full.?time|software|engineering|align|similar|job description|this (role|position|job)|the (role|position)|independent|\bteams?\b|communicat|pressure|deadline|collaborat|fast.?paced|multitask/.test(what) && experienceEvidence(domainQ, profile.resumeText || "") === false) {
+      const m = findOnly(primary, [/^(none|no experience|no\b|0 years?$|n\/a)/, /^(0|less than|under|<|fewer)/, /^0\s*-|^0–|^0 to/]);
       if (m) return out([{ name, value: m.value }], SOURCE.RESUME, 0.85, "none of that on the resume");
     }
   }
@@ -1132,6 +1170,8 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       const whole = Math.floor(n);
       const bucket = (t) => {
         let m;
+        // "0 - 6 months", "6 - 11 months": under a year (once read as 0–6 years).
+        if (/month/.test(t) && !/year/.test(t)) return [0, 0];
         if ((m = t.match(/less than (\d+)|under (\d+)/))) return [0, Number(m[1] || m[2]) - 1];
         if ((m = t.match(/(\d+)\s*[–-]\s*(\d+)/))) return [Number(m[1]), Number(m[2])];
         if ((m = t.match(/(\d+)\s*(?:\+|or more)/))) return [Number(m[1]), Infinity];
@@ -1242,6 +1282,33 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
         : unanswered('no "Yes" option');
     }
     return out([{ name, value: "Yes" }], SOURCE.RULE, 0.9, "18+ confirmation");
+  }
+
+  // Authorized with no limit on the length of employment: No for anyone on a
+  // student or sponsored visa (F-1 OPT is authorized, but time-limited).
+  if (key === "unrestrictedAuth") {
+    const req = norm(profile.requiresSponsorship), auth = norm(profile.workAuthorized), vs = profile.visaStatus || {};
+    const ans = req === "yes" || vs.student || vs.sponsored ? "No" : req === "no" && auth === "yes" ? "Yes" : null;
+    if (!ans) return unanswered("cannot resolve unrestricted work authorization from profile");
+    if (isSelect) { const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + ans.toLowerCase() + "\\b")]); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "time-limited status") : unanswered(`no "${ans}" option`); }
+    return out([{ name, value: ans }], SOURCE.PROFILE, 1);
+  }
+  // Initials ("Please initial that you acknowledge this statement").
+  if (key === "initials") {
+    const ini = [profile.firstName, profile.lastName].filter(Boolean).map((x) => String(x).trim()[0].toUpperCase()).join("");
+    return ini && !isSelect ? out([{ name, value: ini }], SOURCE.PROFILE, 1, "initials") : unanswered("initials");
+  }
+  // Driver's license: only from the Profile (profile.driversLicense); never the
+  // AI or the resume. The number itself is always the person's.
+  if (key === "driversLicense") {
+    const has = profile.driversLicense;
+    const v = has === true || /^y/i.test(String(has ?? "")) ? "Yes" : has === false || /^n/i.test(String(has ?? "")) ? "No" : null;
+    if (v && isSelect && !/number|state of issue|expir/.test(norm(label))) {
+      const m = matchOption(primary, v) || findOnly(primary, [new RegExp("^" + v.toLowerCase() + "\\b")]);
+      if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 1, "driver's license");
+    }
+    if (!isSelect && /^(n\/?a|not applicable)$/i.test(String(has ?? ""))) return out([{ name, value: "N/A" }], SOURCE.PROFILE, 1);
+    return unanswered("Only you can answer: driver's license (no driver's license fact in the Profile)");
   }
 
   // Authorized to work without sponsorship: resolve from BOTH fields.
@@ -1468,6 +1535,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     else if (/phd|ph\.d|doctorate|doctoral/.test(ll) && !/master|or equivalent|bachelor/.test(ll)) ans = hasPhd ? "Yes" : "No";
     else if (/master|mba/.test(ll)) ans = hasMaster || hasPhd ? "Yes" : /or equivalent|equivalent practical/.test(ll) && hasBach ? "Yes" : "No";
     else ans = hasBach || hasMaster || hasPhd ? "Yes" : "No";
+    // "…degree in a Chemical or Biological science, Clinical Laboratory Science
+    // or Medical Technology" (Labcorp): the degree's field has to be one named.
+    if (ans === "Yes") {
+      const fieldOk = degreeFieldMatches(ll, (profile.education || []).map((e) => `${e.degree || ""} ${e.field || ""}`).join(" | "));
+      if (fieldOk === false) return pickYesNo("No", "degree is in another field", SOURCE.RESUME, 0.9);
+    }
     return pickYesNo(ans, "from the resume's education", SOURCE.RESUME, 0.9);
   }
   if (key === "licenseGate") {
