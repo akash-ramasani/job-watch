@@ -443,8 +443,10 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   let appliedBefore = null;
   if (job.companyName) {
     try {
-      const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(1).get();
-      appliedBefore = !apps.empty;
+      // Submitted applications only: a form filled to Review in a test run, or
+      // left for the person, was never sent to the company.
+      const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(20).get();
+      appliedBefore = apps.docs.some((d) => d.data()?.status === "submitted");
     } catch (_) { /* unknown -> the question parks */ }
   }
   const profile = buildProfileForJob(user, resume, job, { appliedBefore });

@@ -74,3 +74,13 @@ test("'Are you currently employed?' is the resume's present role, not this compa
   assert.equal(val(q, { ...P, roles: [{ company: "Oracle", title: "SDE II", endDate: "Jul 2024" }] }), "No");
   assert.equal(ae.classifyQuestion(sel("Are you currently employed by Microchip?", ["Yes", "No"])), "companyRelationship");
 });
+
+test("'Have you ever applied here?' comes from the submitted-applications record", () => {
+  for (const l of ["Have you ever applied for employment with this company?", "Have you applied on any previous occasions for employment in any capacity with Micron?", "Have you ever Applied for Work at Cadence?"]) {
+    assert.equal(ae.classifyQuestion(sel(l, ["Yes", "No"])), "previouslyApplied");
+    assert.equal(val(sel(l, ["Yes", "No"]), { ...P, appliedToCompanyBefore: true }), "Yes");
+    assert.equal(val(sel(l, ["Yes", "No"]), { ...P, appliedToCompanyBefore: false }), "No");
+  }
+  assert.equal(val(sel("Have you ever applied for employment with this company?", ["Yes, I have applied previously", "No, I have not applied previously"]), { ...P, appliedToCompanyBefore: false }), "No, I have not applied previously");
+  assert.notEqual(ae.classifyQuestion(sel("Have you previously interviewed for employment with HCSC in the last 12 months?", ["Yes", "No"])), "previouslyApplied");
+});

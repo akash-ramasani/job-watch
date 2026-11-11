@@ -52,8 +52,10 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   let appliedBefore = null;
   try {
     if (job.companyName) {
-      const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(1).get();
-      appliedBefore = !apps.empty;
+      const apps = await db.collection("users").doc(uid).collection("applications").where("companyName", "==", job.companyName).limit(20).get();
+      // Submitted applications only: this form's own record (made when it
+    // started) and forms never sent do not count (2026-11-10).
+    appliedBefore = apps.docs.some((d) => d.data()?.status === "submitted");
     }
   } catch (_) { /* unknown -> the question parks */ }
   const profileForJob = buildProfileForJob(profile, resume, job, { appliedBefore });

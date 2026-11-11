@@ -342,7 +342,12 @@ function classify(label, kind = "") {
   }
   // "Previously applied" is NOT "previously worked" — it needs application
   // history, not employment history.
-  if (/previously applied|applied (to|for) (a |an )?.{0,30}(position|role|job)|applied (here|before|with us)|ever interviewed|interviewed (at|with|here)/.test(l)) return "previouslyApplied";
+  // "Have you ever applied for employment with this company?", "…applied on any
+  // previous occasions … with Micron?", "Have you ever Applied for Work at
+  // Cadence?" (Workday): from JobWatch's own record of submitted applications,
+  // not the AI's guess of No. Interviewing is not applying: those stay out.
+  if (!/interview/.test(l) && (/previously applied|applied (to|for) (a |an )?.{0,30}(position|role|job)|applied (here|before|with us)/.test(l)
+    || /(have|had) you (ever |previously )?(applied|submitted an application)\b|applied on (any )?previous occasions|ever applied (for|to|at|with)|applied for (work|employment)/.test(l))) return "previouslyApplied";
   if (has("worked", "before") || has("previously", "worked") || has("consult", "before") || /have you (ever )?worked (at|for)/.test(l) || /worked (here|at this company)/.test(l) || /former .{0,25}(employee|intern)/.test(l) || /been employed (by|at|with)/.test(l) || /provided services to/.test(l) || /employment agency|placement firm/.test(l) || /employment history/.test(l) || /currently (an? )?.{0,30}(employee|contractor|intern)s? (at|of|with)\b/.test(l)) return "workedHereBefore";
   // Conflict-of-interest disclosures (family at the company/vendors, outside
   // business activities, government-official ties). Checked before
@@ -1053,7 +1058,8 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     if (v == null) return unanswered("previously-applied needs application history (set profile.appliedToCompanyBefore)");
     const ans = v ? "Yes" : "No";
     if (isSelect) {
-      const m = matchOption(primary, ans);
+      // "No, I have not applied previously" (Comcast) as well as plain Yes / No.
+      const m = matchOption(primary, ans) || findOnly(primary, [new RegExp("^" + ans.toLowerCase() + "\\b")]);
       return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`);
     }
     return out([{ name, value: ans }], SOURCE.PROFILE, 1);
