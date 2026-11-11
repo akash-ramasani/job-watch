@@ -98,3 +98,13 @@ test("Profile > Application questions answer their many wordings", () => {
   // Not answered in the Profile: AI consent is left to the AI pick.
   assert.equal(ae.answerQuestion(sel("Visa may use automated tools such as AI to support review of your application for this role", ["Opt-In", "Opt-Out"]), P, null).answers.length, 0);
 });
+
+test("undergraduate and graduate GPA come from the matching school", () => {
+  const p = { ...P, gpa: "3.9", education: [{ degree: "Master of Science", field: "Computer Science", gpa: "3.9" }, { degree: "Bachelor of Technology", field: "CSE", gpa: "8.2/10" }] };
+  const t = (l) => ({ label: l, required: true, fields: [{ name: "q", type: "input_text" }] });
+  assert.equal(val(t("What was your undergraduate cumulative GPA?"), p), "8.2/10");
+  assert.equal(val(t("What was your graduate cumulative GPA?"), p), "3.9");
+  assert.equal(val(t("GPA"), p), "3.9");
+  // No GPA saved for the bachelor's: left for the person, not the master's number.
+  assert.equal(ae.answerQuestion(t("What was your undergraduate cumulative GPA?"), { ...p, education: [p.education[0], { degree: "B.Tech" }] }, null).answers.length, 0);
+});

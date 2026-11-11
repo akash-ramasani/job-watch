@@ -509,7 +509,10 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   //     time do you enjoy coding?"): the AI answers in the box's own format.
   if (openai) {
     const openParked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] }))
-      .filter(({ r, q }) => q && !aiPicked.has(r.label) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+      // Also a required box the first pass left empty (an AI call that failed or
+      // declined): one more try, as Greenhouse's step 5a does.
+      .filter(({ r, q }) => q && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && ["number", "text", "longtext"].includes(fieldKind(q.fields[0]))
+        && (/unrecognized field/i.test(r.note || "") || (q.required && /free-text|AI (failed|call failed|gave no|could not|answer was empty)|no AI available/i.test(`${r.note || ""} ${aiNotes.get(r.label) || ""}`))));
     await pool(openParked, 4, async ({ r, q }) => {
       try {
         const num = fieldKind(q.fields[0]) === "number";

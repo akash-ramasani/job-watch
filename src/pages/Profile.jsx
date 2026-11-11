@@ -217,7 +217,8 @@ export default function Profile({ user, userMeta }) {
         // Education and certifications for applications; until saved here,
         // they start from the resume.
         applicationEducation: (userMeta.applicationEducation?.length ? userMeta.applicationEducation : (savedResumeFull?.education || []))
-          .map((e) => ({ institution: e.institution || e.school || "", degree: e.degree || "", field: e.field || e.major || "", startDate: e.startDate || "", endDate: e.endDate || "" })),
+          // GPA is per school now; the old single GPA belongs to the latest (first) school.
+          .map((e, i) => ({ institution: e.institution || e.school || "", degree: e.degree || "", field: e.field || e.major || "", startDate: e.startDate || "", endDate: e.endDate || "", gpa: e.gpa || (i === 0 ? userMeta.gpa || "" : "") })),
         certifications: (userMeta.certifications?.length ? userMeta.certifications : (savedResumeFull?.certifications || [])).join("\n"),
       });
     }
@@ -263,6 +264,8 @@ export default function Profile({ user, userMeta }) {
       };
       // Forms ask "University" on its own: the first school above.
       saveData.university = saveData.applicationEducation[0]?.institution || userMeta?.university || "";
+      // "GPA" asked on its own: the latest school's (forms and older code read profile.gpa).
+      saveData.gpa = saveData.applicationEducation[0]?.gpa || "";
       await setDoc(doc(db, "users", user.uid), saveData, { merge: true });
       showToast("Profile updated successfully", "success");
     } catch {
@@ -670,7 +673,7 @@ export default function Profile({ user, userMeta }) {
               <div className="flex items-center justify-between mb-4">
                 <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Education</p>
                 <button type="button" className="text-xs font-bold text-indigo-600 hover:text-indigo-800"
-                  onClick={() => setFormData((f) => ({ ...f, applicationEducation: [...f.applicationEducation, { institution: "", degree: "", field: "", startDate: "", endDate: "" }] }))}>
+                  onClick={() => setFormData((f) => ({ ...f, applicationEducation: [...f.applicationEducation, { institution: "", degree: "", field: "", startDate: "", endDate: "", gpa: "" }] }))}>
                   + Add school
                 </button>
               </div>
@@ -686,9 +689,10 @@ export default function Profile({ user, userMeta }) {
                         <input type="text" aria-label="School" className="input-standard" placeholder="School" value={ed.institution} onChange={(e) => setEd({ institution: e.target.value })} />
                         <input type="text" aria-label="Degree" className="input-standard" placeholder="Degree, e.g. Master of Science" value={ed.degree} onChange={(e) => setEd({ degree: e.target.value })} />
                         <input type="text" aria-label="Field of study" className="input-standard" placeholder="Field of study, e.g. Computer Science" value={ed.field} onChange={(e) => setEd({ field: e.target.value })} />
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-3 gap-3">
                           <input type="text" aria-label="Start" className="input-standard" placeholder="Start, e.g. Aug 2024" value={ed.startDate} onChange={(e) => setEd({ startDate: e.target.value })} />
                           <input type="text" aria-label="End" className="input-standard" placeholder="End, e.g. May 2026" value={ed.endDate} onChange={(e) => setEd({ endDate: e.target.value })} />
+                          <input type="text" aria-label="GPA" className="input-standard" placeholder="GPA, e.g. 3.6" value={ed.gpa || ""} onChange={(e) => setEd({ gpa: e.target.value })} />
                         </div>
                       </div>
                     </div>
@@ -696,11 +700,7 @@ export default function Profile({ user, userMeta }) {
                 })}
                 {!formData.applicationEducation.length && <p className="text-xs text-gray-400">No schools yet.</p>}
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mt-5">
-                <div>
-                  <label htmlFor="gpa" className="caps-label block mb-2">GPA</label>
-                  <input id="gpa" name="gpa" type="text" value={formData.gpa} onChange={handleChange} className="input-standard" placeholder="3.6" />
-                </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-5">
                 <div>
                   <label htmlFor="satScore" className="caps-label block mb-2">SAT Score</label>
                   <input id="satScore" name="satScore" type="text" value={formData.satScore} onChange={handleChange} className="input-standard" placeholder="Leave blank if none" />

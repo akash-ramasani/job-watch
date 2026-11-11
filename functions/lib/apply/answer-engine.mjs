@@ -216,7 +216,7 @@ function classify(label, kind = "") {
   if (choice && (/\bare you (comfortable|ok|okay|fine|happy|alright) with (that|this|it)\??$/.test(l) || /(comfortable|willing|open|able) (to |with )?(complet\w*|tak\w*|do\w*|participat\w*) .{0,50}(take.?home|assessment|assignment|exercise|coding (test|challenge)|technical (interview|screen))/.test(l))) return "comfortableYes";
 
   // Scores and grades: profile values only (gpa, satScore, actScore), never guessed.
-  if (/^(cumulative |undergraduate |graduate |overall )?gpa\b|\bgpa\s*\(|what (was|is) your gpa|^sat score|^act score|\b(sat|act) (score|result)/.test(l)) return "testScore";
+  if (/^(cumulative |undergraduate |graduate |overall )?gpa\b|\bgpa\s*\(|what (was|is) your (\w+ ){0,3}gpa|^sat score|^act score|\b(sat|act) (score|result)/.test(l)) return "testScore";
   // "<Language> Proficiency", "What is your level of English proficiency?"
   if (choice && /^[a-z]+ proficiency\b|level of [a-z]+ proficiency|proficiency in [a-z]+$|fluent in\b|languages? (in which )?you (are|speak)|which languages/.test(l) && !/program|coding|computer/.test(l)) return "languageProficiency";
   // Degree gates: "Do you have a four year degree?", "Master's, PhD or equivalent".
@@ -400,7 +400,7 @@ function classify(label, kind = "") {
   if (["location", "location:", "current location", "your location"].includes(l)) return "location";
   if (l === "name" || l === "full name" || l === "your name") return "legalFullName";
   if (any("metropolitan area", "metro area")) return "metroArea";
-  if (/which programming language|preferred (programming )?language|language.{0,25}prefer/.test(l)) return "preferredLanguage";
+  if (/which (programming|coding) language|preferred (programming |coding )?language|(programming|coding) language.{0,25}prefer|language.{0,25}prefer/.test(l)) return "preferredLanguage";
   // Relocation questions before the address fields — "relocating to New York
   // City" must not be mistaken for a City address field.
   if (/open to relocat|willing to relocate|relocating to|able to relocate|commuting distance|commutable/.test(l)) return "willingToRelocate";
@@ -443,7 +443,7 @@ function classify(label, kind = "") {
   if (any("race", "ethnicity")) return "eeoEthnicity";
   if (l.includes("veteran")) return "eeoVeteran";
   if (l.includes("disability")) return "eeoDisability";
-  if (any("salary", "compensation expectation", "expected pay", "desired salary", "ideal compensation", "compensation (usd", "base compensation", "pay expectation", "expected compensation", "target compensation", "compensation range")) return "salaryExpectation";
+  if (any("salary", "compensation expectation", "expected pay", "desired salary", "ideal compensation", "compensation (usd", "base compensation", "pay expectation", "expected compensation", "target compensation", "compensation range", "desired compensation", "desired pay", "desired base")) return "salaryExpectation";
   if (any("notice period", "when can you start", "availability", "start date") || /how soon (can|could|would) you (start|begin|join)|earliest.{0,25}\b(start|join|begin|available)|when (could|can|would|are|will) you (be )?(able to )?(start|begin|join|available)|(available|availability) to (start|begin|join)|(desired|target|anticipated|preferred|ideal|expected|possible) start|date (you )?(can|could|would) (start|join|begin)/.test(l)) return "availability";
   if (has("willing", "relocate") || l.includes("relocation")) return "willingToRelocate";
   if (any("hybrid", "in-office", "onsite", "on-site", "office hub", "anchor day") || /days.{0,20}(in|from|at).{0,25}office/.test(l) || /commut(e|ing) to .{0,40}(office|location|hq)/.test(l) || /in.?person,? ?(\d|four|five|three)/.test(l) || /(\d|three|four|five)[-+]? ?(or more )?days (a|per) week/.test(l) || /office .{0,20}(three|four|five|3|4|5) (days|times)/.test(l) || /in.?office attendance/.test(l) || /work from the office/.test(l) || /come into the .{0,30}office/.test(l) || /willing to work (from|in|at).{0,15}office/.test(l) || /work(ing)? in.?person/.test(l)) return "willingToWorkHybrid";
@@ -1519,7 +1519,15 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   };
   if (key === "testScore") {
     const ll = norm(label);
-    const v = /gpa/.test(ll) ? profile.gpa : /\bsat\b/.test(ll) ? profile.satScore : /\bact\b/.test(ll) ? profile.actScore : null;
+    // "Undergraduate GPA" / "graduate GPA": that school's GPA (Profile >
+    // Education, per school), else the single GPA (MIO Partners asked both).
+    const edu = Array.isArray(profile.education) ? profile.education : [];
+    const isGrad = (e) => /master|m\.?s\.?\b|m\.?sc|m\.?tech|m\.?eng|mba|ph\.?d|doctor/i.test(`${e.degree || ""}`);
+    const schoolGpa = /undergrad|bachelor|b\.?s\.?\b/.test(ll) ? edu.find((e) => e.gpa && !isGrad(e))?.gpa
+      : /\bgraduate\b|master|post.?grad|\bm\.?s\.?\b/.test(ll) ? edu.find((e) => e.gpa && isGrad(e))?.gpa : null;
+    // Only a single GPA saved (no per-school values): it answers as before.
+    const perSchool = edu.some((e) => e.gpa);
+    const v = /gpa|grade point/.test(ll) ? (schoolGpa != null ? schoolGpa : perSchool && /undergrad|bachelor|\bgraduate\b|master/.test(ll) ? null : profile.gpa) : /\bsat\b/.test(ll) ? profile.satScore : /\bact\b/.test(ll) ? profile.actScore : null;
     if (v == null || v === "") {
       // "Not applicable / Did not take / Do not recall" is an honest pick when no score is saved.
       const na = isSelect ? findOnly(primary, [/not applicable|did not take|do not recall|n\/a|prefer not|decline/]) : null;

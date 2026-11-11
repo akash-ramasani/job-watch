@@ -33,7 +33,8 @@
     if (!want) return null;
     const heads = [...document.querySelectorAll("label, legend, span, div, p, h3, h4, h5")]
       .filter((e) => e.children.length <= 4 && e.textContent.length < want.length + 80)
-      .filter((e) => { const t = nrm(e.textContent); return t === want || (want.length > 12 && (t.startsWith(want) || want.startsWith(t) && t.length > 12)); });
+      // A short name also finds its fuller label: "Location" -> "Location (City)" (Greenhouse, 21 forms).
+      .filter((e) => { const t = nrm(e.textContent); return t === want || (want.length > 12 && (t.startsWith(want) || want.startsWith(t) && t.length > 12)) || (t.startsWith(want) && /^\s*[(:*]/.test(t.slice(want.length)) && t.length <= want.length + 30); });
     // An answer option that reads like the question ("LinkedIn" under "How
     // did you hear about us?") is not the question: question labels first,
     // exact text before partial, options only when nothing else matches.

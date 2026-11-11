@@ -111,6 +111,7 @@
 
     let codeTries = 0;
     let extraPress = false;
+    const rescueWhy = new Map(); // label -> why the AI rescue could not fill it
     let last = { errs: [], formSaid: "" };
     const press = async (btn) => { btn.scrollIntoView({ block: "center" }); await safe(() => b.beforeClick?.(), null); btn.click(); };
 
@@ -184,6 +185,7 @@
           const r = await safe(() => window.__jwRescue(label, { ...meta, error: text || "This field is required.", force: true }), null);
           log("repair:", label, text, r);
           if (r?.ok) { fixed++; answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+          else if (r?.why || r?.error) rescueWhy.set(label, String(r.why || r.error).slice(0, 160));
         }
       }
       if (fixed) { say(`fixed ${fixed} field${fixed === 1 ? "" : "s"}, submitting again…`); continue; }
@@ -194,11 +196,16 @@
     return finish();
 
     async function finish(note = "", text = "") {
+      // Why each field is still empty: the form's words, then the AI rescue's reason.
+      const said = (l) => {
+        const t = fields.find((e) => (e.label || e.path) === l)?.text || "the form still marks it";
+        return rescueWhy.has(l) ? `${t}. AI: ${rescueWhy.get(l)}` : t;
+      };
       const fields = last.errs.filter((e) => !e.form);
       const left = [...new Set([...fields.map((e) => e.label || e.path), ...await safe(() => b.empty(), [])])].filter(Boolean);
       const list = left.length ? left : (b.needs || []);
       const needsAttention = [
-        ...list.map((l) => ({ label: l, path: fields.find((e) => (e.label || e.path) === l)?.path || "", note: `after Submit: ${fields.find((e) => (e.label || e.path) === l)?.text || "the form still marks it"}` })),
+        ...list.map((l) => ({ label: l, path: fields.find((e) => (e.label || e.path) === l)?.path || "", note: `after Submit: ${said(l)}` })),
         ...(last.formSaid ? [{ label: "form", path: "", note: `after Submit: ${last.formSaid}` }] : []),
       ];
       b.ledger("filled", { answersLog, needsAttention, reasons: await safe(() => b.reasons?.(), []) }).catch?.(() => {});

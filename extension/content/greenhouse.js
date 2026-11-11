@@ -556,7 +556,7 @@
     // not the fill's name "Location" (which it reported as "field not found").
     const pageLabelFor = (l) => {
       if (!/^location$/i.test(l)) return l;
-      const lab = [...document.querySelectorAll("label")].find((x) => /^location\b/i.test((x.textContent || "").trim()));
+      const lab = [...document.querySelectorAll("label, legend, [class*=label i]")].find((x) => /^location\b/i.test((x.textContent || "").trim()) && (x.textContent || "").length < 60);
       return lab ? lab.textContent.replace(/\*/g, "").trim() : l;
     };
     for (const stuckLabel of stuck.slice(0, 8)) {
@@ -751,7 +751,13 @@
       const next = lab.nextElementSibling;
       const required = (groupKey ? !groupKey.endsWith(":optional") : /\*/.test(lab.textContent || "")) || el.required || el.getAttribute("aria-required") === "true"
         || (!!next && !next.matches("input, select, textarea, div") && /^\s*\*\s*$/.test(next.textContent || ""));
-      const errEl = [...((groupKey ? el.closest("fieldset, [role=group], [role=radiogroup]")?.parentElement : wrap)?.querySelectorAll(".field-error, .error-message, [class*='error'], [role=alert]") || [])].find((e) => e.offsetParent !== null && e.textContent.trim());
+      // The error's own element: the input's aria-describedby first, then an
+      // error-class element that is not the label or a wrapper holding the
+      // question (a "*-error" wrapper around the label made the "error" read as
+      // the question itself, and the AI rescue was told so).
+      const described = (el.getAttribute("aria-describedby") || "").split(/\s+/).map((id) => id && document.getElementById(id)).filter((e) => e && e.offsetParent !== null && /error|invalid|required/i.test(`${e.id} ${e.className} ${e.textContent}`));
+      const errEl = described.find((e) => e.textContent.trim()) || [...((groupKey ? el.closest("fieldset, [role=group], [role=radiogroup]")?.parentElement : wrap)?.querySelectorAll(".field-error, .error-message, [id$='-error'], [class*='error'], [role=alert]") || [])]
+        .find((e) => e.offsetParent !== null && e.textContent.trim() && !e.contains(lab) && !e.contains(el) && labelText(e) !== label);
       const error = errEl ? errEl.textContent.replace(/\s+/g, " ").trim().slice(0, 160) : (el.getAttribute("aria-invalid") === "true" ? "this field is not valid" : "");
       if ((required && isEmpty(el)) || error) {
         // Keyed by the box, not the label: two questions can share one wording.

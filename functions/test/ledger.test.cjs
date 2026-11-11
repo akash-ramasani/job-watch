@@ -162,3 +162,15 @@ test("Greenhouse's confirmation page names the same form as its application page
   assert.equal(done.formKey, form.formKey);
   assert.equal(done.formKey, "greenhouse|robinhood|8080893");
 });
+
+test("an 'after Submit' report keeps the earlier note for the same field", () => {
+  const base = { formKey: "greenhouse|xai|1", source: "greenhouse", org: "xai", postingId: "1", companyName: "xAI", jobTitle: "SWE" };
+  let doc = { ...applyEvent(null, { ...base, event: "start" }, T0).patch };
+  doc = { ...doc, ...applyEvent(doc, { ...base, event: "filled", needsAttention: [{ path: "q1", label: "What exceptional work have you done?", note: "AI could not answer honestly from the profile; needs you" }] }, T1).patch };
+  doc = { ...doc, ...applyEvent(doc, { ...base, event: "filled", needsAttention: [{ path: "q1", label: "What exceptional work have you done?", note: "after Submit: This field is required." }] }, T2).patch };
+  assert.equal(doc.needsAttention[0].note, "AI could not answer honestly from the profile; needs you | after Submit: This field is required.");
+  // A new attempt starts clean.
+  doc = { ...doc, ...applyEvent(doc, { ...base, event: "start" }, "2026-10-11T00:00:00.000Z").patch };
+  doc = { ...doc, ...applyEvent(doc, { ...base, event: "filled", needsAttention: [{ path: "q1", label: "What exceptional work have you done?", note: "after Submit: required" }] }, "2026-10-11T00:01:00.000Z").patch };
+  assert.equal(doc.needsAttention[0].note, "after Submit: required");
+});

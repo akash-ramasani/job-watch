@@ -53,6 +53,10 @@ async function chatWithRetry(openai, req, tries = 3) {
 
 const OPINION_Q = /^(why|how|what|describe|tell|share|explain|which|in what|walk us|give us|is there|do you|would you|where do you see)\b/i;
 const EXPERIENCE_Q = /\b(experience|have you (ever )?(worked|led|built|used|done|taken|managed|shipped|designed|run)|familiar(ity)? with|background in|exposure to|worked (with|on)|describe (a|an|your|the|how|when|any)|tell us about|walk us through|examples? of)\b/i;
+// Questions that ask for an example from the person's own work: never left
+// blank (xAI "What exceptional work have you done?" x19, Valence "Tell us about
+// an analysis or model that changed a decision", 2026-11-04..09).
+const STORY_Q = /\b(proudest|exceptional|accomplishment|achievement|impact(ful)?|tell us about|describe (a|an|your|the|how|when|a time)|walk us through|give (us )?an? example|share (a|an) (time|example|project|story)|a time (when|you)|a project|example from|analysis or model|something you (built|shipped|made|did))\b/i;
 const AI_TELL = /\b(as an ai|language model|i am an ai|i'm an ai|chatgpt|openai|prompt|instructions?)\b/i;
 
 /** Words a trap clause asks for ("recipe", "cookies", "poem") that must not
@@ -112,6 +116,11 @@ async function answerFreeText(q, ctx, { openai, writeModel = WRITE_MODEL, saniti
     // Asked about experience the resume does not show: the honest answer
     // says so and names the closest real work, instead of leaving it blank.
     raw = await ask("You may not have done this exact work. Then say so plainly in your first sentence (for example: I have not done that myself), and follow with the closest related work you have done and how it would carry over. Speak as yourself and never mention a resume or profile. Never claim experience, certifications or results that are not given. Do not reply NEEDS_REVIEW.", 0.4);
+  }
+  if ((!raw || /NEEDS_REVIEW/i.test(raw)) && STORY_Q.test(`${q.label} ${q.description || ""}`)) {
+    // An example from the person's own work: the closest real work in the
+    // experience above answers it, in first person, never NEEDS_REVIEW.
+    raw = await ask("This question asks for an example from your own work. Pick the most relevant real work from your experience above (a project, a system you built, a problem you solved) and describe it in first person: what it was, what you did, and the result the experience states. Do not invent numbers, people or events that are not given. Never mention a resume or profile. Do not reply NEEDS_REVIEW.", 0.5);
   }
   if (!raw || /NEEDS_REVIEW/i.test(raw)) return { answer: null, reason: "AI could not answer honestly from the profile; needs you" };
   if (looksTrapped(raw)) {

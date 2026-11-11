@@ -71,3 +71,16 @@ test("answers speak as the person, never about 'the resume' (Partiful)", async (
   assert.match(out, /^I have not worked in a formal product manager role\. At Compass Group I partnered with product which meant/);
   assert.match(out, /I also wrote product requirements\.$/);
 });
+
+test("story questions get a real example instead of NEEDS_REVIEW (xAI 'exceptional work')", async () => {
+  const calls = [];
+  const openai = { chat: { completions: { create: async (req) => { calls.push(req); return { choices: [{ message: { content: /example from your own work/.test(JSON.stringify(req.messages)) ? "At Runn I rebuilt the ad platform on my own. It now runs for over 1200 customers." : "NEEDS_REVIEW" } }] }; } } } };
+  const deps = { openai, model: "t", sanitizeText: st.sanitizeText, STYLE_PROMPT: st.STYLE_PROMPT, aiTrapIn: engine.aiTrapIn, readability: st.readability };
+  const ctx = { name: "Ada", currentTitle: "Engineer", skills: "Python", summary: "", roles: [], projects: [], education: [], jobTitle: "SWE", companyName: "xAI", jobDescription: "" };
+  const r = await answerFreeText({ label: "What exceptional work have you done?", ashbyType: "LongText" }, ctx, deps);
+  assert.match(r.answer || "", /^At Runn I rebuilt the ad platform/);
+  // A private fact still parks: no story retry for a salary number.
+  calls.length = 0;
+  const r2 = await answerFreeText({ label: "What is your current salary?", ashbyType: "String" }, ctx, deps);
+  assert.equal(r2.answer, null);
+});

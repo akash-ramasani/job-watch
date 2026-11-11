@@ -112,7 +112,14 @@ function applyEvent(existing, ev, nowISO) {
     };
   }
   if (event === "filled") {
-    const attention = cleanAttention(ev.needsAttention);
+    // An "after Submit: …" report for a field keeps the note this same
+    // attempt recorded first ("AI could not answer honestly…"): replacing it
+    // lost why the answer was blank (271 stuck forms read only "after Submit").
+    const earlier = cur.lastStartedAt && cur.filledAt && cur.filledAt >= cur.lastStartedAt && Array.isArray(cur.needsAttention) ? cur.needsAttention : [];
+    const attention = cleanAttention(ev.needsAttention).map((a) => {
+      const p = earlier.find((x) => x && x.label === a.label);
+      return p && p.note && /^after Submit/i.test(a.note) && !a.note.includes(p.note) && !/^after Submit/i.test(p.note) ? { ...a, note: str(`${p.note} | ${a.note}`, 400) } : a;
+    });
     const answers = cleanAnswers(ev.answersLog);
     return {
       duplicate: false,
