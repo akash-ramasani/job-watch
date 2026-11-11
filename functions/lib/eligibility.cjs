@@ -45,6 +45,9 @@ const PHRASES = {
     re(`\\b${US} citizen\\s*\\(?\\s*(?:required|only)\\b`),
     re(`\\b${US} citizen(?:ship)? (?:or|and) (?:lawful )?permanent resident(?:s| status)? (?:only|required)\\b`),
     re(`\\b${US} citizenship (?:and|&) [^.;]{0,90}\\b(?:are|is) required\\b`),
+    // The export-control "U.S. person" list named without a "must": "we will ask you … whether you are a
+    // U.S. Citizen or green card holder, or have asylum/refugee status in the U.S." (Echodyne, 2026-11-11).
+    re(`\\b${US} citizens?(?:hip)?\\b[^.;]{0,80}\\b(?:green card|permanent resident)[^.;]{0,80}\\b(?:asylum|asylee|refugee)`),
   ],
   clearance: [
     // "TS/SCI clearance on day one", "Secret clearance at time of hire"
