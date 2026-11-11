@@ -726,6 +726,37 @@
       await closeList(el);
       await sleep(200);
     }
+    // Nothing exact in this company's skills list (Samsung, University of Miami):
+    // a second pass takes close forms holding the whole skill name ("Python 3",
+    // "Python Programming"), the shortest one, never a longer phrase about something else.
+    if (!picked.length) {
+      for (const v of values.slice(0, 6)) {
+        setNative(el, "");
+        el.scrollIntoView({ block: "center" });
+        focusIn(el);
+        realClick(el);
+        await sleep(150);
+        await typeInto(el, v, { keys: true });
+        await sleep(300);
+        const before = openOptions().map(optText).join("|");
+        press(el, "Enter");
+        await sleep(400);
+        const opts = (await waitOptions(2500, before || null)).filter((o) => {
+          const t = nrm(optText(o));
+          return (` ${t} `).includes(` ${nrm(v)} `) && t.split(" ").length <= nrm(v).split(" ").length + 2;
+        }).sort((a, b) => optText(a).length - optText(b).length);
+        if (opts[0]) {
+          const box = () => ((el.isConnected ? el : (r.domId && document.getElementById(r.domId))) || el).closest?.("[data-automation-id^=formField-]");
+          const n0 = box()?.querySelectorAll("[data-automation-id=selectedItem]").length || 0;
+          realClick(optTarget(opts[0]));
+          await sleep(600);
+          if ((box()?.querySelectorAll("[data-automation-id=selectedItem]").length || 0) > n0) picked.push(optText(opts[0]));
+        }
+        await closeList(el);
+        if (picked.length >= 3) break;
+      }
+      setNative(el, "");
+    }
     focusOut(el);
     // Workday redraws the box after picks: judge by the live one.
     const live = (el.isConnected ? el : (r.domId && document.getElementById(r.domId))) || el;

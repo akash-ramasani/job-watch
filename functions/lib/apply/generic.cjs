@@ -196,7 +196,7 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
   }
   // Desired salary as ranges ("$140,000-$160,000"): the range holding the
   // person's number (Salary Expectation, else hourly rate x 2080), CACI.
-  if (hasOpts && /(desired|ideal|target|expected|base) (salary|pay|compensation)|salary (expectation|requirement|range)|compensation expectation/.test(l)) {
+  if (hasOpts && /(desired|ideal|target|expected|base)( [a-z]+){0,2} (salary|pay|compensation)|salary (expectation|requirement|range)|compensation expectation/.test(l)) {
     const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
     let want = num(profile.salaryExpectation);
     if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
@@ -253,7 +253,7 @@ function presetFill(q, dom, profile, startDateFor = null, { source = "" } = {}) 
     const cur = String(profile.currentSalary || "").trim();
     if (cur || dom.type !== "number") return { ...base, kind: "text", value: cur || "Prefer not to disclose" };
   }
-  if (!hasOpts && ["text", "textarea", "number"].includes(dom.type || "text") && /(desired|ideal|target|expected|base) (annual )?(salary|pay|compensation)|salary (expectation|requirement)|compensation expectation/.test(l)) {
+  if (!hasOpts && ["text", "textarea", "number"].includes(dom.type || "text") && /(desired|ideal|target|expected|base)( [a-z]+){0,2} (salary|pay|compensation)|salary (expectation|requirement)|compensation expectation/.test(l)) {
     const num = (x) => { const m = String(x || "").replace(/,/g, "").match(/\$?\s*(\d+(?:\.\d+)?)\s*(k)?/i); return m ? Number(m[1]) * (m[2] ? 1000 : 1) : null; };
     let want = num(profile.salaryExpectation);
     if (!want || want < 1000) { const h = num(profile.hourlyRate); want = h && h < 1000 ? Math.round(h * 2080) : null; }
