@@ -480,7 +480,11 @@
       mode = "create";
     }
     else if (mem.mode === "create" && EXISTS.test(said)) { sendMsg({ type: "WORKDAY_ACCOUNT" }); return resetPassword(mem, creds); }
-    else if (mem.mode && VERIFY.test(said)) return verifyEmail(mem);
+    // After a reset (the email link proved the address), page text that mentions
+    // verification is not a request: sign in first, and wait for a verification
+    // email only when Workday refuses with one (Zebra, Labcorp waited three
+    // minutes for an email never sent, 2026-11-10).
+    else if (mem.mode && VERIFY.test(mem.resetAt && st.mode ? st.errors.join(" ") : said)) return verifyEmail(mem);
     // Made the account; Workday moved on to Sign In, or to its "Sign in with email" chooser (Workday, Jabil).
     else if (mem.mode === "create" && (st.mode === "signin" || st.mode === "chooser") && !st.errors.length) mode = "signin";
     if (mode === "create") mem.triedCreate = true;
