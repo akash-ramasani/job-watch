@@ -604,6 +604,12 @@ async function autoDue(j, st) {
     if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
     return true;
   }
+  // Marked for another try (scripts/retry-stuck.mjs): a new mark starts it
+  // fresh, even after its tries ran out; its old tab closes.
+  if (j.retryToken && r.retryToken !== j.retryToken) {
+    if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
+    return true;
+  }
   // Left on Review before Submit was allowed for it: once more, to submit.
   if (j.submit && r.status === "review" && !r.submit) {
     if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
@@ -830,7 +836,7 @@ async function autoFinishNow(result, tabId, jobId) {
   // no automatic retries; a newly saved answer still brings it back.
   const personOnly = result.status === "needs_attention" && PERSON_ONLY.test(note);
   st.results[cur.jobId] = {
-    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries, submit: !!cur.submit, ...(personOnly ? { personOnly: true } : {}),
+    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries: cur.retryToken && prev?.retryToken !== cur.retryToken ? 1 : tries, submit: !!cur.submit, ...(cur.retryToken ? { retryToken: cur.retryToken } : {}), ...(personOnly ? { personOnly: true } : {}),
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
     ...(["needs_attention", "review"].includes(result.status) ? { tabId: cur.tabId || null } : {}),
   };
