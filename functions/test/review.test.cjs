@@ -38,3 +38,13 @@ test("an empty form makes no call; a bad reply is no issues", async () => {
   assert.deepEqual(await reviewForm({ anthropic: bad, model: "m" }, { items }, {}, {}), { issues: [] });
   assert.equal(cleanItems([{ question: "  " }, null, { question: "Q", answer: 5 }]).length, 1);
 });
+
+test("a 'How did you hear about us' choice never blocks Submit (xAI)", () => {
+  const { cleanIssues } = require("../lib/apply/review.cjs");
+  const items = [{ question: "How did you hear about us?", answer: "Other" }, { question: "Are you located in the US?", answer: "No" }];
+  const out = cleanIssues({ issues: [
+    { question: "How did you hear about us?", problem: "profile says Job Board", fix: "Job Board", severity: "wrong" },
+    { question: "Are you located in the US?", problem: "profile says San Francisco", fix: "Yes", severity: "wrong" },
+  ] }, items);
+  assert.deepEqual(out.map((i) => i.question), ["Are you located in the US?"]);
+});

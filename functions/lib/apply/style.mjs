@@ -82,7 +82,10 @@ export function sanitizeText(input) {
   s = s.replace(/\s*,\s*/g, (m, i, str) => {
     const before = str.slice(0, i).split(/[.\n]/).pop().trim().split(/\s+/).filter(Boolean);
     const after = str.slice(i + m.length).split(/[.\n]/)[0].trim().split(/\s+/).filter(Boolean);
-    const clause = before.length >= 3 && after.length >= 3 && /^(i|we|you|they|it|he|she|this|that|so|but|and|then|my|our)$/i.test(after[0] || "");
+    // "and"/"but"/"so" start a new sentence only before a subject ("and I
+    // liked it"); ", and an MCP server" in a list stays in it (xAI, 2026-11-10).
+    const SUBJ = /^(i|we|you|they|it|he|she|this|that|my|our)$/i;
+    const clause = before.length >= 3 && after.length >= 3 && (SUBJ.test(after[0] || "") || (/^(so|but|and|then)$/i.test(after[0] || "") && SUBJ.test(after[1] || "")));
     return clause ? ". " : " ";
   });
 
