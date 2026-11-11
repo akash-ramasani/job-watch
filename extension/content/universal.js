@@ -182,7 +182,12 @@
 
   /** Compute and fill what is empty on the page now. Returns the scanned fields. */
   async function fillPage(domFields, { onlyIds = null } = {}) {
-    const sendable = domFields.filter((d) => (!d.filled || refill.has(d.id)) && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || "")));
+    // Workday question steps: required questions only; optional ones stay blank
+    // (the person's call, 2026-11-10). A box Workday flags on Save and Continue
+    // (refill) is answered even when it did not read as required.
+    const questionStep = isWorkday && /^(application questions|voluntary disclosures|self identify)/i.test(await gen("stepName").catch(() => ""));
+    const sendable = domFields.filter((d) => (!d.filled || refill.has(d.id)) && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || ""))
+      && (!questionStep || d.required || refill.has(d.id)));
     if (!sendable.length && pkgCache) return [];
     banner("JobWatch is working out your answers.");
     const res = await sendMsg({
@@ -251,7 +256,8 @@
         .map((x) => x.trim()).filter((x) => x && nrm(x) !== nrm(ed.field));
       return mk(field.type === "typeahead" || field.type === "select" ? "typeahead" : "text", ed.field, { match: ed.field, alternates: [...new Set(shorter)] });
     }
-    if (/gpa|overall result|grade/.test(l)) return ed.gpa ? mk("text", String(ed.gpa)) : null;
+    // GPA only where Workday requires it.
+    if (/gpa|overall result|grade/.test(l)) return ed.gpa && field.required ? mk("text", String(ed.gpa)) : null;
     if (/^from$|start/.test(l)) return ed.from ? mk("date", `01/${ed.from.year}`) : null;
     if (/^to\b|end|graduat|expected/.test(l)) return ed.to ? mk("date", `${ed.to.month ? MONTH(ed.to.month) : "05"}/${ed.to.year}`) : null;
     return null;
