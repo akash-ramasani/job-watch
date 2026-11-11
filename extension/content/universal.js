@@ -848,6 +848,15 @@
         trace("stray", { page: location.href, want: AUTO.applyUrl || "" });
         return autoReport("needs_attention", `this tab reached another company's Workday site (${location.hostname}); nothing was filled there`);
       }
+      // "You've already applied for this job" on this job's own page (HPE, submitted
+      // by hand from its Review tab, 2026-11-10): record it and finish.
+      if (AUTO && isWorkday && onOwnJob() && /you('ve| have) already applied for this job/i.test((document.body?.innerText || "").slice(0, 4000))) {
+        trace("result", { status: "submitted", note: "already applied", page: location.href });
+        await ledger("submitted", { jobTitle: header.jobTitle, companyName: header.companyName });
+        submittedSeen = true;
+        banner("JobWatch: you have already applied for this job. Recorded.");
+        return autoReport("submitted", "already applied");
+      }
       // Auto-apply: Workday's cookie banner, then the account form (whatever the scan makes of it).
       if (AUTO) await gen("workdayPress", "legalNoticeAcceptButton", "^accept cookies$").catch(() => false);
       if (AUTO && (await gen("hasPassword").catch(() => false) || (await gen("workdayAuthState").catch(() => ({})))?.mode === "chooser")) return await autoAuth();
