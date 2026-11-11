@@ -257,6 +257,19 @@
     return null;
   }
 
+  function langFill(field, lang) {
+    const l = nrm(field.label);
+    const mk = (kind, value) => ({ path: field.id, label: field.label, kind, value, source: "profile" });
+    if (/^language$/.test(l)) return mk(field.type === "typeahead" || field.widget === "typeahead" ? "typeahead" : "select", lang);
+    if (/fluent|native/.test(l) && (field.type === "checkbox" || field.type === "yesno")) return mk("boolean", "Yes");
+    if (/overall|reading|speaking|writing|comprehension|proficien|level/.test(l)) {
+      const opts = (field.options || []).map((o) => (typeof o === "string" ? o : o?.label)).filter(Boolean);
+      const top = [/native|mother tongue/i, /fluent|full professional|bilingual/i, /expert|advanced/i].map((re) => opts.find((o) => re.test(o))).find(Boolean) || opts[opts.length - 1];
+      return top ? mk("select", top) : null;
+    }
+    return null;
+  }
+
   /** The option that names the resume's degree, from lists as different as
    *  "Master's Degree" (State Street), "MS" (Aerospace) and "Masters of Science"
    *  next to "Master of Strategic Leadership" (Wolters Kluwer), 2026-11-10:
@@ -318,6 +331,9 @@
     const plan = [
       { name: "Work Experience", items: (hist.roles || []).slice(0, 5), fillFor: roleFill },
       { name: "Education", items: (hist.education || []).slice(0, 3), fillFor: eduFill },
+      // Only an entry the company put there already (HP: "Overall*" proficiency
+      // required and left empty, 2026-11-10): English, at the top level.
+      { name: "Languages?", items: ["English"], fillFor: langFill, onlyExisting: true },
       { name: "Websites", items: (hist.links || []).slice(0, 3), fillFor: (field, url) => (/url|website|link/i.test(field.label) ? { path: field.id, label: field.label, kind: "text", value: url, source: "profile" } : null) },
     ];
     for (const sec of plan) {
@@ -325,9 +341,10 @@
       let fields = await gen("scan", { readOptions: false });
       const blocks = () => [...new Set(fields.filter((f) => new RegExp(`^${sec.name}\\b`, "i").test(f.section)).map((f) => f.section))];
       // Workday parsed the resume already: leave its entries to the person.
-      if (blocks().length && fields.some((f) => new RegExp(`^${sec.name}\\b`, "i").test(f.section) && f.filled && f.type !== "yesno")) { log(`${sec.name}: already has entries, leaving them`); continue; }
+      if (!sec.onlyExisting && blocks().length && fields.some((f) => new RegExp(`^${sec.name}\\b`, "i").test(f.section) && f.filled && f.type !== "yesno")) { log(`${sec.name}: already has entries, leaving them`); continue; }
       for (let i = 0; i < sec.items.length; i++) {
         if (blocks().length <= i) {
+          if (sec.onlyExisting) break;
           const added = await gen("workdayAdd", sec.name).catch((e) => ({ ok: false, error: e.message }));
           if (!added?.ok) { warn(`${sec.name}: could not add entry ${i + 1}`, added?.error); break; }
           await sleep(1500); // Workday redraws the section after Add: type once it settles
@@ -597,13 +614,83 @@
 
   /** The step is filled: Save and Continue, or stop on Review. */
   const stepPresses = new Map();
+  /** The questions and answers on Workday's Review page, as text pairs: each
+   *  label line, then its answer (the page lists them that way). Only the
+   *  question steps; My Information and My Experience come from the Profile and
+   *  resume and were checked as they were filled. */
+  function reviewItems(text) {
+    const lines = String(text).split("\n").map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+    const HEAD = /^(application questions( \d+ of \d+)?|voluntary disclosures|self identify|disability|review|my information|my experience|terms and conditions|e\.?e\.?o\.?.{0,30})$/i;
+    const start = lines.findIndex((l, i) => i > 0 && /^application questions/i.test(l) && !/^(completed|current) step/i.test(lines[i - 1] || ""));
+    if (start < 0) return [];
+    const items = [];
+    for (let i = start; i < lines.length - 1; i++) {
+      const q = lines[i];
+      if (HEAD.test(q) || /^(completed|current) step/i.test(q)) continue;
+      const a = lines[i + 1];
+      if (HEAD.test(a)) continue;
+      items.push({ question: q, answer: a, required: false });
+      i++;
+    }
+    return items.slice(0, 120);
+  }
+
+  /** Review with Submit allowed for this job: one AI look at every answer,
+   *  then Submit, then Workday's confirmation. Anything off stops at Review
+   *  for the person, with the reason. */
+  async function workdaySubmitFlow(reviewText) {
+    // What JobWatch filled on every step of this application (exact labels and
+    // answers); the Review page's text only when that record is gone (a reload).
+    const filled = Object.values(answersLog).filter((x) => x && x.label && x.type !== "file").map((x) => ({ question: String(x.label), answer: String(x.answer ?? ""), required: false }));
+    const items = filled.length >= 3 ? filled.slice(0, 120) : reviewItems(reviewText);
+    banner("Auto-apply: checking every answer once more before Submit…");
+    const chk = await sendMsg({ type: "REVIEW_FORM", items, jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
+    trace("precheck", { items: items.length, ok: !!chk?.ok, error: chk?.error || "", issues: chk?.issues || [] });
+    if (!chk?.ok) return autoReport("review", `filled to Review; not submitted: the answer check failed (${String(chk?.error || "no reply").slice(0, 120)})`);
+    if ((chk.issues || []).length) {
+      const say = chk.issues.slice(0, 3).map((i) => `${String(i.question).slice(0, 80)}: ${String(i.problem).slice(0, 120)}`).join("; ");
+      banner(`Auto-apply did not submit: ${say}`);
+      return autoReport("review", `filled to Review; not submitted, check: ${say}`);
+    }
+    if (await gen("submitted").catch(() => false)) return autoReport("review", "filled to Review; not submitted: the page already reads as submitted, check it");
+    await sendMsg({ type: "WORKDAY_FOCUS" });
+    banner("Auto-apply: every answer checks out. Pressing Submit.");
+    const r = await gen("workdaySubmit").catch((e) => ({ ok: false, error: e.message }));
+    trace("submit", { pressed: !!r?.ok, error: r?.error || "" });
+    if (!r?.ok) return autoReport("review", `filled to Review; not submitted: ${r?.error || "Submit could not be pressed"}`);
+    for (let i = 0; i < 40; i++) {
+      await sleep(1000);
+      if (await gen("submitted").catch(() => false)) {
+        const text = (document.body?.innerText || "").slice(0, 3000);
+        trace("result", { status: "submitted", note: "", confirmation: text.slice(0, 1500) });
+        await ledger("submitted", { jobTitle: header.jobTitle, companyName: header.companyName, answersLog });
+        submittedSeen = true;
+        banner("JobWatch: submitted. Workday confirmed the application.");
+        return autoReport("submitted", "");
+      }
+      // Still on Review with an error (a required answer Workday checks only now).
+      if (i > 5 && await gen("onReviewStep").catch(() => false)) {
+        const errs = await gen("errors").catch(() => []);
+        const said = (await gen("workdayAuthState").catch(() => ({ errors: [] }))).errors;
+        if (errs.length || said.length) {
+          trace("submit", { refused: true, errors: errs, banner: said });
+          return autoReport("needs_attention", `pressed Submit; Workday refused: ${[...said, ...errs.map((e) => e.text)].join(" ").slice(0, 200)}`);
+        }
+      }
+    }
+    trace("submit", { confirmed: false, url: location.href, text: (document.body?.innerText || "").slice(0, 2000) });
+    return autoReport("needs_attention", "pressed Submit, but no confirmation showed within 40 seconds: check the application in Workday");
+  }
+
   async function autoAdvance(step) {
     // A page still loading has no step name: wait for it, never press Save and
     // Continue there (Micron used up its three presses on a blank page).
     if (!step && !(await gen("onReviewStep").catch(() => false))) return;
     if (await gen("onReviewStep").catch(() => false)) {
       // The whole Review page, to check every answer as Workday will send it.
-      trace("review", { text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.slice(0, 60000) });
+      const reviewText = (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.slice(0, 60000);
+      trace("review", { text: reviewText });
+      if (AUTO?.submit && !AUTO?.test) return await workdaySubmitFlow(reviewText);
       banner("Auto-apply filled every step. This is the Review page: check each answer, then press Submit yourself.");
       return autoReport("review", "filled to Review: check it and press Submit");
     }

@@ -1219,11 +1219,21 @@
     press1(btn);
     return { ok: true };
   }
+  /** Review only: press Workday's Submit (the footer button that reads "Submit"). */
+  function workdaySubmit() {
+    if (!onReviewStep()) return { ok: false, error: "not on Review" };
+    const btn = vis("[data-automation-id=bottom-navigation-next-button], [data-automation-id=pageFooterNextButton], [data-automation-id=wd-CommandButton_next]").find((b) => /^submit$/i.test(clean(textOf(b))))
+      || buttonByText(/^submit$/i);
+    if (!btn) return { ok: false, error: "no Submit button" };
+    if (btn.disabled || btn.getAttribute("aria-disabled") === "true") return { ok: false, error: "Submit is disabled" };
+    press1(btn);
+    return { ok: true };
+  }
   /** A Workday page that says the posting is gone. */
   function workdayClosed() {
     const t = (document.body?.innerText || "").slice(0, 3000);
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdayClosed };
+  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdaySubmit, workdayClosed };
 })();

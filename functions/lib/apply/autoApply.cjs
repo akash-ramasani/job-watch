@@ -112,6 +112,12 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   const test = prefs?.autoApplyTest && typeof prefs.autoApplyTest === "object" ? prefs.autoApplyTest : null;
   const testBoard = test ? String(test.board || "workday").toLowerCase() : "";
   const perCompany = new Map();
+  // Workday Submit (2026-11-10): off until the person turns it on.
+  // settings/preferences.autoApplySubmit: true submits every Workday job;
+  // autoApplySubmitJobs: [jobId] submits only those (the first real tries).
+  // Anything else stops at Review for the person.
+  const submitAll = prefs?.autoApplySubmit === true;
+  const submitJobs = new Set((Array.isArray(prefs?.autoApplySubmitJobs) ? prefs.autoApplySubmitJobs : []).map(String));
   const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
   const feedSlugs = new Map();
   const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
@@ -177,6 +183,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
       jobId: j.id, source: board, applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
       locationName: j.locationName || "", postedAt, score, ...(test ? { test: true } : {}),
+      ...(board === "workday" && !test && (submitAll || submitJobs.has(String(j.id))) ? { submit: true } : {}),
     });
   }
   // Newest day first; within a day, the best match first; then the newest.
