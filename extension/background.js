@@ -1298,7 +1298,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message.type === "AUTO_JOB") {
         const job = await autoJobForTab(sender?.tab?.id);
         // Not awaited: the page learns its job at once; emulation follows.
-        if (job?.source === "workday" && sender?.frameId === 0) focusEmulate(sender.tab.id).catch(() => {});
+        if (job?.source === "workday" && sender?.frameId === 0) {
+          focusEmulate(sender.tab.id).catch(() => {});
+          // Each page of a Workday job that started and asked (USC went silent
+          // after signing in on "Password has been reset": did a page start?).
+          getFreshToken().then(({ idToken, uid }) => fsAdd(`users/${uid}`, "workdayTraces", { kind: "init", tenant: workdayTenantOf(sender.tab.url || ""), jobId: job.jobId, companyName: job.companyName || "", title: job.title || "", test: !!job.test,
+            url: String(sender.tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version, json: JSON.stringify({ url: sender.tab.url, title: sender.tab.title }) }, idToken)).catch(() => {});
+        }
         sendResponse({ ok: true, job });
         return;
       }
