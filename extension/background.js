@@ -576,6 +576,17 @@ function keepAwake(on) {
 async function autoDue(j, st) {
   const r = st.results[j.jobId];
   if (!r) return true;
+  // A test run (filled to Review, never submitted) does not count for the real
+  // job: it runs again, in a fresh tab (Workday, HP were test-filled first).
+  if (r.test && !j.test) {
+    if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
+    return true;
+  }
+  // Left on Review before Submit was allowed for it: once more, to submit.
+  if (j.submit && r.status === "review" && !r.submit) {
+    if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
+    return true;
+  }
   if ((r.tries || 1) >= AUTO_MAX_TRIES || r.closed) return false;
   if (r.status === "error") return Date.now() >= (r.retryAt || 0);
   if (r.status === "needs_attention") {
@@ -794,7 +805,7 @@ async function autoFinishNow(result, tabId, jobId) {
     return;
   }
   st.results[cur.jobId] = {
-    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries,
+    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries, submit: !!cur.submit,
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
     ...(["needs_attention", "review"].includes(result.status) ? { tabId: cur.tabId || null } : {}),
   };
