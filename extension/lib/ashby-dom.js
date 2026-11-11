@@ -377,11 +377,27 @@
     // The bare city first; when the widget finds nothing, the alternates
     // (city + state, the metro's main city, the state) one by one.
     const queries = [...new Set([String(city), ...(Array.isArray(alternates) ? alternates : [])].filter(Boolean))];
-    let opts = [];
+    // A row belongs to a query when it holds the query's first word: rows
+    // still showing for an earlier prefix ("Co" -> "Corsica, France" while
+    // "Colorado" was being typed, LG Ad Solutions 2026-11-11) never count.
+    const firstWord = (q) => nrm(q).split(/[ ,]+/)[0] || "";
+    const click = async (o) => {
+      o.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      o.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      o.click();
+      await sleep(300);
+      if (!box.value?.trim()) {
+        // Keyboard fallback: highlight the option and confirm.
+        const i = options().indexOf(o);
+        box.focus();
+        for (let k = 0; k <= Math.max(i, 0); k++) box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await sleep(300);
+      }
+    };
     let typed = "";
-    let used = "";
+    const seen = [];
     for (const q of queries) {
-      used = q;
       box.focus();
       box.click();
       await sleep(120);
@@ -393,38 +409,38 @@
         setNativeValue(box, typed);
         await sleep(45);
       }
-      opts = [];
-      for (let i = 0; i < 35 && !opts.length; i++) { await sleep(100); opts = options(); }
+      const head = firstWord(q);
+      const related = () => options().filter((o) => nrm(o.textContent).includes(head));
+      let opts = [];
+      for (let i = 0; i < 40 && !opts.length; i++) { await sleep(100); opts = related(); }
       if (!opts.length) {
         box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-        await sleep(500);
-        opts = options();
+        await sleep(600);
+        opts = related();
       }
-      if (opts.length) break;
+      seen.push(...options().map((o) => o.textContent.trim()).slice(0, 3));
+      if (!opts.length) continue;
+      const texts = opts.map((o) => nrm(o.textContent));
+      let idx = -1;
+      if (q === String(city)) {
+        // "San Francisco, California" first, then city + state anywhere, then the city.
+        idx = texts.findIndex((t) => t.startsWith(want));
+        if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity) && (!match || t.includes(nrm(match).split(",").pop().trim())));
+        if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity));
+      } else {
+        // A fallback search: the city with its state, else the search's own name
+        // (the metro's main city, the state, the country) exactly.
+        idx = texts.findIndex((t) => t.startsWith(wantCity));
+        if (idx < 0) idx = texts.findIndex((t) => t === nrm(q) || t.startsWith(nrm(q) + ","));
+      }
+      if (idx < 0) continue;
+      const o = opts[idx];
+      await click(o);
+      return { ok: !!box.value?.trim(), picked: o.textContent.trim(), actual: box.value, via: q };
     }
-    if (!opts.length) return { ok: false, error: "no suggestions appeared", typed, tried: queries };
-    const texts = opts.map((o) => nrm(o.textContent));
-    // "San Francisco, California" first, then city + state anywhere, then city.
-    // A fallback search (the state, the country) picks its own name exactly.
-    if (used !== String(city)) { const exact = texts.findIndex((t) => t === nrm(used) || t.startsWith(nrm(used) + ",")); if (exact >= 0 && !texts.some((t) => t.startsWith(wantCity))) { const o = opts[exact]; o.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); o.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); o.click(); await sleep(300); return { ok: !!box.value?.trim(), picked: o.textContent.trim(), actual: box.value, via: used }; } }
-    let idx = texts.findIndex((t) => t.startsWith(want));
-    if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity) && (!match || t.includes(nrm(match).split(",").pop().trim())));
-    if (idx < 0) idx = texts.findIndex((t) => t.startsWith(wantCity));
-    if (idx < 0) idx = texts.findIndex((t) => t.includes(wantCity));
-    if (idx < 0) idx = 0;
-    const opt = opts[idx];
-    opt.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    opt.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-    opt.click();
-    await sleep(300);
-    if (!box.value?.trim()) {
-      // Keyboard fallback: highlight the option and confirm.
-      box.focus();
-      for (let i = 0; i <= idx; i++) box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await sleep(300);
-    }
-    return { ok: !!box.value?.trim(), picked: opt.textContent.trim(), actual: box.value, seen: texts.slice(0, 5) };
+    // Nothing that is the place asked for: leave it for the person, never a stranger's first row.
+    setNativeValue(box, "");
+    return { ok: false, error: "no matching suggestion", typed, tried: queries, seen: seen.slice(0, 6) };
   }
 
   /** A choice question drawn as a search box with a list ("How did you hear

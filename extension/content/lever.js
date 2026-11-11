@@ -141,7 +141,7 @@
     if (!res?.ok || !res.data) { warn("compute failed:", res?.error); banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); if (AUTO) autoReport("error", String(res?.error || "compute failed")); return; }
     const pkg = res.data;
     if (pkg.alreadyApplied && AUTO) { autoReport("skipped", "already applied"); return; }
-    if (pkg.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`); return; }
+    if (pkg.alreadyApplied && !/jwforce/.test(location.hash)) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
     const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };
     log(`computed: ${pkg.answered} fills for ${pkg.total} fields, ready=${pkg.ready}, review=${pkg.review.length}`, pkg.review);
 

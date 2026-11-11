@@ -1510,8 +1510,8 @@
     const res = await sendMsg({ type: "GET_ASHBY_FILL_DATA", org: ids.org, id: ids.id, domFields: domFields.filter((d) => !d.survey) }).catch((e) => ({ ok: false, error: e.message }));
     if (!res?.ok || !res.data) { console.warn("[JobWatch] computed application unavailable:", res?.error); return false; }
     const pkg = res.data;
-    if (pkg.alreadyApplied) {
-      showOverlay(`🛑 JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`, "warning");
+    if (pkg.alreadyApplied && (AUTO || !/jwforce/.test(location.hash))) {
+      showOverlay(`🛑 JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`, "warning");
       if (AUTO) autoReport("skipped", "already applied");
       return true;
     }
