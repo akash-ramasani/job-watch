@@ -98,7 +98,7 @@ export default function Profile({ user, userMeta }) {
     github: "", portfolio: "",
     availability: "", hourlyRate: "", salaryExpectation: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
-    willingToRelocate: "No", willingToWorkHybrid: "Yes", pronouns: "", namePronunciation: "",
+    willingToRelocate: "No", willingToWorkHybrid: "Yes", driversLicense: "", pronouns: "", namePronunciation: "",
     clearanceStatus: "None", clearanceLevel: "None",
     eeoGender: "Decline to self-identify",
     eeoEthnicity: "Decline to self-identify",
@@ -196,6 +196,7 @@ export default function Profile({ user, userMeta }) {
         usPersonExportControl: userMeta.usPersonExportControl || "Yes",
         willingToRelocate: userMeta.willingToRelocate || "No",
         willingToWorkHybrid: userMeta.willingToWorkHybrid || "Yes",
+        driversLicense: userMeta.driversLicense || "",
         pronouns: userMeta.pronouns || "",
         namePronunciation: userMeta.namePronunciation || "",
         clearanceStatus: userMeta.clearanceStatus || "None",
@@ -598,6 +599,7 @@ export default function Profile({ user, userMeta }) {
                 { key: "willingToRelocate", label: "Are you willing to relocate?" },
                 { key: "willingToWorkHybrid", label: "Are you open to hybrid / in-office work arrangements?" },
                 { key: "smsConsent", label: "Do you consent to receive SMS/text messages about your application?" },
+                { key: "driversLicense", label: "Do you have a valid U.S. driver's license?" },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
                   <span className="text-sm text-gray-700 flex-1">{label}</span>
