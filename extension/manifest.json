@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.11.97",
+  "version": "1.11.98",
   "description": "Apply to jobs from JobWatch: auto-apply on Ashby, Greenhouse, Lever and Workday with a tailored resume, and Autofill on every other job board.",
   "permissions": [
     "storage",

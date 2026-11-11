@@ -469,7 +469,28 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   autoLeverThanks(tabId, tab.url).catch(() => {});
   autoThanksPage(tabId, tab.url).catch(() => {});
   ghConfirmationPage(tabId, tab.url).catch(() => {});
+  workdayCompletedPage(tabId, tab.url).catch(() => {});
 });
+
+/** Workday after Submit: Candidate Home at /jobTasks/completed/application
+ *  (NVIDIA, HP, 2026-11-10). The content script that pressed Submit is gone by
+ *  then, so the runner records it here: the job's own company only; a tab
+ *  that reached another company's page is not this job's submission. */
+async function workdayCompletedPage(tabId, url) {
+  if (!/myworkday(jobs|site)\.com\/.*jobTasks\/completed\/application/i.test(url || "")) return;
+  const job = await autoJobForTab(tabId);
+  if (!job || job.source !== "workday") return;
+  if (workdayTenantOf(url) !== workdayTenantOf(job.applyUrl || "")) {
+    await autoFinish({ status: "needs_attention", note: `this tab reached another company's Workday page (${workdayTenantOf(url)}): check your applications there` }, tabId);
+    return;
+  }
+  await callFunction("recordApplication", { event: "submitted", applyUrl: job.applyUrl, jobId: job.jobId, jobTitle: job.title, companyName: job.companyName }).catch((e) => console.warn("[JobWatch] ledger(submitted) failed:", e.message));
+  try {
+    const { idToken, uid } = await getFreshToken();
+    await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(url), jobId: job.jobId, companyName: job.companyName || "", title: job.title || "", test: !!job.test, url: String(url).slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version, json: JSON.stringify({ status: "submitted", note: "Workday shows the application as completed", page: url }) }, idToken);
+  } catch (_) { /* best effort */ }
+  await autoFinish({ status: "submitted", note: "" }, tabId);
+}
 
 /** Greenhouse's confirmation page names the form it confirms
  *  (/embed/job_app/confirmation?for=<board>&token=<job>), so reaching it is a
@@ -1235,7 +1256,9 @@ async function workdayVerifyLink(sinceMs, tenant, kind = "verify", retried = fal
     if ((kind === "reset") !== aboutReset) continue; // a verify email is not a reset email
     const links = [...raw.matchAll(/https:\/\/[^\s"'<>]+/g)].map((x) => x[0].replace(/&amp;/g, "&").replace(/[).,]+$/, ""))
       .filter((u) => /myworkdayjobs\.com|myworkdaysite\.com|myworkday\.com/i.test(u) && /activat|verif|confirm|token|reset|password/i.test(u));
-    const link = links.find((u) => !tenant || workdayTenantOf(u) === tenant || u.toLowerCase().includes(tenant)) || "";
+    // This company's link only, by its exact Workday name: "workday" is in every
+    // Workday link, and the Workday job's reset opened NVIDIA's (2026-11-10).
+    const link = tenant ? links.find((u) => workdayTenantOf(u) === tenant) || "" : "";
     if (!link || jwWdLinks[link]) continue;
     jwWdLinks[link] = Date.now();
     await chrome.storage.local.set({ jwWdLinks });

@@ -644,7 +644,34 @@
   /** Review with Submit allowed for this job: one AI look at every answer,
    *  then Submit, then Workday's confirmation. Anything off stops at Review
    *  for the person, with the reason. */
+  /** The Workday company of a URL: acme.wd5.myworkdayjobs.com, or wdN.myworkdaysite.com/recruiting/acme. */
+  function wdSite(url) {
+    try {
+      const u = new URL(url);
+      const m = u.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/i);
+      if (m) return m[1].toLowerCase();
+      const p = u.pathname.split("/").filter(Boolean);
+      return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
+    } catch { return ""; }
+  }
+  /** This page is the job JobWatch was given: the same Workday company and
+   *  the same requisition (the "_JR-0107838" end of the posting). */
+  function onOwnJob() {
+    try {
+      const want = new URL(AUTO?.applyUrl || ""), here = new URL(location.href);
+      if (want.hostname !== here.hostname) return false;
+      const req = (want.pathname.match(/_([A-Za-z0-9-]+)(?:\/apply|\/?$)/) || [])[1];
+      return !!req && here.pathname.includes(`_${req}`);
+    } catch { return false; }
+  }
+
   async function workdaySubmitFlow(reviewText) {
+    // Never Submit a page that is not this job (the Workday job's tab once
+    // landed on NVIDIA's application and submitted it, 2026-11-10).
+    if (!onOwnJob()) {
+      trace("submit", { refused: "not this job", page: location.href, want: AUTO?.applyUrl || "" });
+      return autoReport("needs_attention", `not submitted: this tab is on another posting (${location.href.slice(0, 120)}), not the job it was given`);
+    }
     // What JobWatch filled on every step of this application (exact labels and
     // answers); the Review page's text only when that record is gone (a reload).
     const filled = Object.values(answersLog).filter((x) => x && x.label && x.type !== "file").map((x) => ({ question: String(x.label), answer: String(x.answer ?? ""), required: false }));
@@ -815,6 +842,11 @@
         if (AUTO && await gen("workdayPress", "applyManually", "^apply manually$").catch(() => false)) { banner("Auto-apply: choosing Apply Manually."); return; }
         banner("JobWatch: choose Autofill with Resume or Apply Manually. JobWatch fills each step after you sign in.");
         return;
+      }
+      // Auto-apply on another company's Workday site (a wrong email link): stop, fill nothing.
+      if (AUTO && isWorkday && wdSite(location.href) && wdSite(AUTO.applyUrl || "") && wdSite(location.href) !== wdSite(AUTO.applyUrl || "")) {
+        trace("stray", { page: location.href, want: AUTO.applyUrl || "" });
+        return autoReport("needs_attention", `this tab reached another company's Workday site (${location.hostname}); nothing was filled there`);
       }
       // Auto-apply: Workday's cookie banner, then the account form (whatever the scan makes of it).
       if (AUTO) await gen("workdayPress", "legalNoticeAcceptButton", "^accept cookies$").catch(() => false);
