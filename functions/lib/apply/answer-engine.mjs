@@ -329,7 +329,7 @@ function classify(label, kind = "") {
   // "Are you legally authorized for employment in the United States?" (Centene).
   // Not a veteran statement that mentions "authorized" (Cadence's VEVRAA text).
   if (!/veteran/.test(l) && /legally authori[sz]ed|authori[sz]ed for employment/.test(l)) return "workAuthorized";
-  if (has("authorized", "work") || has("legally", "work") || has("work", "authorization") || has("right", "work") || /eligible to work|eligible for employment|eligible to be employed|authorized and eligible/.test(l)) return "workAuthorized";
+  if (!/veteran/.test(l) && (has("authorized", "work") || has("legally", "work") || has("work", "authorization") || has("right", "work") || /eligible to work|eligible for employment|eligible to be employed|authorized and eligible/.test(l))) return "workAuthorized";
   if (/u\.?s\.? citizen\b|citizen or permanent resident|citizen or green card|citizen of the (united states|u\.?s\.?a?\b)|united states citizen/.test(l)) return "usCitizen";
   if (any("export control") || has("u.s. person") || has("us person")) return "usPersonExportControl";
   if (any("employment agreement", "non-compete", "noncompete", "post-employment", "restrictive covenant")) return "employmentAgreements";
