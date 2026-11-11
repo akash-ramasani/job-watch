@@ -99,6 +99,7 @@ export default function Profile({ user, userMeta }) {
     availability: "", hourlyRate: "", salaryExpectation: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", driversLicense: "", pronouns: "", namePronunciation: "",
+    employmentAgreements: "", priorGovernmentEmployment: "", everTerminated: "", outsideActivities: "", willingToTravel: "", aiConsent: "", futureRolesConsent: "", otherNames: "",
     clearanceStatus: "None", clearanceLevel: "None",
     eeoGender: "Decline to self-identify",
     eeoEthnicity: "Decline to self-identify",
@@ -197,6 +198,14 @@ export default function Profile({ user, userMeta }) {
         willingToRelocate: userMeta.willingToRelocate || "No",
         willingToWorkHybrid: userMeta.willingToWorkHybrid || "Yes",
         driversLicense: userMeta.driversLicense || "",
+        employmentAgreements: userMeta.employmentAgreements || "",
+        priorGovernmentEmployment: userMeta.priorGovernmentEmployment || "",
+        everTerminated: userMeta.everTerminated || "",
+        outsideActivities: userMeta.outsideActivities || "",
+        willingToTravel: userMeta.willingToTravel || "",
+        aiConsent: userMeta.aiConsent || "",
+        futureRolesConsent: userMeta.futureRolesConsent || "",
+        otherNames: userMeta.otherNames || "",
         pronouns: userMeta.pronouns || "",
         namePronunciation: userMeta.namePronunciation || "",
         clearanceStatus: userMeta.clearanceStatus || "None",
@@ -600,6 +609,13 @@ export default function Profile({ user, userMeta }) {
                 { key: "willingToWorkHybrid", label: "Are you open to hybrid / in-office work arrangements?" },
                 { key: "smsConsent", label: "Do you consent to receive SMS/text messages about your application?" },
                 { key: "driversLicense", label: "Do you have a valid U.S. driver's license?" },
+                { key: "willingToTravel", label: "Are you willing to travel for work?" },
+                { key: "employmentAgreements", label: "Are you bound by a non-compete, non-solicit or similar agreement?" },
+                { key: "priorGovernmentEmployment", label: "Have you worked for a government (federal, state or local) in the last 5 years?" },
+                { key: "outsideActivities", label: "Do you sit on a company board, own a business, or have a second job?" },
+                { key: "everTerminated", label: "Have you ever been fired or asked to resign?" },
+                { key: "aiConsent", label: "May companies use AI tools to review your application?" },
+                { key: "futureRolesConsent", label: "May companies consider you for other or future roles?" },
               ].map(({ key, label }) => (
                 <div key={key} className="flex items-center justify-between gap-4">
                   <span className="text-sm text-gray-700 flex-1">{label}</span>
@@ -621,6 +637,11 @@ export default function Profile({ user, userMeta }) {
                   </div>
                 </div>
               ))}
+            </div>
+
+            <div>
+              <label htmlFor="otherNames" className="caps-label block mb-2">Other names you have used (leave empty if none)</label>
+              <input id="otherNames" name="otherNames" value={formData.otherNames} onChange={handleChange} type="text" placeholder="For example a maiden name" className="input-standard" />
             </div>
 
             {/* Security Clearance */}

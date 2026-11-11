@@ -171,7 +171,7 @@ async function pool(items, n, fn) {
 // Profile answers an option pick may rely on (never tokens or ids).
 const PICK_FACTS = ["city", "driversLicense", "region", "country", "citizenshipCountry", "workAuthorized", "requiresSponsorship", "visaType", "willingToRelocate", "willingToWorkHybrid",
   "yearsOfExperience", "yearsOfExperienceNoInterns", "currentTitle", "currentCompany", "university", "pronouns", "availability", "hourlyRate", "salaryExpectation", "clearanceStatus", "jobLocationName",
-  "employmentAgreements", "eeoVeteran", "eeoDisability", "usPersonExportControl", "priorGovernmentEmployment"];
+  "employmentAgreements", "eeoVeteran", "eeoDisability", "usPersonExportControl", "priorGovernmentEmployment", "aiConsent", "futureRolesConsent", "willingToTravel", "everTerminated", "outsideActivities", "otherNames"];
 
 /** A choice question the rules could not map: Claude picks the option(s)
  *  that are true for the candidate. Returns { values: [labels] } or

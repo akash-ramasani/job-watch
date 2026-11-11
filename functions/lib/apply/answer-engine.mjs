@@ -163,6 +163,20 @@ function classify(label, kind = "") {
   const any = (...words) => words.some((w) => l.includes(w));
   const text = ["text", "longtext", "number", "date"].includes(kind);
   const choice = ["boolean", "select", "multiselect"].includes(kind);
+  // Profile questions the person answers once (Profile > Application
+  // questions, 2026-11-10), asked on Workday in many wordings:
+  // AI review consent (Labcorp, Visa, McKesson, Medtronic, Travelers, ADI).
+  if (choice && /(artificial intelligence|\bai\b|automated tools?)/.test(l) && /(consent|permit|allow|agree|opt|use|uses|using|may use)/.test(l) && /(review|evaluat|assess|process|screen|insight|match|consider|identify)/.test(l) && !/^are you (familiar with|open to|comfortable)/.test(l)) return "aiConsent";
+  // Being considered or contacted for other, future or contract roles (JLL, Amgen, Travelers).
+  if (choice && /(future|other|relevant|additional) (job |career )?(roles|opportunities|openings|positions)|contract roles|keep you in mind|talent (pool|community|network)/.test(l) && !/sms|text message/.test(l)) return "futureRolesConsent";
+  // Travel (Microchip, J&J, GE HealthCare, LSU).
+  if (choice && /(willing|able|capable|comfortable).{0,25}\btravel\b|\btravel\b.{0,30}(\d+ ?%|percent) of the time/.test(l)) return "willingToTravel";
+  // Fired or asked to resign (Travelers, Ohio State, Micron, LSU, U.S. Bank).
+  if (choice && /\b(terminated|discharged|dismissed|fired|asked to resign|allowed to resign)\b/.test(l) && /^(have|were|has) you\b|^(have|were) you ever/.test(l)) return "terminatedBefore";
+  // Board seats, an outside business, a second job, an elected office (Micron, Cigna, U.S. Bank, University of Miami).
+  if (choice && /board of directors|board positions?|outside (business|activities|employment)|secondary employment|other business or employment|ownership interest in a business|own (or have )?.{0,30}business|publicly elected|run for .{0,20}office/.test(l)) return "outsideActivities";
+  // Other names: maiden name, earlier legal names (Cadence, Truist).
+  if (/other names|maiden name|names? (used|you have used)|under (another|a different) name|previous(ly)? (used )?names?/.test(l) && !/company name|preferred name/.test(l)) return "otherNames";
 
   // "Is your citizenship / residency / location in one of: Cuba, Iran, North Korea, Syria…?"
   if (choice && SANCTIONED.test(l) && /\b(one of|any of|following|located|reside|residen|citizen)/.test(l)) return "sanctionedCountry";
@@ -301,9 +315,6 @@ function classify(label, kind = "") {
   if (choice && /procurement|contract award/.test(l)) return "conflictOfInterest";
   // "Are you a CURRENT / FORMER U.S. federal government civilian or military employee?" (RTX).
   if (choice && /\b(current|former)\b.{0,40}government.{0,60}employee/.test(l)) return "priorGovernment";
-  // "Have you ever been terminated / discharged / asked to resign…": No (the
-  // AI's answer on every site so far; a person with such a record says so in Saved answers).
-  if (choice && /\b(terminated|discharged|dismissed|fired|asked to resign|allowed to resign)\b/.test(l) && /^(have|were|has) you\b|^(have|were) you ever/.test(l)) return "terminatedBefore";
   if (choice && /prior government employment|previously (worked|employed) (for|by|with|at) (a |the )?(federal |state |us |u\.s\. )?government|government employee|ever (worked|been employed) .{0,20}government/.test(l)) return "priorGovernment";
   if (/current job level|^what is your (current )?level\b|seniority level/.test(l)) return "jobLevel";
   if (/^are you (familiar with|open to|comfortable).{0,40}\bai\b/.test(l)) return "openToAiTools";
@@ -450,7 +461,7 @@ const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "fullAddress", "availab
   // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
   "yearsExperience",
   // "Please initial that you acknowledge…" in a paragraph box (Samsung).
-  "initials", "driversLicense", "unrestrictedAuth"]);
+  "initials", "driversLicense", "unrestrictedAuth", "otherNames"]);
 
 // Programming languages, as the resume spells them. Names that are also
 // ordinary words or letters (Go, R, C) count only from the skills list.
@@ -1808,10 +1819,27 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     const now = roles.some((r) => r.current === true || /present|current|now|today/i.test(String(r.endDate || r.end || "")));
     return pickYesNo(now ? "Yes" : "No", now ? "the resume lists a present role" : "no present role on the resume", SOURCE.RESUME, 0.9);
   }
-  if (key === "terminatedBefore") {
-    if (!isSelect) return unanswered("terminated before: free text");
-    const m = matchOption(primary, "No") || findOnly(primary, [/^no\b/]);
-    return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, "never terminated") : unanswered('no "No" option');
+  // Yes/No facts from Profile > Application questions. Unanswered there:
+  // the AI picks (terminated: No, the answer on every site so far).
+  const PROFILE_YESNO = { aiConsent: "aiConsent", futureRolesConsent: "futureRolesConsent", willingToTravel: "willingToTravel", terminatedBefore: "everTerminated", outsideActivities: "outsideActivities" };
+  if (PROFILE_YESNO[key]) {
+    const raw = profile[PROFILE_YESNO[key]];
+    let v = raw === true || /^y/i.test(String(raw ?? "")) ? "Yes" : raw === false || /^n/i.test(String(raw ?? "")) ? "No" : ({ terminatedBefore: "No", futureRolesConsent: "Yes" })[key] || null;
+    if (!v) return unanswered(`${key}: not answered in the Profile`);
+    if (!isSelect) return out([{ name, value: v }], SOURCE.PROFILE, 1);
+    const YES = [/^yes\b|^opt.?in\b|^i (consent|agree|accept|permit|allow)\b|^i am (willing|able)\b/, /\b(consent|agree|opt.?in)\b(?!.{0,10}not)/];
+    const NO = [/^no\b|^opt.?out\b|^i do not\b|^i don.t\b|^i decline\b/, /\b(do not|don.t) (consent|agree)|opt.?out/];
+    const m = matchOption(primary, v) || findOnly(primary, v === "Yes" ? YES : NO);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `Profile: ${key}`) : unanswered(`no "${v}" option`);
+  }
+  if (key === "otherNames") {
+    const names = String(profile.otherNames || "").trim();
+    const none = !names || /^(no|none|n\/?a)$/i.test(names);
+    if (isSelect) {
+      const m = matchOption(primary, none ? "No" : "Yes") || findOnly(primary, [new RegExp(`^${none ? "no" : "yes"}\\b`)]);
+      return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered("other names option");
+    }
+    return out([{ name, value: none ? "No" : names }], SOURCE.PROFILE, 1);
   }
   if (key === "priorGovernment") {
     let v = profile.priorGovernmentEmployment;

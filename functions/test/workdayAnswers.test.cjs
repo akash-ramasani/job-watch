@@ -84,3 +84,17 @@ test("'Have you ever applied here?' comes from the submitted-applications record
   assert.equal(val(sel("Have you ever applied for employment with this company?", ["Yes, I have applied previously", "No, I have not applied previously"]), { ...P, appliedToCompanyBefore: false }), "No, I have not applied previously");
   assert.notEqual(ae.classifyQuestion(sel("Have you previously interviewed for employment with HCSC in the last 12 months?", ["Yes", "No"])), "previouslyApplied");
 });
+
+test("Profile > Application questions answer their many wordings", () => {
+  const p = { ...P, aiConsent: "Yes", futureRolesConsent: "No", willingToTravel: "Yes", everTerminated: "No", outsideActivities: "No", otherNames: "" };
+  assert.equal(val(sel("Visa may use automated tools such as AI to support review of your application for this role", ["Opt-In", "Opt-Out"]), p), "Opt-In");
+  assert.equal(val(sel("McKesson seeks to use Artificial intelligence (AI) to accelerate the creation of insights on your application", ["Yes, I consent to the use of AI on this application.", "No, I do not consent to the use of AI on this application."]), p), "Yes, I consent to the use of AI on this application.");
+  assert.equal(val(sel("May we contact you about relevant job opportunities at JLL beyond the position you are applying for?", ["Yes, I consent to being contacted", "No, I only wish to be considered for this role"]), p), "No, I only wish to be considered for this role");
+  assert.equal(val(sel("Are you willing and able to travel the required percentage of time for this role?", ["Yes", "No"]), p), "Yes");
+  assert.equal(val(sel("Have you ever been terminated or asked to resign from a position?", ["Yes", "No"]), p), "No");
+  assert.equal(val(sel("Are you currently serving on the board of directors of any for-profit company?", ["Yes", "No"]), p), "No");
+  assert.equal(val(txt("Please list if you have ever worked under or earned degrees under another name (i.e., maiden name)"), p), "No");
+  assert.equal(val(txt("Please list if you have ever worked under or earned degrees under another name (i.e., maiden name)"), { ...p, otherNames: "Akash R" }), "Akash R");
+  // Not answered in the Profile: AI consent is left to the AI pick.
+  assert.equal(ae.answerQuestion(sel("Visa may use automated tools such as AI to support review of your application for this role", ["Opt-In", "Opt-Out"]), P, null).answers.length, 0);
+});
