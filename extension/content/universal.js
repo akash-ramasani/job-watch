@@ -258,7 +258,9 @@
     }
     // GPA only where Workday requires it.
     if (/gpa|overall result|grade/.test(l)) return ed.gpa && field.required ? mk("text", String(ed.gpa)) : null;
-    if (/^from$|start/.test(l)) return ed.from ? mk("date", `01/${ed.from.year}`) : null;
+    // The real start month when the resume gives one (Oklahoma: 01/2024 against
+    // the resume's Aug 2024, caught before Submit, 2026-11-10).
+    if (/^from$|start/.test(l)) return ed.from ? mk("date", `${ed.from.month ? MONTH(ed.from.month) : "01"}/${ed.from.year}`) : null;
     if (/^to\b|end|graduat|expected/.test(l)) return ed.to ? mk("date", `${ed.to.month ? MONTH(ed.to.month) : "05"}/${ed.to.year}`) : null;
     return null;
   }
