@@ -82,7 +82,7 @@ export function sanitizeText(input) {
   s = s.replace(/\s*,\s*/g, (m, i, str) => {
     const before = str.slice(0, i).split(/[.\n]/).pop().trim().split(/\s+/).filter(Boolean);
     const after = str.slice(i + m.length).split(/[.\n]/)[0].trim().split(/\s+/).filter(Boolean);
-    const clause = before.length >= 3 && after.length >= 3 && /^(i|we|you|they|it|he|she|this|that|so|but|and|which|because|then|my|our)$/i.test(after[0] || "");
+    const clause = before.length >= 3 && after.length >= 3 && /^(i|we|you|they|it|he|she|this|that|so|but|and|then|my|our)$/i.test(after[0] || "");
     return clause ? ". " : " ";
   });
 
@@ -95,6 +95,14 @@ export function sanitizeText(input) {
     .replace(/(^|\. )([a-z])/g, (m, p, c) => p + c.toUpperCase()) // a new sentence starts with a capital
     .trimEnd();
 
+  // The writer speaks as the person: a sentence about "the resume" or "the
+  // profile" leaks its instructions ("The resume shows the parts of this I have
+  // done", Partiful, 2026-11-10). "As my resume shows" is dropped from a
+  // sentence; a sentence still about the resume is dropped whole.
+  s = s.split(/(?<=\.)\s+/).map((x) => x.replace(/\b(as|like) (the|my) (resume|cv|profile) (shows|says|lists|notes)\b\s*/gi, "").replace(/^\s*([a-z])/, (m, c) => c.toUpperCase()))
+    .filter((x) => /[a-z0-9]/i.test(x) && !/\b(the|my|your|this) (resume|cv|profile|job description)\b|\bresume (shows|says|lists)\b/i.test(x)).join(" ").trim();
+  // "Which meant ..." left alone as a sentence joins the one before it.
+  s = s.replace(/\.\s+(Which|Because) /g, (m, w) => ` ${w.toLowerCase()} `);
   if (s && !/[.]$/.test(s)) s += ".";
   return s;
 }

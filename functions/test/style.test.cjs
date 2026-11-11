@@ -16,7 +16,7 @@ test("sanitizeText: the period is the only punctuation left", () => {
     "I built billing services in Python AWS and Terraform. And I liked it. It was fun.");
   assert.equal(st.sanitizeText("Yes, I am a person applying myself."), "Yes I am a person applying myself.");
   assert.equal(st.sanitizeText("I leverage robust tools (like Kubernetes) to optimize: speed & cost, which is 10,000% better."),
-    "I use strong tools like Kubernetes to improve. Speed and cost. Which is 10000 percent better.");
+    "I use strong tools like Kubernetes to improve. Speed and cost which is 10000 percent better.");
   assert.equal(st.sanitizeText("- First point\n- Second point"), "First point. Second point.");
   assert.equal(st.sanitizeText("I use Node.js and Python 3.5, which is nice."), "I use Node.js and Python 3.5 which is nice.");
   assert.equal(st.sanitizeText("I'm \"really\" good... at this?"), "I'm really good. At this.");
@@ -60,4 +60,14 @@ test("answerFreeText asks again for simpler words when the draft reads too hard"
   const r2 = await answerFreeText({ label: "Why do you want to work here?", ashbyType: "LongText" }, ctx, { ...deps, openai: openai2 });
   assert.equal(calls.length, 2);
   assert.ok(r2.answer.startsWith("Throughout my professional journey"));
+});
+
+test("answers speak as the person, never about 'the resume' (Partiful)", async () => {
+  const { sanitizeText } = await import("../lib/apply/style.mjs");
+  const out = sanitizeText("I have not worked in a formal product manager role. The resume shows the parts of this I have done. At Compass Group I partnered with product, which meant working out what the business needed. As my resume shows, I also wrote product requirements.");
+  assert.doesNotMatch(out, /resume/i);
+  assert.doesNotMatch(out, /\. Which /);
+  assert.doesNotMatch(out, /\. \./);
+  assert.match(out, /^I have not worked in a formal product manager role\. At Compass Group I partnered with product which meant/);
+  assert.match(out, /I also wrote product requirements\.$/);
 });
