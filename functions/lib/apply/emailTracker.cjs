@@ -26,8 +26,23 @@ function companyNeedle(name) {
 function candidatesFor(email, apps) {
   const hay = ` ${words(`${email.from} ${email.subject} ${email.snippet}`)} `;
   const hayTight = hay.replace(/ /g, "");
+  // The sender's address names the company more reliably than the text:
+  // hp@myworkday.com (Workday tenant), no-reply@x.ai, careers@life360.com.
+  const m = String(email.from || "").toLowerCase().match(/([a-z0-9._%+-]+)@([a-z0-9.-]+)/);
+  const local = m ? m[1].replace(/[^a-z0-9]/g, "") : "";
+  const domainLabels = m ? m[2].split(".").slice(0, -1).map((x) => x.replace(/[^a-z0-9]/g, "")) : [];
+  const ATS = /^(myworkday|greenhouse|greenhousemail|us|eu|ashbyhq|lever|hire|mail|email|notifications?|smartrecruiters|icims|workday)$/;
+  const wholeDomain = m ? m[2].replace(/[^a-z0-9]/g, "") : ""; // "x.ai" -> "xai"
+  const byAddress = (key) => key.length >= 2 && (local === key || wholeDomain === key || domainLabels.some((d) => d === key && !ATS.test(d)));
+  // Mail sent through Workday names Workday in every message; it is about the
+  // company Workday only when Workday itself sent it.
+  const viaWorkday = /myworkday/.test(m ? m[2] : "") && local !== "workday";
   return apps.filter((a) => {
     const n = companyNeedle(a.companyName);
+    const org = words(a.org || "").replace(/ /g, "");
+    if (byAddress(org) || byAddress(n.replace(/ /g, ""))) return true;
+    if (viaWorkday && n === "workday") return false;
+    // Short names ("HP") only by address: as words they match too much.
     if (n.length < 3) return false;
     return hay.includes(` ${n} `) || (n.includes(" ") && hayTight.includes(n.replace(/ /g, "")));
   });

@@ -1302,30 +1302,48 @@ async function scanApplicationMail() {
   let token;
   try { token = await gmailToken(false); } catch (err) { console.warn("[JobWatch] mail scan: no Gmail token:", err.message); return; }
   const auth = { headers: { Authorization: `Bearer ${token}` } };
-  const q = encodeURIComponent('newer_than:3d -in:sent -category:promotions -category:social (application OR applying OR applied OR interview OR candidacy OR "next steps" OR unfortunately OR assessment OR offer OR position OR role)');
-  const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=40`, auth).then((r) => r.json()).catch(() => ({}));
-  const { jwMailSeen = [] } = await chrome.storage.local.get("jwMailSeen");
-  const seen = new Set(jwMailSeen);
-  const fresh = (list.messages || []).filter((m) => !seen.has(m.id)).slice(0, 25);
-  if (!fresh.length) return;
-  const emails = [];
-  for (const m of fresh) {
-    const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`, auth).then((r) => r.json()).catch(() => null);
-    if (!msg?.id) continue;
-    const h = (n) => (msg.payload?.headers || []).find((x) => x.name.toLowerCase() === n)?.value || "";
-    emails.push({ id: msg.id, from: h("from"), subject: h("subject"), snippet: msg.snippet || "", date: Number(msg.internalDate) || Date.now() });
+  // Every unseen message in the window, page by page: the newest 40 alone missed
+  // most confirmations on busy days (about half of 200 a day unmatched,
+  // 2026-11-11). The first scan after this change looks back 7 days.
+  const { jwMailSeen = [], jwMailBackfilled } = await chrome.storage.local.get(["jwMailSeen", "jwMailBackfilled"]);
+  // The 7-day catch-up reads every message again: ones seen before were matched
+  // with the older rules (HP by its address); the server skips ones already recorded.
+  const seen = new Set(jwMailBackfilled ? jwMailSeen : []);
+  const q = encodeURIComponent(`newer_than:${jwMailBackfilled ? 3 : 7}d -in:sent -category:promotions -category:social (application OR applying OR applied OR interview OR candidacy OR "next steps" OR unfortunately OR assessment OR offer OR position OR role)`);
+  const fresh = [];
+  let pageToken = "";
+  for (let page = 0; page < (jwMailBackfilled ? 4 : 15); page++) {
+    const list = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${q}&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ""}`, auth).then((r) => r.json()).catch(() => ({}));
+    for (const m of list.messages || []) if (!seen.has(m.id)) fresh.push(m);
+    if (!list.nextPageToken || fresh.length >= (jwMailBackfilled ? 300 : 1500)) break;
+    pageToken = list.nextPageToken;
   }
-  let out;
-  try { out = await callFunction("trackApplicationEmails", { emails }); } catch (err) { console.warn("[JobWatch] mail scan failed:", err.message); return; }
-  await chrome.storage.local.set({ jwMailSeen: [...jwMailSeen, ...fresh.map((m) => m.id)].slice(-1000) });
-  const { jwMailEvents = [] } = await chrome.storage.local.get("jwMailEvents");
-  const events = [...jwMailEvents, ...(out.updates || []).map((u) => ({ ...u, at: Date.now() }))].filter((e) => Date.now() - e.at < 14 * 864e5).slice(-300);
-  await chrome.storage.local.set({ jwMailEvents: events });
-  for (const u of out.updates || []) {
-    const what = { interview: "wants to interview you", assessment: "sent an assessment", offer: "sent an offer" }[u.kind];
-    if (what) notify(`${u.companyName} ${what}`, `${u.jobTitle || "Your application"}. Check your email.`);
+  if (!fresh.length) { if (!jwMailBackfilled) await chrome.storage.local.set({ jwMailBackfilled: true }); return; }
+  let checked = 0, matched = 0;
+  // Oldest first, 25 to a call, so a confirmation is matched before a later reply.
+  for (const chunk of [...fresh].reverse().reduce((a, m, i) => { if (i % 25 === 0) a.push([]); a[a.length - 1].push(m); return a; }, [])) {
+    const emails = [];
+    for (const m of chunk) {
+      const msg = await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`, auth).then((r) => r.json()).catch(() => null);
+      if (!msg?.id) continue;
+      const h = (n) => (msg.payload?.headers || []).find((x) => x.name.toLowerCase() === n)?.value || "";
+      emails.push({ id: msg.id, from: h("from"), subject: h("subject"), snippet: msg.snippet || "", date: Number(msg.internalDate) || Date.now() });
+    }
+    let out;
+    try { out = await callFunction("trackApplicationEmails", { emails }); } catch (err) { console.warn("[JobWatch] mail scan failed:", err.message); return; }
+    const { jwMailSeen: seenNow = [] } = await chrome.storage.local.get("jwMailSeen");
+    await chrome.storage.local.set({ jwMailSeen: [...seenNow, ...chunk.map((m) => m.id)].slice(-4000) });
+    const { jwMailEvents = [] } = await chrome.storage.local.get("jwMailEvents");
+    const events = [...jwMailEvents, ...(out.updates || []).map((u) => ({ ...u, at: Date.now() }))].filter((e) => Date.now() - e.at < 14 * 864e5).slice(-300);
+    await chrome.storage.local.set({ jwMailEvents: events });
+    for (const u of out.updates || []) {
+      const what = { interview: "wants to interview you", assessment: "sent an assessment", offer: "sent an offer" }[u.kind];
+      if (what) notify(`${u.companyName} ${what}`, `${u.jobTitle || "Your application"}. Check your email.`);
+    }
+    checked += emails.length; matched += (out.updates || []).length;
   }
-  console.log("[JobWatch] mail scan:", emails.length, "checked,", (out.updates || []).length, "matched");
+  if (!jwMailBackfilled) await chrome.storage.local.set({ jwMailBackfilled: true });
+  console.log("[JobWatch] mail scan:", checked, "checked,", matched, "matched");
 }
 
 // ─── Daily summary (8 PM) ─────────────────────────────────────────────────────

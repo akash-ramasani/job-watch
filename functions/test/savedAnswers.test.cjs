@@ -97,3 +97,13 @@ test("Stripe-style questions: current or previous title/employer, anticipated wo
   const edu = answerQuestion({ label: "What is the highest level of education you have completed?", required: true, fields: [{ name: "e", type: "multi_value_single_select", values: [{ label: "B.A./ B.S.", value: 1 }, { label: "M.A./ M.S.", value: 2 }, { label: "Ph.D", value: 3 }] }] }, profile, null);
   assert.deepEqual(edu.answers, [{ name: "e", value: 2 }]);
 });
+
+test("application emails match by the sender's address too (HP, xAI, Workday tenants)", () => {
+  const { candidatesFor } = require("../lib/apply/emailTracker.cjs");
+  const apps = [{ companyName: "HP", org: "hp" }, { companyName: "Workday", org: "workday" }, { companyName: "xAI", org: "xai" }, { companyName: "Clera", org: "clera" }];
+  const names = (e) => candidatesFor(e, apps).map((a) => a.companyName).join(",");
+  assert.equal(names({ from: "Workday HRHPI <hp@myworkday.com>", subject: "Thank you - we've received your job application", snippet: "Thank you for your interest in HP." }), "HP");
+  assert.equal(names({ from: "workday@myworkday.com", subject: "Thanks for applying at Workday", snippet: "" }), "Workday");
+  assert.equal(names({ from: "no-reply@x.ai", subject: "Thank you for applying to SpaceXSI", snippet: "" }), "xAI");
+  assert.equal(names({ from: "Clera Hiring Team <no-reply@ashbyhq.com>", subject: "Thanks for applying to Clera!", snippet: "" }), "Clera");
+});
