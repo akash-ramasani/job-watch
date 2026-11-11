@@ -200,7 +200,9 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     employment: employmentEntries(resume),
     education: (resume.education || []).filter((e) => e.institution || e.school).slice(0, 2).map((e) => ({ start: dateParts(e.startDate), end: dateParts(e.endDate) })),
     resumeB64,
-    resumeName: profile.resumeFileName || resume.fileName || "resume.pdf",
+    // The saved resume is the PDF even when its name is the LaTeX source's
+    // ("Akash_Ramasani.tex", which Ashby refused, 2026-11-10).
+    resumeName: String(profile.resumeFileName || resume.fileName || "resume.pdf").replace(/\.(tex|latex|txt)$/i, ".pdf"),
     coverText,
     answered: mapped.answers.filter((a) => a.answers.length).length,
     total: questions.length,

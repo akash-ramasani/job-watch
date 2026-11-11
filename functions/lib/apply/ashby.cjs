@@ -566,7 +566,9 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     review,
     fills,
     resumeB64,
-    resumeName: user.resumeFileName || resume.fileName || "resume.pdf",
+    // The saved resume is the PDF even when its name is the LaTeX source's
+    // ("Akash_Ramasani.tex", which Ashby refused, 2026-11-10).
+    resumeName: String(user.resumeFileName || resume.fileName || "resume.pdf").replace(/\.(tex|latex|txt)$/i, ".pdf"),
     coverB64,
     coverName: "cover-letter.pdf",
     coverText,

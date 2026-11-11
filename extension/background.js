@@ -2159,6 +2159,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { ok: false, error: `file input #${node.id || "?"} belongs to the ${kindOf(node)} section, not ${want}` };
           }
 
+          // A PDF saved under its LaTeX source's name ("Akash_Ramasani.tex") is
+          // refused by the form's file types (Ashby, Nash, HappyRobot, 2026-11-10).
+          if (b64 && atob(String(b64).slice(0, 8)).startsWith("%PDF") && !/\.pdf$/i.test(name || "")) name = String(name || "resume").replace(/\.[a-z0-9]+$/i, "") + ".pdf";
           const ext = (name || "resume.pdf").split(".").pop().toLowerCase();
           const mime = ext === "pdf" ? "application/pdf"
             : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

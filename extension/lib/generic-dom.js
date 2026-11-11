@@ -893,6 +893,9 @@
       await dedupe();
       return { ok: true, actual: textOf(liveBox()?.querySelector("[data-automation-id=file-upload-item-name], [data-automation-id=fileName]")) || fileName };
     }
+    // A PDF saved under its LaTeX source's name ("Akash_Ramasani.tex") is
+    // refused by the form's file types (Ashby, Nash, HappyRobot, 2026-11-10).
+    if (b64 && atob(String(b64).slice(0, 8)).startsWith("%PDF") && !/\.pdf$/i.test(fileName || "")) fileName = String(fileName || "resume").replace(/\.[a-z0-9]+$/i, "") + ".pdf";
     const ext = (fileName || "file.pdf").split(".").pop().toLowerCase();
     const mime = ext === "pdf" ? "application/pdf" : ext === "docx" ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "application/octet-stream";
     const bin = atob(b64);
