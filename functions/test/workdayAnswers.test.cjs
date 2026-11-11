@@ -67,3 +67,10 @@ test("plain facts the AI used to answer are rules now", () => {
   // A veteran statement that says "authorized" is not a work-authorization question.
   assert.notEqual(ae.classifyQuestion(sel("This employer is a Government contractor subject to VEVRAA, which requires us to invite protected veterans to self-identify; we are authorized to work with…", ["I AM NOT A VETERAN"])), "workAuthorized");
 });
+
+test("'Are you currently employed?' is the resume's present role, not this company", () => {
+  const q = sel("Are you currently employed?", ["Yes", "No"]);
+  assert.equal(val(q, { ...P, roles: [{ company: "Runn Technologies", title: "Senior Software Engineer", endDate: "Present" }] }), "Yes");
+  assert.equal(val(q, { ...P, roles: [{ company: "Oracle", title: "SDE II", endDate: "Jul 2024" }] }), "No");
+  assert.equal(ae.classifyQuestion(sel("Are you currently employed by Microchip?", ["Yes", "No"])), "companyRelationship");
+});

@@ -212,6 +212,9 @@ function classify(label, kind = "") {
   // found "s" in the resume and answered Yes (Allstate, J&J, 2026-11-10).
   if (/driver'?s?'? ?licen[cs]e|driving licen[cs]e|licensed driver/.test(l)) return "driversLicense";
   if (choice && /do you (have|hold|currently hold|possess) .{0,40}\b(licen[cs]e|certification|certificate|certified|cpa|pmp|series \d+)/.test(l)) return "licenseGate";
+  // "Are you currently employed?" names no company: the resume's present role
+  // (SHI read it as "employed by SHI" and answered No, 2026-11-10).
+  if (choice && /^(are you|is the applicant) (currently|presently|now) (employed|working)( full.?time)?\??$/.test(l)) return "currentlyEmployed";
   // Relationship with this company or a named one: employee, contractor,
   // customer, user, credentialed, interviewing. No unless the resume says so.
   if (choice && !/any of the following/.test(l) && (/(are you|have you (ever )?been|were you ever|have you ever)\s+(currently |previously |ever )?(an? )?(current |former |previous )?(?:[a-z0-9&.'-]+ ){0,3}(employee|employed|contractor|intern|consultant|customer|client|user|credentialed|vendor|partner)\b/.test(l)
@@ -1793,6 +1796,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return out([{ name, value: yn }], SOURCE.PROFILE, 1);
   }
   // Prior government employment: the saved answer only (set profile.priorGovernmentEmployment).
+  if (key === "currentlyEmployed") {
+    const roles = profile.roles || [];
+    if (!roles.length) return unanswered("currently employed: no roles on the resume");
+    const now = roles.some((r) => r.current === true || /present|current|now|today/i.test(String(r.endDate || r.end || "")));
+    return pickYesNo(now ? "Yes" : "No", now ? "the resume lists a present role" : "no present role on the resume", SOURCE.RESUME, 0.9);
+  }
   if (key === "terminatedBefore") {
     if (!isSelect) return unanswered("terminated before: free text");
     const m = matchOption(primary, "No") || findOnly(primary, [/^no\b/]);
