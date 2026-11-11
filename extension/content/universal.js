@@ -238,7 +238,10 @@
       // ("KL University" is "Koneru Lakshmaiah…"), then "Other" where offered.
       const STOPW = /^(university|college|institute|school|of|the|and|at|for|in|de|education|foundation|deemed|to|be)$/i;
       const short = (n) => String(n).replace(/\(.*?\)/g, " ").split(/[\s,.-]+/).filter((w) => w.length >= 3 && !STOPW.test(w)).slice(0, 2).join(" ");
-      const alts = [...(ed.aliases || []), ...(ed.aliases || []).map(short), ed.school.replace(/[,.]/g, " ").replace(/\s+/g, " ").trim(), "Other"].filter((x, i, a) => x && a.indexOf(x) === i && nrm(x) !== nrm(ed.school));
+      // Two other names at most, then "Other" (the school's name then goes in
+      // the box Workday opens for it): trying every spelling, pass after pass,
+      // kept Cisco on KL University for minutes (2026-11-11).
+      const alts = [...[...(ed.aliases || []), ed.school.replace(/[,.]/g, " ").replace(/\s+/g, " ").trim()].filter((x, i, a) => x && a.indexOf(x) === i && nrm(x) !== nrm(ed.school)).slice(0, 2), "Other"];
       return mk(field.type === "typeahead" || field.widget === "typeahead" ? "typeahead" : "text", ed.school, { match: ed.school, alternates: alts });
     }
     if (/^degree$|degree type|degree/.test(l)) {
@@ -368,6 +371,16 @@
         currentWork = `adding ${name}`;
         const failures = await fillFields(fills, pkg, order);
         for (const f of failures) attention.set(`${name}: ${f.label}`, { path: f.path, note: f.error || "could not fill" });
+        // School picked as "Other": the name goes in the box that opens for it
+        // ("School Name", "Other School", "Please specify").
+        if (sec.name === "Education" && sec.items[i]?.school) {
+          await sleep(800);
+          const now = (await gen("scan", { readOptions: false }).catch(() => [])).filter((f) => f.section === name);
+          const box = now.find((f) => !f.filled && ["text", "textarea"].includes(f.type) && /(other|name of|specify).{0,30}(school|university|institution|college)|(school|university|institution|college).{0,20}(name|other|specify)|please specify/i.test(f.label));
+          if (box) {
+            await fillFields([{ path: box.id, label: box.label, kind: "text", value: sec.items[i].school, source: "resume" }], pkg, new Map([[box.id, 0]]));
+          }
+        }
       }
     }
     await fixWorkTo((hist.roles || []).slice(0, 5));
