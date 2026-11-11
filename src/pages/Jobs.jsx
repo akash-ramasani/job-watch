@@ -392,7 +392,7 @@ export default function Jobs({ user, userMeta, preferences }) {
       .map((j) => {
         const s = myScores[j.id];
         if (!s) return j;
-        return { ...j, relevanceScore: s.score, scoreReason: s.reason, scoreMethod: s.m === "r" ? "rule" : "ai" };
+        return { ...j, relevanceScore: s.score, scoreReason: s.reason, scoreMethod: s.m === "r" ? "rule" : "ai", stretch: s.s === 1 || /^Stretch:/.test(s.reason || "") };
       });
 
     return merged.sort((a, b) => (b.relevanceScore ?? -1) - (a.relevanceScore ?? -1));
@@ -425,6 +425,10 @@ export default function Jobs({ user, userMeta, preferences }) {
         <span className={`text-[10px] font-bold uppercase tracking-widest ${tier.textCls}`}>
           {tier.label}
         </span>
+        {/* Asks a few more years than the resume shows (2-4): shown, labelled. */}
+        {job.stretch && (
+          <span className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Stretch</span>
+        )}
 
         {/* AI reason tooltip — shows on hover */}
         {job.scoreReason && (

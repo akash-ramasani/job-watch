@@ -66,11 +66,17 @@ test("close siblings earn partial credit, languages don't", () => {
 });
 
 test("years and seniority screens match the AI score's", () => {
-  const r = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS"]) });
+  // PROFILE has about 6.8 years (Jan 2020 to now): over 4 more years is screened.
+  const r = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["12+ years of professional experience", "Python", "AWS"]) });
   assert.equal(r.score, 0);
   assert.equal(r.screened, true);
   assert.equal(r.aiWorthy, false);
-  assert.match(r.capNote, /Asks for 10\+ years/);
+  assert.match(r.capNote, /Asks for 12\+ years/);
+  // Two to four years over is a stretch: shown, capped, labelled, still worth the AI.
+  const stretch = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
+  assert.ok(!stretch.screened && stretch.stretch, "10+ years is a stretch");
+  assert.ok(stretch.score > 0 && stretch.score <= 55, `stretch score ${stretch.score}`);
+  assert.match(stretch.reason, /^Stretch: asks for 10\+ years/);
   // Beyond the old 15-year parse limit, and a principal title, are screened too.
   const nvidia = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Principal System Software Engineer - CUDA Driver", description: jd(["15+ years of relevant systems software development experience", "Strong C programming skills", "Python"]) });
   assert.equal(nvidia.score, 0);
@@ -78,7 +84,7 @@ test("years and seniority screens match the AI score's", () => {
   const twenty = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["20+ years of experience", "Python"]) });
   assert.equal(twenty.minYears, 20);
   assert.equal(twenty.screened, true);
-  // Seven years is within reach for someone with 5.7.
+  // Seven years is within reach for someone with about 6.8.
   const seven = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["7+ years of experience", "Python", "AWS"]) });
   assert.ok(seven.score > 0 && !seven.screened);
 });
@@ -109,7 +115,7 @@ test("which jobs still go to the AI", () => {
   assert.ok(own.score < 40 && own.aiWorthy, `own-type middling job: ${own.score}`); // own type, rule unsure
   const other = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Account Executive", description: jd(["Salesforce", "Excel"]) });
   assert.equal(other.aiWorthy, false);
-  const years = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["10+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
+  const years = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Senior Software Engineer", description: jd(["12+ years of professional experience", "Python", "AWS", "Kubernetes"]) });
   assert.equal(years.aiWorthy, false); // screened as too senior: no model call
   const blank = ruleAssessJob({ profile: PROFILE, mine, jobTitle: "Software Engineer", description: "<p>Join our team!</p>" });
   assert.equal(blank.aiWorthy, true);

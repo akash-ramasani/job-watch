@@ -151,6 +151,10 @@ function evidenceSupported(evidence, profileWords) {
 const SOFT_REQ_RE = /\b(ambiguit|exceptional|first[- ]principles|passion|curio|communicat|collaborat|team player|teamwork|self[- ]starter|ownership|owner mindset|talk to users|fast[- ]paced|growth mindset|attention to detail|detail[- ]oriented|problem[- ]solv|work ethic|motivat|thrive|hungry|humble|interpersonal|proactive|adaptab|flexib|energetic|enthusias|evidence of|sense of urgency|bias (for|to) action|customer[- ]obsess|entrepreneurial|scrappy|comfortable with)/i;
 
 const COVER_VALUE = { yes: 1, partial: 0.5, no: 0 };
+// A job asking for at most this many years over the person's is a stretch:
+// shown and scored, its score capped at STRETCH_CAP.
+const STRETCH_YEARS = 4;
+const STRETCH_CAP = 55;
 
 /** Pure: turn the model's raw answer into a checked, scored assessment. */
 function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = null, softwareCandidate = true, analystCandidate = false } = {}) {
@@ -199,8 +203,12 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   // principal/director titles only "too senior" for someone with under 8.
   let level = "fits";
   const titleForLevel = String(jobTitle || "").replace(MTS_RE, (m) => (/principal|distinguished/i.test(m) ? "principal" : "engineer"));
-  const yearsOut = minYears != null && candidateYears != null && minYears > candidateYears + 2;
-  const yearsStatedWithinReach = minYears != null && candidateYears != null && !yearsOut;
+  // Up to STRETCH_YEARS above the person's years is a stretch, not a screen:
+  // many "8+ years" senior roles hire at 5-6 (2026-11-11). Further out still
+  // screens; a staff title needs a stated number within 2 years, as before.
+  const yearsOut = minYears != null && candidateYears != null && minYears > candidateYears + STRETCH_YEARS;
+  const stretch = minYears != null && candidateYears != null && minYears > candidateYears + 2 && !yearsOut;
+  const yearsStatedWithinReach = minYears != null && candidateYears != null && minYears <= candidateYears + 2;
   if (ENTRY_TITLE_RE.test(jobTitle)) { if (candidateYears != null && candidateYears >= 2) level = "entry"; }
   else if (ABOVE_TITLE_RE.test(titleForLevel) && (candidateYears == null || candidateYears < 8)) level = "above";
   else if (STAFF_TITLE_RE.test(titleForLevel) && (candidateYears == null || candidateYears < 8) && !yearsStatedWithinReach) level = "above";
@@ -215,6 +223,9 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   // principal/director title, is not one the candidate qualifies for, so it
   // scores 0, is hidden from the list and never costs a model call.
   let screened = false;
+  const isStretch = stretch && level === "fits";
+  if (isStretch && score > STRETCH_CAP) { score = STRETCH_CAP; }
+  if (isStretch) capNote = `Stretch: asks for ${minYears}+ years; your resume shows about ${Math.floor(candidateYears)}`;
   if (level === "entry") { score = 0; screened = true; capNote = "Internship or co-op"; }
   if (level === "above") {
     score = 0;
@@ -228,6 +239,7 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
   return {
     version: FIT_VERSION,
     ...(screened ? { screened: true, families: [], why: "seniority" } : {}),
+    ...(isStretch ? { stretch: true } : {}),
     score,
     coverage,
     roleFit,
@@ -237,7 +249,7 @@ function scoreAssessment(raw, profileText, { jobTitle = "", candidateYears = nul
     capNote,
     requirements: reqs,
     downgraded,
-    reason: screened ? capNote : reasonFor({ score, requirements: reqs, capNote }),
+    reason: screened ? capNote : isStretch ? `${capNote} · ${reasonFor({ score, requirements: reqs, capNote: null })}` : reasonFor({ score, requirements: reqs, capNote }),
   };
 }
 

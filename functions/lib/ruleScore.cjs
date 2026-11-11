@@ -23,7 +23,7 @@
 const { scoreAssessment, candidateYearsOf, isSoftwareCandidate, buildProfileText, contentWords } = require("./jobFit.cjs");
 const { classifyTitle, familiesForProfile, ownFamilyForProfile, ADJACENT } = require("./jobFamilies.cjs");
 
-const RULE_VERSION = 7; // bump when the rules change, so stored rule scores are redone
+const RULE_VERSION = 8; // bump when the rules change, so stored rule scores are redone
 
 // id: canonical skill; re: how it's written; group: siblings that earn partial credit.
 // Case-sensitive patterns are for words that are also ordinary English (Go, React, Swift, R).
@@ -311,7 +311,7 @@ function ruleAssessJob({ profile, jobTitle, description, targets = null, mine = 
   // Measured: keeps 351/351 AI 80+ and 647/653 AI 60+ jobs; ~2/3 of matching jobs go on.
   // Screened (too senior for the candidate): final, and never worth a model call.
   if (fit.screened) return { ...fit, method: "rule", ruleVersion: RULE_VERSION, tier, aiWorthy: false };
-  const yearsCapped = /^Asks for/.test(fit.capNote || "");
+  const yearsCapped = /^(Asks for|Stretch:)/i.test(fit.capNote || "");
   const aiWorthy = fit.score >= AI_MIN
     || (tier === "same" && fit.score >= SAME_TYPE_AI_MIN)
     || (yearsCapped && (fit.coverage ?? 0) >= YEARS_CAPPED_COVERAGE)

@@ -28,6 +28,7 @@ const MAX_SCORES_IN_AGG = 2000;
  *   rt = job types a rule score was made for; m = "r" rule score; p = 1 still wants the AI
  *   o  = 1 when the job isn't related to the user (skipped as another type, or
  *        judged a different field by the AI or the rule score) — the Jobs page hides these
+ *   s  = 1 when the job is a stretch (asks up to 4 years more than the resume shows)
  */
 function rollupFlags(fit) {
   if (!fit) return {};
@@ -36,6 +37,8 @@ function rollupFlags(fit) {
     ...(fit.screened ? { t: fit.targetsKey || "" } : {}),
     ...(rule ? { m: "r", rt: fit.targetsKey || "", ...(fit.aiPending ? { p: 1 } : {}) } : {}),
     ...(fit.screened || fit.roleFit === "different" ? { o: 1 } : {}),
+    // s = 1: a stretch (asks a few more years than the person has); the Jobs page labels it.
+    ...(fit.stretch ? { s: 1 } : {}),
   };
 }
 
