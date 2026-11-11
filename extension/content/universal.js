@@ -543,7 +543,14 @@
     sendMsg({ type: "WORKDAY_ACCOUNT" });
     authSave({ ...mem, mode: "signin", tries: 0 });
     banner("Auto-apply: password set. Signing in…");
-    location.href = loginUrl();
+    // Workday redirects by itself after a reset (signed in, to the posting or
+    // the account home). Jumping to Sign In during that redirect showed
+    // "Workday is currently unavailable" (HPE, Johnson Controls, Fox, Target,
+    // 2026-11-10). Let it land; the next page signs in or opens the application.
+    const from = location.href;
+    for (let i = 0; i < 12 && location.href === from; i++) await sleep(1000);
+    if (location.href !== from) return;
+    location.href = AUTO?.applyUrl || loginUrl();
   }
 
   /** Workday emailed a verification link: open it from Gmail, then sign in. */

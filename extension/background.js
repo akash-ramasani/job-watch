@@ -890,6 +890,13 @@ async function autoTick() {
       // 25-minute wait per job with no page script to say why.
       else if (j.source === "workday" && j.tabId && await chrome.tabs.get(j.tabId).then((t) => WORKDAY_DOWN.test(`${t.title || ""} ${t.url || ""}`)).catch(() => false)) {
         const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
+        // Once per job, open the application again first: right after a password
+        // reset Workday showed this page while the sign-in had worked (Fox, Target).
+        if (!j.downRetried && j.applyUrl) {
+          await withAutoLock(async () => { const st = await autoState(); const r = st.running.find((x) => x.jobId === j.jobId); if (r) r.downRetried = true; await saveAuto(st); });
+          await chrome.tabs.update(j.tabId, { url: j.applyUrl }).catch(() => {});
+          continue;
+        }
         const note = `Workday is down for maintenance (${String(tab.title || tab.url || "").slice(0, 80)}): will try again later`;
         try {
           const { idToken, uid } = await getFreshToken();
