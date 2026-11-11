@@ -42,7 +42,11 @@
       if (!r?.ok) return { ok: false, filled: snap.filled, why: r?.error || "rescue failed", required };
       const plan = r.plan || {};
       if (plan.cannot) return { ok: false, filled: snap.filled, why: plan.cannot, required, missing: true };
-      answer = plan.answer || answer;
+      // What was typed is the answer on record (the pre-check reads it); the
+      // model's own few-word summary ("Brief honest note on closest related
+      // work…") is not an answer and got Workiva held back, 2026-11-11.
+      const typedText = [...(plan.steps || [])].reverse().find((st) => st.op === "type" && String(st.text || "").trim())?.text;
+      answer = typedText || plan.answer || answer;
       if (!plan.steps?.length) return { ok: snap.filled, filled: snap.filled, answer, why: snap.filled ? "" : "no steps", required };
       const done = await dom("act", plan.steps);
       history.push({ round, steps: plan.steps, log: done?.log || [], done: !!plan.done });

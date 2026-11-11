@@ -307,12 +307,18 @@
     const order = { tech: ["tech", "eng", "sci"], eng: ["eng", "tech", "sci"], sci: ["sci", "eng", "tech"], arts: ["arts"], bus: ["bus"] }[subj] || [];
     // The same subject first, then the plain level ("Master's Degree"), and
     // only then a neighbouring subject (NVIDIA: MTECH for a Master of Science).
-    const bySubj = (sj) => opts.find((o) => ofLevel(o) && own(o) && SUBJ[sj].test(k(o)));
+    // An option naming its own field ("Master of Science in Administration")
+    // fits only when that field is the person's ("…in Computer Science"); a
+    // plain "Master of Science (M.S)" beats it (Workiva, 2026-11-11).
+    const field = k(String(degree).split(/,| in /i).slice(1).join(" "));
+    const optField = (o) => (k(o).match(/\bin ([a-z ]+)/) || [])[1]?.replace(/\s*\(.*$/, "").trim() || "";
+    const fieldOk = (o) => { const f = optField(o); return !f || (!!field && (field.includes(f) || f.split(" ").every((w) => field.includes(w)))); };
+    const bySubj = (sj) => opts.find((o) => ofLevel(o) && own(o) && fieldOk(o) && SUBJ[sj].test(k(o)));
     if (order[0] && bySubj(order[0])) return bySubj(order[0]);
     const plain = opts.find((o) => new RegExp(`^${level}( degree)?$`).test(k(o)));
     if (plain) return plain;
     for (const sj of order.slice(1)) { const hit = bySubj(sj); if (hit) return hit; }
-    return opts.find((o) => ofLevel(o) && own(o) && !/ of /.test(k(o))) || opts.find((o) => ofLevel(o) && own(o)) || null;
+    return opts.find((o) => ofLevel(o) && own(o) && fieldOk(o) && !/ of /.test(k(o))) || opts.find((o) => ofLevel(o) && own(o) && fieldOk(o)) || opts.find((o) => ofLevel(o) && own(o)) || null;
   }
 
   /** After My Experience: a Work Experience entry whose "To" shows empty
