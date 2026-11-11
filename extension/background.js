@@ -726,8 +726,16 @@ async function autoNextJob(st, busy = new Set()) {
   const { jwWorkday } = await chrome.storage.local.get("jwWorkday");
   const reviewOpen = Object.values(st.results).filter((r) => r.status === "review" && r.tabId && !r.test).length;
   const workdayOk = !!jwWorkday?.password && reviewOpen < WORKDAY_MAX_REVIEW;
+  // One job at a time per Workday site: two tabs on one site share its sign-in
+  // and one of them stalls (two Micron jobs 20 s apart, 2026-11-10). A site
+  // that showed a maintenance page waits out its pause.
+  const wdBusy = new Set(st.running.filter((r) => r.source === "workday").map((r) => workdayTenantOf(r.applyUrl || "")));
   for (const j of autoQueue.list) {
     if (j.source === "workday" && !workdayOk) continue;
+    if (j.source === "workday") {
+      const t = workdayTenantOf(j.applyUrl || "");
+      if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now()) continue;
+    }
     if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
   }
   return null;
@@ -878,7 +886,7 @@ async function autoTick() {
       if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
       // Workday down for maintenance ("Workday is currently unavailable", or the
       // company's own page: Target's /careers/workday-maintenance, 2026-11-10):
-      // end the job now and pause the queue for 30 minutes, instead of a
+      // end the job now and pause that company's site for 30 minutes, instead of a
       // 25-minute wait per job with no page script to say why.
       else if (j.source === "workday" && j.tabId && await chrome.tabs.get(j.tabId).then((t) => WORKDAY_DOWN.test(`${t.title || ""} ${t.url || ""}`)).catch(() => false)) {
         const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
@@ -889,7 +897,8 @@ async function autoTick() {
             json: JSON.stringify({ status: "error", note, step: "", tabTitle: tab.title }) }, idToken);
         } catch (_) { /* best effort */ }
         await autoFinish({ status: "error", note }, j.tabId, j.jobId);
-        await withAutoLock(async () => { const st = await autoState(); st.nextAt = Math.max(st.nextAt || 0, Date.now() + 30 * 60 * 1000); await saveAuto(st); });
+        // Only this company's site waits (U.S. Bank's outage was its own).
+        await withAutoLock(async () => { const st = await autoState(); st.wdDown = { ...(st.wdDown || {}), [workdayTenantOf(j.applyUrl || "")]: Date.now() + 30 * 60 * 1000 }; await saveAuto(st); });
       }
       else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) {
         // Where a Workday job ended up when it timed out (some went silent right
