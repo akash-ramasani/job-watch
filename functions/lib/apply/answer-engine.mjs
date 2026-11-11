@@ -229,6 +229,8 @@ function classify(label, kind = "") {
   // "Are you currently employed?" names no company: the resume's present role
   // (SHI read it as "employed by SHI" and answered No, 2026-11-10).
   if (choice && /^(are you|is the applicant) (currently|presently|now) (employed|working)( full.?time)?\??$/.test(l)) return "currentlyEmployed";
+  // "Have you previously had an Internship or Co-op with <company>?" (Aerospace).
+  if (choice && /(previously|ever) (had|done|completed) an? (internship|co-?op)\b/.test(l)) return "companyRelationship";
   // Relationship with this company or a named one: employee, contractor,
   // customer, user, credentialed, interviewing. No unless the resume says so.
   if (choice && !/any of the following/.test(l) && (/(are you|have you (ever )?been|were you ever|have you ever)\s+(currently |previously |ever )?(an? )?(current |former |previous )?(?:[a-z0-9&.'-]+ ){0,3}(employee|employed|contractor|intern|consultant|customer|client|user|credentialed|vendor|partner)\b/.test(l)
@@ -449,7 +451,7 @@ function classify(label, kind = "") {
   if (any("hybrid", "in-office", "onsite", "on-site", "office hub", "anchor day") || /days.{0,20}(in|from|at).{0,25}office/.test(l) || /commut(e|ing) to .{0,40}(office|location|hq)/.test(l) || /in.?person,? ?(\d|four|five|three)/.test(l) || /(\d|three|four|five)[-+]? ?(or more )?days (a|per) week/.test(l) || /office .{0,20}(three|four|five|3|4|5) (days|times)/.test(l) || /in.?office attendance/.test(l) || /work from the office/.test(l) || /come into the .{0,30}office/.test(l) || /willing to work (from|in|at).{0,15}office/.test(l) || /work(ing)? in.?person/.test(l)) return "willingToWorkHybrid";
   // Pure acknowledgements (privacy policy, truthfulness certification). Checked
   // LAST so any substantive question above wins over boilerplate phrasing.
-  if (/\bi certify\b|\bi acknowledge\b|\bi have read\b|\bi consent\b|\bi agree\b|\bi understand\b|privacy (policy|notice|statement|acknowledg)|\backnowledge?ment\b|arbitration agreement|^please confirm|^by (submitting|applying)|\bi (willingly )?accept\b|accept (the|these|all) terms|must agree to proceed|\bi (authorize|confirm)\b|consider me for other (job |role )?opportunit|other (job |role )?opportunities|future (job |role )?opportunities|talent (pool|community|network)/.test(l)) return "acknowledgement";
+  if (/\bi certify\b|\bi acknowledge\b|\bi have read\b|\bi consent\b|\bi agree\b|\bi understand\b|privacy (policy|notice|statement|acknowledg)|\backnowledge?ment\b|arbitration agreement|^please confirm|^by (submitting|applying)|\bi (willingly )?accept\b|\bi hereby (certify|acknowledge|confirm|agree|attest)\b|\b(check|click|tick|select)( the box)?( here)? to (agree|accept|acknowledge|confirm)\b|accept (the|these|all) terms|must agree to proceed|\bi (authorize|confirm)\b|consider me for other (job |role )?opportunit|other (job |role )?opportunities|future (job |role )?opportunities|talent (pool|community|network)/.test(l)) return "acknowledgement";
   return null;
 }
 
@@ -461,7 +463,7 @@ const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "fullAddress", "availab
   // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
   "yearsExperience",
   // "Please initial that you acknowledge…" in a paragraph box (Samsung).
-  "initials", "driversLicense", "unrestrictedAuth", "otherNames"]);
+  "initials", "driversLicense", "unrestrictedAuth", "otherNames", "relatedToEmployee"]);
 
 // Programming languages, as the resume spells them. Names that are also
 // ordinary words or letters (Go, R, C) count only from the skills list.
@@ -1059,6 +1061,8 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, why)
         : unanswered('select has no recognizable "No" option');
     }
+    // "Please provide the name/s of any relatives…" in a text box: None (Aerospace).
+    if (key === "relatedToEmployee" && /\b(name|names|name\/s|list|provide|who)\b/.test(norm(label))) return out([{ name, value: "None" }], SOURCE.RULE, 0.9, why);
     return out([{ name, value: "No" }], SOURCE.RULE, 0.9, why);
   }
 
@@ -1585,8 +1589,11 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     // application" named "a", found in the resume text, and answered Yes for a
     // person with no certifications (University of Miami, 2026-11-10).
     const GENERIC = /^(a|an|any|the|your|valid|active|current|relevant|professional|required|state|appropriate|applicable|such|this|that|or|and)$/;
-    const wanted = (norm(label).match(/(series \d+|\bcpa\b|\bpmp\b|\bcfa\b|\bcisa\b|\bcissp\b|\brn\b|\bpe\b|\bbar\b|[a-z0-9+#]+ (license|certification|certificate))/g) || [])
-      .filter((w) => !GENERIC.test(w.replace(/ (license|certification|certificate)$/, "")));
+    const ll = norm(label);
+    const wanted = (ll.match(/(series \d+|\bcpa\b|\bpmp\b|\bcfa\b|\bcisa\b|\bcissp\b|\brn\b|\bpe\b|\bbar\b|[a-z0-9+#]+ (license|certification|certificate))/g) || [])
+      .filter((w) => !GENERIC.test(w.replace(/ (license|certification|certificate)$/, "")))
+      // "a certificate in Phlebotomy", "a license to be a Phlebotomist" name it after the word (Labcorp).
+      .concat([...ll.matchAll(/\b(?:license|licence|certification|certificate)s? (?:in|as an?|to be an?|for) ([a-z0-9+#]{4,})/g)].map((m) => `${m[1].replace(/ist$|y$/, "")} license`).filter((w) => !GENERIC.test(w.replace(/ license$/, ""))));
     const listed = (profile.certifications || []).map((c) => String(c || "").trim()).filter(Boolean);
     const certs = norm([...listed, profile.resumeText || ""].join(" "));
     if (!wanted.length && listed.length) return unanswered("certification question without a named credential: the AI weighs the listed certifications");

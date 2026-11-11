@@ -426,11 +426,19 @@
    *  and says what to click, type or pick (optional fields, no "*", are skipped). */
   async function rescueStuck() {
     if (!window.__jwRescue) return;
+    // The rescue finds a field by its question text: an internal id
+    // ("school-or-university:typeahead#2") or a "Education 2: " prefix never
+    // matched, and each pass added another "AI: field not found on the page".
+    const asked = new Set();
     for (const [label, v] of [...attention.entries()].slice(0, 8)) {
-      banner(`JobWatch is asking AI how to finish: ${label}`);
-      const r = await window.__jwRescue(label, { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
-      log("rescue:", label, r);
-      if (r?.ok) { attention.delete(label); answersLog[`rescue:${label}`] = { label, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      const question = String(label).replace(/^(work experience|education|websites?|languages?|certifications?)\s*\d*:\s*/i, "");
+      if (/^[a-z0-9-]+:[a-z]+#\d+$/i.test(question)) { attention.delete(label); continue; } // an id: the same field is listed by its label too
+      if (asked.has(question) || /\bAI: /.test(v.note || "")) continue;
+      asked.add(question);
+      banner(`JobWatch is asking AI how to finish: ${question}`);
+      const r = await window.__jwRescue(question, { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
+      log("rescue:", question, r);
+      if (r?.ok) { attention.delete(label); answersLog[`rescue:${question}`] = { label: question, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
       else if (r?.why === "optional (no *)") attention.delete(label);
       else if (r?.why) attention.set(label, { ...v, note: `${v.note}. AI: ${r.why}` });
     }

@@ -980,6 +980,10 @@
       if (!visible(el)) continue;
       const text = clean(textOf(el));
       if (!text || text.length > 220) continue;
+      // Workday's upload notice ("…pdf successfully uploaded") shares the alert
+      // role: it is a confirmation, not a problem (11 forms marked "needs you"
+      // for a resume that uploaded, 2026-11-10).
+      if (/successfully (uploaded|attached|added|saved)|upload (complete|successful)/i.test(text)) continue;
       const path = ownerId(el);
       const k = path + "|" + text;
       if (seen.has(k)) continue;
