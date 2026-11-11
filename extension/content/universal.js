@@ -305,9 +305,13 @@
     const same = opts.find((o) => k(o) === d);
     if (same) return same;
     const order = { tech: ["tech", "eng", "sci"], eng: ["eng", "tech", "sci"], sci: ["sci", "eng", "tech"], arts: ["arts"], bus: ["bus"] }[subj] || [];
-    for (const sj of order) { const hit = opts.find((o) => ofLevel(o) && own(o) && SUBJ[sj].test(k(o))); if (hit) return hit; }
+    // The same subject first, then the plain level ("Master's Degree"), and
+    // only then a neighbouring subject (NVIDIA: MTECH for a Master of Science).
+    const bySubj = (sj) => opts.find((o) => ofLevel(o) && own(o) && SUBJ[sj].test(k(o)));
+    if (order[0] && bySubj(order[0])) return bySubj(order[0]);
     const plain = opts.find((o) => new RegExp(`^${level}( degree)?$`).test(k(o)));
     if (plain) return plain;
+    for (const sj of order.slice(1)) { const hit = bySubj(sj); if (hit) return hit; }
     return opts.find((o) => ofLevel(o) && own(o) && !/ of /.test(k(o))) || opts.find((o) => ofLevel(o) && own(o)) || null;
   }
 

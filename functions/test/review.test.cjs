@@ -48,3 +48,8 @@ test("a 'How did you hear about us' choice never blocks Submit (xAI)", () => {
   ] }, items);
   assert.deepEqual(out.map((i) => i.question), ["Are you located in the US?"]);
 });
+
+test("the pre-submit check knows a fixed list's closest option is not a mistake (Cisco, NVIDIA)", () => {
+  const { SYSTEM } = require("../lib/apply/review.cjs");
+  assert.match(SYSTEM, /closest option the form offers/);
+});
