@@ -553,6 +553,7 @@ async function autoLeverThanks(tabId, url) {
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const WORKDAY_DOWN = /workday is currently unavailable|workday[-_ ]maintenance|application system maintenance|down for (scheduled )?maintenance/i;
 const WORKDAY_JOB_TIMEOUT_MS = 25 * 60 * 1000; // account, verification email and five or six steps
 const WORKDAY_MAX_REVIEW = 5; // Workday applications waiting on Review before more start
 const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
@@ -875,6 +876,21 @@ async function autoTick() {
     for (const j of st0.running) {
       const alive = j.tabId ? await chrome.tabs.get(j.tabId).then(() => true).catch(() => false) : true;
       if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
+      // Workday down for maintenance ("Workday is currently unavailable", or the
+      // company's own page: Target's /careers/workday-maintenance, 2026-11-10):
+      // end the job now and pause the queue for 30 minutes, instead of a
+      // 25-minute wait per job with no page script to say why.
+      else if (j.source === "workday" && j.tabId && await chrome.tabs.get(j.tabId).then((t) => WORKDAY_DOWN.test(`${t.title || ""} ${t.url || ""}`)).catch(() => false)) {
+        const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
+        const note = `Workday is down for maintenance (${String(tab.title || tab.url || "").slice(0, 80)}): will try again later`;
+        try {
+          const { idToken, uid } = await getFreshToken();
+          await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version,
+            json: JSON.stringify({ status: "error", note, step: "", tabTitle: tab.title }) }, idToken);
+        } catch (_) { /* best effort */ }
+        await autoFinish({ status: "error", note }, j.tabId, j.jobId);
+        await withAutoLock(async () => { const st = await autoState(); st.nextAt = Math.max(st.nextAt || 0, Date.now() + 30 * 60 * 1000); await saveAuto(st); });
+      }
       else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) {
         // Where a Workday job ended up when it timed out (some went silent right
         // after signing in, with no page script left to say where).
