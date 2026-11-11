@@ -34,8 +34,21 @@
   const warn = (...a) => console.warn(TAG, ...a);
   const sleep = (ms) => (window.__jwWait ? window.__jwWait(ms) : new Promise((r) => setTimeout(r, ms)));
   const sendMsg = (msg) => new Promise((res) => { try { chrome.runtime.sendMessage(msg, res); } catch (e) { res({ ok: false, error: e.message }); } });
+  // Every call into the page is bounded: right after a sign-in, Workday switches
+  // to the application without a reload and a call could hang for good (RTX and
+  // Micron froze silently, 2026-11-10). Three in a row: the page is reloaded.
+  let hung = 0;
   async function gen(action, ...args) {
-    const r = await sendMsg({ type: "EXEC_GENERIC", action, args });
+    // Long work has room (a scan opening every list, ten skills, an upload, the account forms).
+    const ms = /^(scan|apply|workdayAdd)$/.test(action) ? 120000 : /^workday(Auth|Forgot|SetPassword|EmailForm)$/.test(action) ? 60000 : 20000;
+    const r = await Promise.race([
+      sendMsg({ type: "EXEC_GENERIC", action, args }),
+      new Promise((res) => setTimeout(() => res({ ok: false, error: `no answer from the page in ${ms / 1000} s (${action})`, hung: ms === 20000 }), ms)),
+    ]);
+    if (r?.hung) {
+      hung++;
+      if (hung >= 3 && typeof AUTO !== "undefined" && AUTO) { hung = 0; location.reload(); }
+    } else hung = 0;
     if (!r?.ok) throw new Error(r?.error || `EXEC_GENERIC ${action} failed`);
     return r.result;
   }

@@ -1798,7 +1798,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // ── Any other board: run a lib/generic-dom.js helper in the MAIN world ─
       if (message.type === "EXEC_GENERIC") {
         const target = { tabId: sender.tab.id, frameIds: [sender.frameId ?? 0] };
-        chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/generic-dom.js"] })
+        // Bounded (see universal.js gen): a call into a page that is switching views may never return.
+        within(chrome.scripting.executeScript({ target, world: "MAIN", files: ["lib/wait-main.js", "lib/generic-dom.js"] }), 15000)
           .then(() => chrome.scripting.executeScript({
             target, world: "MAIN",
             func: (action, args) => window.__jwGeneric[action](...(args || [])),
