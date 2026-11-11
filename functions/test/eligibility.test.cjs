@@ -136,3 +136,10 @@ test("export rules naming the only citizenships allowed are a bar (Rocket Lab IT
   assert.deepEqual(flagsOf("Under these Regulations, you may be ineligible for this role if you do not hold citizenship of Australia, Japan, New Zealand, Switzerland, the European Union, or a country that is part of NATO, or if you hold ineligible dual citizenship or nationality."), ["citizen"]);
   assert.deepEqual(flagsOf("We welcome applicants regardless of citizenship of any country."), []);
 });
+
+test("clearance: 'Security Clearance: Active U.S. TS/SCI' and a '(TS/SCI)' title tag (Okta)", () => {
+  const { eligibilityOf } = require("../lib/eligibility.cjs");
+  assert.deepEqual(eligibilityOf("Security Clearance: Active U.S. TS/SCI clearance with Full Scope Poly").flags, ["clearance"]);
+  assert.deepEqual(eligibilityOf("Senior Software Engineer (TS/SCI). We build identity products.").flags, ["clearance"]);
+  assert.deepEqual(eligibilityOf("Software Engineer (Remote). TS/SCI clearance is a plus.").flags, []);
+});

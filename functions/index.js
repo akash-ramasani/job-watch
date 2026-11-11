@@ -1117,7 +1117,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
           const baseTs = job.sourceUpdatedTs || now;
           const expireAt = addDaysTs(baseTs, TTL_DAYS);
           // Visa / citizenship / clearance statements in the description (lib/eligibility.cjs).
-          if (job.fullDescription) job.el = eligibilityOf(job.fullDescription).flags;
+          if (job.fullDescription) job.el = eligibilityOf(`${job.title || ""}. ${job.fullDescription}`).flags;
           writtenJobs.push({ ...job, fetchedAt: now, expireAt });
 
           bw.set(
@@ -1277,7 +1277,7 @@ async function harvestFeedJobs({ userId, feed, since, until, wantJob, retainUnti
   if (dryRun) return { fetched: raw.length, matched: jobs.length, written: 0, missing: missing.length, extended: toExtend.length, rows };
   const bw = db.bulkWriter();
   for (const job of missing) {
-    if (job.fullDescription) job.el = eligibilityOf(job.fullDescription).flags;
+    if (job.fullDescription) job.el = eligibilityOf(`${job.title || ""}. ${job.fullDescription}`).flags;
     const normal = addDaysTs(job.sourceUpdatedTs || now, TTL_DAYS);
     bw.set(col.doc(job.jobDocId), {
       ...job,
