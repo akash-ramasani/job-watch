@@ -55,3 +55,15 @@ test("age questions phrased 'N years or older'", () => {
   assert.equal(val(sel("Are you 16 years of age or older?", ["Yes", "No"])), "Yes");
   assert.notEqual(ae.classifyQuestion(sel("Are you younger than 18 years old?", ["Yes", "No"])), "age18");
 });
+
+test("plain facts the AI used to answer are rules now", () => {
+  const p = { ...P, eeoGender: "Male", usPersonExportControl: "No", roles: [{ company: "Runn Technologies", title: "Software Engineer" }] };
+  assert.equal(val(sel("What is your Sex?", ["Female", "I do not wish to answer", "Male"]), p), "Male");
+  assert.equal(val(sel("Are you a citizen of the United States?", ["Yes", "No"]), p), "No");
+  assert.equal(val(sel("Are you legally authorized for employment in the United States?", ["Yes", "No"]), p), "Yes");
+  assert.equal(val(sel("Have you ever been terminated or asked to resign from a position?", ["Yes", "No"]), p), "No");
+  assert.equal(val(sel("Are you a CURRENT U.S. federal government civilian or military (active duty or reserves) employee?", ["Yes", "No", "Unsure"]), p), "No");
+  for (const l of ["You must AGREE to proceed.", "I accept the Terms and Conditions.", "Yes, I accept these terms."]) assert.equal(ae.classifyQuestion(sel(l, ["Yes", "No"])), "acknowledgement");
+  // A veteran statement that says "authorized" is not a work-authorization question.
+  assert.notEqual(ae.classifyQuestion(sel("This employer is a Government contractor subject to VEVRAA, which requires us to invite protected veterans to self-identify; we are authorized to work with…", ["I AM NOT A VETERAN"])), "workAuthorized");
+});

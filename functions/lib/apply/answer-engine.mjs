@@ -296,6 +296,11 @@ function classify(label, kind = "") {
   if (choice && /^where (are you|do you) (currently )?(located|based|live|reside)/.test(l)) return "whereLocated";
   // Procurement / contract-award involvement for this company: a conflict-of-interest check.
   if (choice && /procurement|contract award/.test(l)) return "conflictOfInterest";
+  // "Are you a CURRENT / FORMER U.S. federal government civilian or military employee?" (RTX).
+  if (choice && /\b(current|former)\b.{0,40}government.{0,60}employee/.test(l)) return "priorGovernment";
+  // "Have you ever been terminated / discharged / asked to resign…": No (the
+  // AI's answer on every site so far; a person with such a record says so in Saved answers).
+  if (choice && /\b(terminated|discharged|dismissed|fired|asked to resign|allowed to resign)\b/.test(l) && /^(have|were|has) you\b|^(have|were) you ever/.test(l)) return "terminatedBefore";
   if (choice && /prior government employment|previously (worked|employed) (for|by|with|at) (a |the )?(federal |state |us |u\.s\. )?government|government employee|ever (worked|been employed) .{0,20}government/.test(l)) return "priorGovernment";
   if (/current job level|^what is your (current )?level\b|seniority level/.test(l)) return "jobLevel";
   if (/^are you (familiar with|open to|comfortable).{0,40}\bai\b/.test(l)) return "openToAiTools";
@@ -321,8 +326,11 @@ function classify(label, kind = "") {
   // "acceptance", etc. (this once routed "select the option that best
   // describes you" to the visa-status handler).
   if (/currently.{0,20}(status|visa)/.test(l) || /\bo-?1\b|\bh-?1b\b|\bf-?1\b|\bopt\b(?!-?(in|out)\b)|\bcpt\b|\bj-?1\b/.test(l) || (l.includes("student") && l.includes("status"))) return "currentVisaStatus";
+  // "Are you legally authorized for employment in the United States?" (Centene).
+  // Not a veteran statement that mentions "authorized" (Cadence's VEVRAA text).
+  if (!/veteran/.test(l) && /legally authori[sz]ed|authori[sz]ed for employment/.test(l)) return "workAuthorized";
   if (has("authorized", "work") || has("legally", "work") || has("work", "authorization") || has("right", "work") || /eligible to work|eligible for employment|eligible to be employed|authorized and eligible/.test(l)) return "workAuthorized";
-  if (/u\.?s\.? citizen\b|citizen or permanent resident|citizen or green card/.test(l)) return "usCitizen";
+  if (/u\.?s\.? citizen\b|citizen or permanent resident|citizen or green card|citizen of the (united states|u\.?s\.?a?\b)|united states citizen/.test(l)) return "usCitizen";
   if (any("export control") || has("u.s. person") || has("us person")) return "usPersonExportControl";
   if (any("employment agreement", "non-compete", "noncompete", "post-employment", "restrictive covenant")) return "employmentAgreements";
   if (/country (are you|do you|you are|you're) (based|located|residing|reside|live|living)|country of employment|^select your country|country you (hold|have) citizenship|country of citizenship|citizenship in a second country|hold citizenship/.test(l)) {
@@ -411,7 +419,8 @@ function classify(label, kind = "") {
   if (/18\+|18 or older|at least 18|over (the age of )?18|18 years of age|(16|18) years (of age )?or older/.test(l) && !/younger|under (the age of )?18/.test(l)) return "age18";
   if (has("preferred", "name") || has("name", "prefer")) return "preferredName";
   if (any("pronoun")) return "pronouns";
-  if (has("gender") || l.includes("gender identity")) return "eeoGender";
+  // "Please select your sex." / "What is your Sex?" (Ohio State, Comcast, RTX).
+  if (has("gender") || l.includes("gender identity") || (choice && /\bsex\b/.test(l) && !/sexual|sex offender/.test(l))) return "eeoGender";
   if (any("race", "ethnicity")) return "eeoEthnicity";
   if (l.includes("veteran")) return "eeoVeteran";
   if (l.includes("disability")) return "eeoDisability";
@@ -421,7 +430,7 @@ function classify(label, kind = "") {
   if (any("hybrid", "in-office", "onsite", "on-site", "office hub", "anchor day") || /days.{0,20}(in|from|at).{0,25}office/.test(l) || /commut(e|ing) to .{0,40}(office|location|hq)/.test(l) || /in.?person,? ?(\d|four|five|three)/.test(l) || /(\d|three|four|five)[-+]? ?(or more )?days (a|per) week/.test(l) || /office .{0,20}(three|four|five|3|4|5) (days|times)/.test(l) || /in.?office attendance/.test(l) || /work from the office/.test(l) || /come into the .{0,30}office/.test(l) || /willing to work (from|in|at).{0,15}office/.test(l) || /work(ing)? in.?person/.test(l)) return "willingToWorkHybrid";
   // Pure acknowledgements (privacy policy, truthfulness certification). Checked
   // LAST so any substantive question above wins over boilerplate phrasing.
-  if (/\bi certify\b|\bi acknowledge\b|\bi have read\b|\bi consent\b|\bi agree\b|\bi understand\b|privacy (policy|notice|statement|acknowledg)|\backnowledge?ment\b|arbitration agreement|^please confirm|^by (submitting|applying)|\bi (authorize|confirm)\b|consider me for other (job |role )?opportunit|other (job |role )?opportunities|future (job |role )?opportunities|talent (pool|community|network)/.test(l)) return "acknowledgement";
+  if (/\bi certify\b|\bi acknowledge\b|\bi have read\b|\bi consent\b|\bi agree\b|\bi understand\b|privacy (policy|notice|statement|acknowledg)|\backnowledge?ment\b|arbitration agreement|^please confirm|^by (submitting|applying)|\bi (willingly )?accept\b|accept (the|these|all) terms|must agree to proceed|\bi (authorize|confirm)\b|consider me for other (job |role )?opportunit|other (job |role )?opportunities|future (job |role )?opportunities|talent (pool|community|network)/.test(l)) return "acknowledgement";
   return null;
 }
 
@@ -1784,6 +1793,11 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return out([{ name, value: yn }], SOURCE.PROFILE, 1);
   }
   // Prior government employment: the saved answer only (set profile.priorGovernmentEmployment).
+  if (key === "terminatedBefore") {
+    if (!isSelect) return unanswered("terminated before: free text");
+    const m = matchOption(primary, "No") || findOnly(primary, [/^no\b/]);
+    return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.9, "never terminated") : unanswered('no "No" option');
+  }
   if (key === "priorGovernment") {
     let v = profile.priorGovernmentEmployment;
     // Not saved: the resume says. No government employer among the roles -> No.
