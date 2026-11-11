@@ -897,9 +897,14 @@ async function openJobTabNow(url) {
     let win = jwJobWindow ? await chrome.windows.get(jwJobWindow).catch(() => null) : null;
     if (win && win.type !== "normal") win = null;
     if (!win) {
-      win = await chrome.windows.create({ url, state: "minimized", focused: false });
-      await chrome.storage.session.set({ jwJobWindow: win.id });
-      return win.tabs[0];
+      // The window starts with a blank pinned tab that stays: when the last job
+      // tab closed, the window closed with it, and making a new one for the
+      // next job pulled the person to it on macOS (watching YouTube, 2026-11-11).
+      // Made once per browser session; jobs only add tabs to it after that.
+      win = await chrome.windows.create({ url: "about:blank", state: "minimized", focused: false });
+      await chrome.storage.session.set({ jwJobWindow: win.id, jwKeeperTab: win.tabs?.[0]?.id ?? null });
+      if (win.tabs?.[0]?.id != null) chrome.tabs.update(win.tabs[0].id, { pinned: true }).catch(() => {});
+      return await chrome.tabs.create({ windowId: win.id, url, active: true });
     }
     // The person is looking at the job window (finishing a "needs you"): the
     // new job opens as a background tab there, so their tab does not switch.
