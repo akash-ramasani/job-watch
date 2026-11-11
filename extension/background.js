@@ -574,6 +574,7 @@ async function autoLeverThanks(tabId, url) {
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
+const PERSON_ONLY = /assessment|reference #|references|transcript|refuses the saved workday password|cover letter|portfolio upload|writing sample/i;
 const WORKDAY_DOWN = /workday is currently unavailable|workday[-_ ]maintenance|application system maintenance|down for (scheduled )?maintenance/i;
 const WORKDAY_JOB_TIMEOUT_MS = 25 * 60 * 1000; // account, verification email and five or six steps
 const WORKDAY_MAX_REVIEW = 5; // Workday applications waiting on Review before more start
@@ -614,7 +615,7 @@ async function autoDue(j, st) {
     // Tried again on its own (30 min, then 2 h; three tries in all), or at
     // once when the person saved a new answer. Its old tab is closed: the job
     // reopens fresh as an auto-apply job.
-    const due = autoQueue.answersUpdatedAt > r.at || Date.now() >= r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]);
+    const due = autoQueue.answersUpdatedAt > r.at || (!r.personOnly && Date.now() >= r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]));
     if (!due) return false;
     if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
     return true;
@@ -825,8 +826,11 @@ async function autoFinishNow(result, tabId, jobId) {
     chrome.alarms.create("jwAutoKick", { when: Date.now() + 30000 });
     return;
   }
+  // Only the person can finish these (Centene's assessment ran three times):
+  // no automatic retries; a newly saved answer still brings it back.
+  const personOnly = result.status === "needs_attention" && PERSON_ONLY.test(note);
   st.results[cur.jobId] = {
-    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries, submit: !!cur.submit,
+    status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries, submit: !!cur.submit, ...(personOnly ? { personOnly: true } : {}),
     ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
     ...(["needs_attention", "review"].includes(result.status) ? { tabId: cur.tabId || null } : {}),
   };
@@ -920,6 +924,19 @@ async function autoTick() {
       // company's own page: Target's /careers/workday-maintenance, 2026-11-10):
       // end the job now and pause that company's site for 30 minutes, instead of a
       // 25-minute wait per job with no page script to say why.
+      // Off Workday on the company's own site (Labcorp's closed posting went to
+      // careers.labcorp.com/.../404 and sat 25 minutes, 2026-11-10): no page
+      // script runs there. Give the page a minute (sign-in pages can bounce).
+      else if (j.source === "workday" && j.tabId && Date.now() - j.startedAt > 60000 && await chrome.tabs.get(j.tabId).then((t) => /^https?:/.test(t.url || "") && !/myworkday(jobs|site)?\.com|myworkday\.com/i.test(t.url || "") && !/mail\.google\.com/.test(t.url || "")).catch(() => false)) {
+        const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
+        const gone = /\b404\b|not found|no longer (available|accepting)|page (you|cannot)|doesn.t exist|expired|closed/i.test(`${tab.title || ""} ${tab.url || ""}`);
+        const note = gone ? `job closed: Workday sent the tab to ${String(tab.url || "").slice(0, 100)}` : `the tab left Workday for ${String(tab.url || "").slice(0, 100)} (${String(tab.title || "").slice(0, 60)})`;
+        try {
+          const { idToken, uid } = await getFreshToken();
+          await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version, json: JSON.stringify({ status: gone ? "error" : "needs_attention", note }) }, idToken);
+        } catch (_) { /* best effort */ }
+        await autoFinish({ status: gone ? "error" : "needs_attention", note }, j.tabId, j.jobId);
+      }
       else if (j.source === "workday" && j.tabId && await chrome.tabs.get(j.tabId).then((t) => WORKDAY_DOWN.test(`${t.title || ""} ${t.url || ""}`)).catch(() => false)) {
         const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
         // Once per job, open the application again first: right after a password
