@@ -598,6 +598,14 @@
     const pageSays = await gen("workdayAuthState").catch(() => ({ errors: [] }));
     trace("advance", { step, press: n, moved: false, errors: errs, banner: pageSays.errors, problems: await gen("fieldHtml", errs.map((e) => e.path).filter(Boolean)).catch(() => []) });
     log(`workday: ${step} refused`, errs);
+    // The question right before a refused one may be what opened it (a saved
+    // "Yes" to "Do you have a license or certification?" behind "Please provide
+    // the Type, Number…", University of Miami): computed again with it.
+    const order = await gen("scan", { readOptions: false }).catch(() => []);
+    for (const e of errs) {
+      const at = e.path ? order.findIndex((f) => f.id === e.path) : -1;
+      if (at > 0 && order[at - 1].section === order[at].section) { done.delete(order[at - 1].id); refill.add(order[at - 1].id); }
+    }
     for (const e of errs) {
       if (e.path) { done.delete(e.path); refill.add(e.path); }
       attention.set(e.label || e.path || e.text, { path: e.path || "", note: `The form says: ${e.text}` });
