@@ -44,6 +44,7 @@ const { jsonrepair } = require("jsonrepair");
 // p-limit CommonJS import fix
 const pLimitPkg = require("p-limit");
 const extraBoards = require("./lib/boards.cjs");
+const { parseCache, feedCutoffMs, mergeCache } = require("./lib/feedCache.cjs");
 const pLimit = pLimitPkg.default ?? pLimitPkg;
 
 // Admin user — owns the shared job corpus. All other users get personalized
@@ -709,6 +710,8 @@ async function syncAllUsersNow() {
             // extra breakdown (optional)
             feedsProcessed: summary.feedsProcessed,
             failedFeeds: summary.failedFeeds,
+            notModified: summary.notModified ?? null,
+            fetchMs: summary.fetchMs ?? null,
             jobsFetched: summary.jobsFetched,
             jobsKeptRecent: summary.jobsKeptRecent,
           },
@@ -837,6 +840,8 @@ exports.runSyncNow = onRequest(
 
           feedsProcessed: summary.feedsProcessed,
           failedFeeds: summary.failedFeeds,
+          notModified: summary.notModified ?? null,
+          fetchMs: summary.fetchMs ?? null,
           jobsFetched: summary.jobsFetched,
           jobsKeptRecent: summary.jobsKeptRecent,
         },
@@ -1027,6 +1032,13 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 
   const limiter = pLimit(FEED_CONCURRENCY);
   const idSourceRunBudget = { remaining: ID_SOURCE_MAX_NEW_PER_RUN };
+  // ETag + last-good-read per feed (lib/feedCache.cjs). A targeted catch-up
+  // (onlyFeedIds) wants the whole list, so it sends no ETag.
+  const cacheRef = db.collection("users").doc(userId).collection("syncState").doc("feeds");
+  const prevCache = parseCache((await cacheRef.get().catch(() => null))?.data?.()?.json);
+  const cacheUpdates = {};
+  let notModified = 0;
+  const fetchStartMs = Date.now();
   const bw = db.bulkWriter();
 
   bw.onWriteError((err) => {
@@ -1065,8 +1077,16 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 
         feedsProcessed += 1;
 
-        const recentCutoffMs = recentCutoff ? recentCutoff.toMillis() : null;
         const isIdSource = source === "workday" || source === "oracle" || BOARD_SOURCES.has(source);
+        const prevEntry = prevCache[feedId] || null;
+        // Every job updated since this feed was last read, not only the last 20 minutes.
+        const recentCutoffMs = feedCutoffMs({
+          recentCutoffMs: recentCutoff ? recentCutoff.toMillis() : null,
+          lastOkMs: onlyFeedIds ? null : prevEntry?.ok,
+          nowMs: now.toMillis(),
+          maxAgeMs: TTL_DAYS * 86400000,
+        });
+        const cond = isIdSource ? null : { etag: onlyFeedIds ? null : prevEntry?.e || null };
 
         // ID-tracked sources return only jobs whose IDs we have never seen for
         // this feed (already US-filtered and detail-enriched), so the recency
@@ -1078,8 +1098,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
             ? await fetchOracleNewJobs(idSourceArgs)
             : BOARD_SOURCES.has(source)
               ? await fetchBoardNewJobs(source, idSourceArgs)
-              : await fetchJobsFromFeed(url, source, recentCutoffMs);
+              : await fetchJobsFromFeed(url, source, recentCutoffMs, cond);
         jobsFetched += rawJobs.length;
+        if (cond?.notModified) notModified += 1;
 
         const normalized = rawJobs
           .map((j) => normalizeJobMinimal(j, { source, companyName, companyKey: feedId, now, url }))
@@ -1090,7 +1111,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         const recentOnly = isIdSource
           ? locationFiltered
           : locationFiltered.filter(
-            (j) => j.sourceUpdatedTs && j.sourceUpdatedTs.toMillis() >= recentCutoff.toMillis()
+            (j) => j.sourceUpdatedTs && j.sourceUpdatedTs.toMillis() >= recentCutoffMs
           );
 
         jobsKeptRecent += recentOnly.length;
@@ -1150,6 +1171,9 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
           });
         }
 
+        // Read and queued: remember the list's ETag and when it was read.
+        if (!isIdSource) cacheUpdates[feedId] = { ...(cond?.etag ? { e: cond.etag } : {}), ok: now.toMillis() };
+
         // Feed docs are written only when their health changes (the feed-list
         // cache trigger picks that up), not on every run.
         if (feed.lastError) await feedRef.set({ lastError: null, lastRecoveredAt: now }, { merge: true });
@@ -1166,6 +1190,16 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
 
   await Promise.all(tasks);
   await bw.close();
+  const fetchMs = Date.now() - fetchStartMs;
+
+  // Saved after the jobs are written: a crash before this re-reads those boards in full.
+  try {
+    const activeIds = onlyFeedIds ? [...new Set([...Object.keys(prevCache), ...feeds.map((f) => f.id)])] : feeds.map((f) => f.id);
+    const merged = mergeCache(prevCache, cacheUpdates, activeIds);
+    await cacheRef.set({ json: JSON.stringify(merged), count: Object.keys(merged).length, updatedAt: now });
+  } catch (err) {
+    logger.warn(`feed cache save failed for ${userId}: ${err?.message || err}`);
+  }
 
   // Update the Jobs page lists in place (2 reads + 2 writes) before scoring,
   // so the score rollups know which jobs are listed.
@@ -1231,6 +1265,8 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     feedsCount,
     feedsProcessed,
     failedFeeds,
+    notModified,
+    fetchMs,
     jobsFetched,
     jobsKeptRecent,
     jobsWritten,
@@ -1443,7 +1479,10 @@ async function aiScoringPaused() {
  * FETCHING
  * ----------------------------
  */
-async function fetchJobsFromFeed(url, source, recentCutoffMs) {
+// `cond` (optional, Greenhouse/Ashby/plain lists): { etag } in; on return
+// cond.notModified is true when the board answered 304 (nothing changed, []
+// returned) and cond.etag holds the ETag of the list just read.
+async function fetchJobsFromFeed(url, source, recentCutoffMs, cond = null) {
   if (
     source.includes("eightfold") ||
     source.includes("microsoft") ||
@@ -1453,7 +1492,10 @@ async function fetchJobsFromFeed(url, source, recentCutoffMs) {
     return await fetchEightfoldJobsPaginated(url, recentCutoffMs);
   }
 
-  const json = await fetchJson(url);
+  const got = await fetchJsonCond(url, cond?.etag || null);
+  if (cond) { cond.notModified = got.notModified; cond.etag = got.etag; }
+  if (got.notModified) return [];
+  const json = got.json;
 
   if (source.includes("greenhouse")) {
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
@@ -1529,6 +1571,14 @@ async function fetchEightfoldJobsPaginated(baseUrl, recentCutoffMs) {
 }
 
 async function fetchJson(url, maxRetries = 2) {
+  return (await fetchJsonCond(url, null, maxRetries)).json;
+}
+
+/**
+ * GET JSON, sending `etag` back as If-None-Match. Returns { notModified: true }
+ * on a 304, else { json, etag } with the board's new ETag (null if none).
+ */
+async function fetchJsonCond(url, etag, maxRetries = 2) {
   let attempts = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
@@ -1537,9 +1587,14 @@ async function fetchJson(url, maxRetries = 2) {
       headers: {
         accept: "application/json,text/plain,*/*",
         "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        ...(etag ? { "if-none-match": etag } : {}),
       },
     });
 
+    if (resp.status === 304 && etag) {
+      await resp.arrayBuffer().catch(() => {});
+      return { notModified: true, json: null, etag };
+    }
     if (!resp.ok) {
       if ((resp.status === 429 || resp.status === 403 || resp.status >= 500) && attempts < maxRetries) {
         attempts++;
@@ -1550,7 +1605,7 @@ async function fetchJson(url, maxRetries = 2) {
       throw new Error(`HTTP ${resp.status} ${resp.statusText} for ${url}. Body: ${(body || "").slice(0, 400)}`);
     }
 
-    return await resp.json();
+    return { notModified: false, json: await resp.json(), etag: resp.headers.get("etag") || null };
   }
 }
 

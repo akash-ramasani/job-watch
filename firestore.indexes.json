@@ -103,6 +103,16 @@
       "collectionGroup": "aggregations",
       "fieldPath": "feeds",
       "indexes": []
+    },
+    {
+      "collectionGroup": "feedState",
+      "fieldPath": "seenIds",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "syncState",
+      "fieldPath": "json",
+      "indexes": []
     }
   ]
 }
