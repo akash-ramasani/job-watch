@@ -279,3 +279,18 @@ test("customer-facing engineering titles are not the software profile's jobs", (
   }
   assert.equal(shouldAssess("Sr. Sales Engineer - Rubrik Agent Cloud", [...SDE, "solutions"], MISSION).assess, true);
 });
+
+test("2026-11-11 audit of every type-screened job: the few tech titles it still skipped are assessed", () => {
+  const T = [...SDE, "solutions"];
+  for (const t of ["Process Automation Sr Dveloper - RPA", "Formal Methods Research and Development", "Security Analyst - Governance, Risk, and Compliance",
+    "Staff Security Risk Analyst", "Senior Information Assurance Analyst", "Senior Compliance Analyst - FedRAMP", "Data Sciences Associate II",
+    "Senior Manager, Data Systems, AIMS", "Information Technology Spec 5 - Senior Windows System Admin", "Oracle Test Execution Analyst",
+    "Systems Analyst", "Technical Business Analyst", "Tier 1 Production Support Analyst - Analyst", "Production Support"]) {
+    assert.equal(shouldAssess(t, T, MISSION).assess, true, t);
+  }
+  assert.ok(classifyTitle("Data Sciences Associate II").includes("data_science"));
+  // Other departments' analysts and retail "mobile" jobs stay out.
+  for (const t of ["Financial Analyst", "Payroll Analyst", "Revenue Cycle Analyst", "Sr Mobile Expert", "Mobile Phlebotomist (Albany, NY)", "Senior Systems Analyst, Workday Payroll"]) {
+    assert.equal(shouldAssess(t, T, MISSION).assess, false, t);
+  }
+});

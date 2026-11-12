@@ -17,7 +17,7 @@
 const FAMILIES = {
   software: {
     label: "Software engineering",
-    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware|design engineer|ux engineer|ui engineer|design technologist|creative technologist|director of engineering|engineering director|head of engineering|vp,? (of )?engineering|chief technology officer|cuda|gpu|kernel|device drivers?|driver (development|engineer\w*|software)|algorithms?|computational)\b/i,
+    re: /\b(software|sde|swe|sdet|developer|programmer|full[- ]?stack|back[- ]?end|front[- ]?end|web (engineer|developer)|mobile (engineer|developer)|ios|android|platform engineer(ing)?|forward[- ]deployed|fde|member of technical staff|mts|application(s)? (engineer|developer)|engineering manager|tech(nical)? lead|staff engineer|principal engineer|distinguished engineer|founding engineer|product engineer|systems? engineer|integration engineer|api|devex|developer (experience|productivity)|compiler|distributed systems|game (engineer|programmer|developer)|graphics engineer|embedded software|firmware|design engineer|ux engineer|ui engineer|design technologist|creative technologist|director of engineering|engineering director|head of engineering|vp,? (of )?engineering|chief technology officer|cuda|gpu|kernel|device drivers?|driver (development|engineer\w*|software)|algorithms?|computational|formal methods|formal verification|rpa|robotic process automation|automation developer)\b/i,
   },
   ml_ai: {
     label: "Machine learning & AI",
@@ -25,11 +25,11 @@ const FAMILIES = {
   },
   data_engineering: {
     label: "Data engineering",
-    re: /\b(data engineer(ing)?|etl|elt|analytics engineer(ing)?|data platform|big data|data (architect|infrastructure|warehouse|warehousing|pipeline|integration|ops|modeler|modeling)|database (engineer|developer|administrator)|dba|data management|data specialist|dataops|data (governance|lineage|quality|trust|strategy|services|products?|manager|transformation|catalog|observability)|lakehouse|data lake|databricks|snowflake|spark|kafka|airflow)\b/i,
+    re: /\b(data engineer(ing)?|etl|elt|analytics engineer(ing)?|data platform|big data|data (architect|infrastructure|warehouse|warehousing|pipeline|integration|ops|modeler|modeling)|database (engineer|developer|administrator)|dba|data management|data specialist|dataops|data (governance|lineage|quality|trust|strategy|services|products?|manager|transformation|catalog|observability|systems)|lakehouse|data lake|databricks|snowflake|spark|kafka|airflow)\b/i,
   },
   data_science: {
     label: "Data science",
-    re: /\b(data scien(ce|tist)|statistic(s|ian|al)|quantitative|quant|decision scien(ce|tist)|econometric|economist|experimentation|causal inference|operations research|biostatistic\w*|applied scien(ce|tist)|modeler|predictive model\w*|forecasting scientist)\b/i,
+    re: /\b(data scien(ce|ces|tists?)|statistic(s|ian|al)|quantitative|quant|decision scien(ce|tist)|econometric|economist|experimentation|causal inference|operations research|biostatistic\w*|applied scien(ce|tist)|modeler|predictive model\w*|forecasting scientist)\b/i,
   },
   data_analytics: {
     label: "Data & business analytics",
@@ -37,15 +37,15 @@ const FAMILIES = {
   },
   devops_cloud: {
     label: "DevOps, SRE & cloud",
-    re: /\b(devops|dev ops|devsecops|site reliability|sre|reliability engineer(ing)?|cloud|infrastructure|platform operations|build (and|&) release|release engineer|kubernetes|observability|production engineer(ing)?|systems? administrator|sysadmin|linux|network (engineer|architect|administrator)|storage engineer|virtualization|networks?|service engineer|triage|rca|compute|control plane|data ?center (engineer\w*|operations|software)|platform (engineer\w*|architect\w*|team|lead)|terraform|ci\/cd|release management)\b/i,
+    re: /\b(devops|dev ops|devsecops|site reliability|sre|reliability engineer(ing)?|cloud|infrastructure|platform operations|build (and|&) release|release engineer|kubernetes|observability|production engineer(ing)?|systems? administrator|systems? admin|sysadmin|production support|linux|network (engineer|architect|administrator)|storage engineer|virtualization|networks?|service engineer|triage|rca|compute|control plane|data ?center (engineer\w*|operations|software)|platform (engineer\w*|architect\w*|team|lead)|terraform|ci\/cd|release management)\b/i,
   },
   security: {
     label: "Security",
-    re: /\b(security (engineer\w*|analyst|architect\w*|researcher|operations|software|developer|consultant|manager|lead|specialist, (cloud|network|application|product))|(application|product|cloud|network|information|infrastructure|data) security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*|isso|information systems? security|platform security|security (grc|compliance|risk|awareness|intern|administrator|program|platforms?)|csirt|cert team|security (&|and) it|it (&|and) security|grc|phishing|tradecraft|detection (analyst|engineer\w*)|cti|threat intelligence|fusion center|data protection|red team|blue team|purple team|malware|forensics|siem|zero trust|technology (risk|audit\w*|controls?))\b/i,
+    re: /\b(security (engineer\w*|analyst|architect\w*|researcher|operations|software|developer|consultant|manager|lead|specialist, (cloud|network|application|product))|(application|product|cloud|network|information|infrastructure|data) security|cyber\w*|appsec|infosec|penetration|pentest\w*|soc|threat|vulnerability|identity (and|&) access|iam|detection (and|&) response|incident response|cryptograph\w*|isso|information systems? security|platform security|security (grc|compliance|risk|awareness|intern|administrator|program|platforms?)|csirt|cert team|security (&|and) it|it (&|and) security|grc|phishing|tradecraft|detection (analyst|engineer\w*)|cti|threat intelligence|fusion center|data protection|red team|blue team|purple team|malware|forensics|siem|zero trust|technology (risk|audit\w*|controls?)|information assurance|fedramp|security risk)\b/i,
   },
   qa_test: {
     label: "QA & test automation",
-    re: /\b(qa|quality assurance|test (automation|engineer|lead|analyst)|automation engineer|sdet|software test\w*|tester|quality engineer(ing)?|(integration|regression|performance|acceptance|software|system|automated) testing|test(ing)? (specialist|advisor|architect))\b/i,
+    re: /\b(qa|quality assurance|test (automation|engineer|lead|analyst|execution)|automation engineer|sdet|software test\w*|tester|quality engineer(ing)?|(integration|regression|performance|acceptance|software|system|automated) testing|test(ing)? (specialist|advisor|architect))\b/i,
   },
   solutions: {
     label: "Solutions & customer engineering",
@@ -160,6 +160,7 @@ const TITLE_FIXES = [
   [/\b(?:hdwr|hdw|hw)\b/gi, "hardware"], [/\bsw\b/gi, "software"], [/\bmech\b/gi, "mechanical"], [/\belec\b/gi, "electrical"],
   [/\bmfg\b/gi, "manufacturing"], [/\bengr\b/gi, "engineer"], [/\bmechnical\b/gi, "mechanical"], [/\belectical\b/gi, "electrical"],
   [/\b(?:eningeer|enginer|engineeer|enginner|engieer|engineeer)(s|ing)?\b/gi, "engineer$1"],
+  [/\b(?:dveloper|devloper|develper|developr|devleoper)(s)?\b/gi, "developer$1"],
 ];
 function classifyTitle(title) {
   let t = String(title || "")
@@ -216,7 +217,7 @@ function classifyTitle(title) {
 // AI sees; missing a real job is not.
 // data_engineering alone (an analyst profile) does not count: a software title is not her type.
 const ENGINEERING_TARGETS = ["software", "ml_ai", "devops_cloud", "security", "qa_test", "solutions", "engineering_general"];
-const TECH_TITLE_RE = /\b(software|developer|programm(er|ing)|coding|cuda|gpu|kernel|compiler|devops|devsecops|sre|kubernetes|cloud|infrastructure|machine learning|ml|ai|llm|agentic|ai agents?|dataops|data (engineer\w*|platform|pipelines?|infrastructure|architect\w*)|cyber\w*|infosec|appsec|isso|information systems? security|grc|phishing|threat|siem|forensics|malware|red team|pentest\w*|penetration test\w*|research (intern|scientist|engineer)|world models?|synthetic data|autonomous|robotics|simulation|computational|algorithm\w*|quant\w*|\bapi|sdk|saas|technical (consultant|advisor|relationship|solutions?|account)|platform consultant|enablement architect|software quality engineer\w*|test automation|sdet|automation engineer|systems? administrator|network engineer\w*|database|compute|control plane|technology platforms?|digital product|web|mobile|apps?|firmware|embedded|it (engineer\w*|architect\w*|technologist|systems?|ops|operations)|salesforce|workday|servicenow|sap|erp|observability|reliability|linux|aws|azure|gcp)\b/i;
+const TECH_TITLE_RE = /\b(software|developer|programm(er|ing)|coding|cuda|gpu|kernel|compiler|devops|devsecops|sre|kubernetes|cloud|infrastructure|machine learning|ml|ai|llm|agentic|ai agents?|dataops|data (engineer\w*|platform|pipelines?|infrastructure|architect\w*)|cyber\w*|infosec|appsec|isso|information systems? security|grc|phishing|threat|siem|forensics|malware|red team|pentest\w*|penetration test\w*|research (intern|scientist|engineer)|world models?|synthetic data|autonomous|robotics|simulation|computational|algorithm\w*|quant\w*|\bapi|sdk|saas|technical (consultant|advisor|relationship|solutions?|account)|platform consultant|enablement architect|software quality engineer\w*|test automation|sdet|automation engineer|systems? administrator|network engineer\w*|database|compute|control plane|technology platforms?|digital product|web|mobile|apps?|firmware|embedded|it (engineer\w*|architect\w*|technologist|systems?|ops|operations)|salesforce|workday|servicenow|sap|erp|observability|reliability|linux|aws|azure|gcp|systems? (?:integration )?analyst|production support|application(?:s)? (?:support|analyst)|technical business analyst|formal methods)\b/i;
 // Softer words that make a title worth assessing only when no family claims
 // it for another profession ("Control Systems Team Lead", "Field Technical Support").
 const TECH_HINT_RE = /\b(technolog(y|ies|ist)|technical|platforms?|digital|automation|systems?|data|intelligence|analytics?|scien(ce|tist)|security|it|eng|architect\w*)\b/i;
@@ -227,7 +228,7 @@ const LEAD_RE = /\b(head|director|vp|vice president|managing director|lead|manag
 const NON_TECH_LEAD_RE = /\b(recruit\w*|sourc\w*|talent|people|hr|human resources|benefits|rewards|sales|marketing|account\w*|audit\w*|risk|compliance|treasury|procurement|purchase|writer|editor|animator|legal|counsel)\b/i;
 // Tech words specific enough to name a role on their own ("Information Systems
 // Security Officer"), unlike "autonomous", "mobile" or "data".
-const SPECIFIC_TECH_RE = /\b(information systems? security|isso|cyber\w*|infosec|appsec|grc|siem|pentest\w*|penetration test\w*|forensics|malware|threat (intel\w*|hunt\w*|detection)|devops|devsecops|sre|kubernetes|cuda|compiler|kernel|sdk|\bapi\b)\b/i;
+const SPECIFIC_TECH_RE = /\b(information systems? security|isso|security (?:analyst|engineer\w*|architect\w*|risk)|information assurance|fedramp|governance,? risk,? (?:and |& )?compliance|technology (?:risk|audit\w*)|cyber\w*|infosec|appsec|grc|siem|pentest\w*|penetration test\w*|forensics|malware|threat (intel\w*|hunt\w*|detection)|devops|devsecops|sre|kubernetes|cuda|compiler|kernel|sdk|\bapi\b)\b/i;
 const NON_TECH_CLAIMS = ["trades_field", "retail_hospitality", "admin_office", "healthcare", "education", "hr_recruiting", "legal_compliance", "sales", "marketing", "customer_success", "operations", "finance"];
 /** "strong" (the title names a tech role), "hint" (a tech-ish word only) or false. */
 function techTitle(title, families) {
