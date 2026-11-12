@@ -777,7 +777,7 @@ async function autoNextJob(st, busy = new Set()) {
     if (j.source === "workday" && (!workdayOk || wdRunning >= WORKDAY_MAX_PARALLEL)) continue;
     if (j.source === "workday") {
       const t = workdayTenantOf(j.applyUrl || "");
-      if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now()) continue;
+      if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now() || (st.wdDown?.["*"] || 0) > Date.now()) continue;
     }
     if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
   }
@@ -821,7 +821,7 @@ async function autoFinishNow(result, tabId, jobId) {
   const cur = st.running.find((j) => (jobId ? j.jobId === jobId : j.tabId === tabId));
   if (!cur) return;
   const prev = st.results[cur.jobId];
-  const tries = (prev?.tries || 0) + 1;
+  const tries = (prev?.tries || 0) + (result.keepTries ? 0 : 1);
   const note = String(result.note || "").slice(0, 300);
   focusRelease(cur.tabId);
   // A test run (autoApplyTest): traced, tab closed, never retried or submitted.
@@ -841,7 +841,7 @@ async function autoFinishNow(result, tabId, jobId) {
   const personOnly = result.status === "needs_attention" && PERSON_ONLY.test(note);
   st.results[cur.jobId] = {
     status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries: cur.retryToken && prev?.retryToken !== cur.retryToken ? 1 : tries, submit: !!cur.submit, ...(cur.retryToken ? { retryToken: cur.retryToken } : {}), ...(personOnly ? { personOnly: true } : {}),
-    ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[tries - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
+    ...(result.status === "error" ? { retryAt: Date.now() + (AUTO_RETRY_MS[Math.max(tries, 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]), closed: CLOSED_POSTING.test(note) } : {}),
     ...(["needs_attention", "review"].includes(result.status) ? { tabId: cur.tabId || null } : {}),
   };
   st.running = st.running.filter((j) => j !== cur);
@@ -939,19 +939,6 @@ async function autoTick() {
       // company's own page: Target's /careers/workday-maintenance, 2026-11-10):
       // end the job now and pause that company's site for 30 minutes, instead of a
       // 25-minute wait per job with no page script to say why.
-      // Off Workday on the company's own site (Labcorp's closed posting went to
-      // careers.labcorp.com/.../404 and sat 25 minutes, 2026-11-10): no page
-      // script runs there. Give the page a minute (sign-in pages can bounce).
-      else if (j.source === "workday" && j.tabId && Date.now() - j.startedAt > 60000 && await chrome.tabs.get(j.tabId).then((t) => /^https?:/.test(t.url || "") && !/myworkday(jobs|site)?\.com|myworkday\.com/i.test(t.url || "") && !/mail\.google\.com/.test(t.url || "")).catch(() => false)) {
-        const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
-        const gone = /\b404\b|not found|no longer (available|accepting)|page (you|cannot)|doesn.t exist|expired|closed/i.test(`${tab.title || ""} ${tab.url || ""}`);
-        const note = gone ? `job closed: Workday sent the tab to ${String(tab.url || "").slice(0, 100)}` : `the tab left Workday for ${String(tab.url || "").slice(0, 100)} (${String(tab.title || "").slice(0, 60)})`;
-        try {
-          const { idToken, uid } = await getFreshToken();
-          await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version, json: JSON.stringify({ status: gone ? "error" : "needs_attention", note }) }, idToken);
-        } catch (_) { /* best effort */ }
-        await autoFinish({ status: gone ? "error" : "needs_attention", note }, j.tabId, j.jobId);
-      }
       else if (j.source === "workday" && j.tabId && await chrome.tabs.get(j.tabId).then((t) => WORKDAY_DOWN.test(`${t.title || ""} ${t.url || ""}`)).catch(() => false)) {
         const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
         // Once per job, open the application again first: right after a password
@@ -967,9 +954,26 @@ async function autoTick() {
           await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version,
             json: JSON.stringify({ status: "error", note, step: "", tabTitle: tab.title }) }, idToken);
         } catch (_) { /* best effort */ }
-        await autoFinish({ status: "error", note }, j.tabId, j.jobId);
+        // Workday's own outage page (community.workday.com/maintenance-page,
+        // 2026-11-12) is every company at once: all Workday jobs wait, else each
+        // next job opened the same page. An outage does not use up a try.
+        const allDown = /community\.workday\.com/i.test(tab.url || "");
+        await autoFinish({ status: "error", note, keepTries: true }, j.tabId, j.jobId);
         // Only this company's site waits (U.S. Bank's outage was its own).
-        await withAutoLock(async () => { const st = await autoState(); st.wdDown = { ...(st.wdDown || {}), [workdayTenantOf(j.applyUrl || "")]: Date.now() + 30 * 60 * 1000 }; await saveAuto(st); });
+        await withAutoLock(async () => { const st = await autoState(); st.wdDown = { ...(st.wdDown || {}), [allDown ? "*" : workdayTenantOf(j.applyUrl || "")]: Date.now() + 30 * 60 * 1000 }; await saveAuto(st); });
+      }
+      // Off Workday on the company's own site (Labcorp's closed posting went to
+      // careers.labcorp.com/.../404 and sat 25 minutes, 2026-11-10): no page
+      // script runs there. Give the page a minute (sign-in pages can bounce).
+      else if (j.source === "workday" && j.tabId && Date.now() - j.startedAt > 60000 && await chrome.tabs.get(j.tabId).then((t) => /^https?:/.test(t.url || "") && !/myworkday(jobs|site)?\.com|myworkday\.com/i.test(t.url || "") && !/mail\.google\.com/.test(t.url || "")).catch(() => false)) {
+        const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
+        const gone = /\b404\b|not found|no longer (available|accepting)|page (you|cannot)|doesn.t exist|expired|closed/i.test(`${tab.title || ""} ${tab.url || ""}`);
+        const note = gone ? `job closed: Workday sent the tab to ${String(tab.url || "").slice(0, 100)}` : `the tab left Workday for ${String(tab.url || "").slice(0, 100)} (${String(tab.title || "").slice(0, 60)})`;
+        try {
+          const { idToken, uid } = await getFreshToken();
+          await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version, json: JSON.stringify({ status: gone ? "error" : "needs_attention", note }) }, idToken);
+        } catch (_) { /* best effort */ }
+        await autoFinish({ status: gone ? "error" : "needs_attention", note }, j.tabId, j.jobId);
       }
       else if (Date.now() - j.startedAt > (j.source === "workday" ? WORKDAY_JOB_TIMEOUT_MS : AUTO_JOB_TIMEOUT_MS)) {
         // Where a Workday job ended up when it timed out (some went silent right
