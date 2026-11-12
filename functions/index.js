@@ -1054,10 +1054,11 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         const source = String(feed.source || "").toLowerCase();
         const companyName = String(feed.companyName || feed.company || "Unknown");
 
-        // Force Greenhouse to fetch full descriptions natively
-        if (source.includes("greenhouse") && !url.includes("content=true")) {
-          url += url.includes("?") ? "&content=true" : "?content=true";
-        }
+        // Greenhouse: the light list (no descriptions) every run; the full
+        // posting is fetched only for the few jobs updated since the cutoff
+        // (fetchJobsFromFeed). 2026-11-11: content=true on all ~1,700 boards
+        // every run was most of the sync's CPU.
+        if (source.includes("greenhouse")) url = url.replace(/([?&])content=true&?/, "$1").replace(/[?&]$/, "");
 
         feedsProcessed += 1;
 
@@ -1452,7 +1453,16 @@ async function fetchJobsFromFeed(url, source, recentCutoffMs) {
   const json = await fetchJson(url);
 
   if (source.includes("greenhouse")) {
-    return Array.isArray(json?.jobs) ? json.jobs : [];
+    const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
+    if (url.includes("content=true") || recentCutoffMs == null) return jobs;
+    // Only jobs updated since the cutoff are kept by the sync: fetch just
+    // those in full (description, departments, offices).
+    const base = url.split("?")[0].replace(/\/jobs\/?$/, "");
+    const recent = jobs.filter((j) => (Date.parse(j.updated_at || "") || 0) >= recentCutoffMs);
+    const full = await Promise.all(recent.map(async (j) => {
+      try { return { ...j, ...(await fetchJson(`${base}/jobs/${j.id}`)) }; } catch (_) { return j; }
+    }));
+    return full;
   }
 
   if (source.includes("ashby")) {
