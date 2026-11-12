@@ -45,6 +45,9 @@ test("citizenship requirements are caught, including US-person rules", () => {
     "Government export regulations, applicant must be a (i) U.S. citizen or national, (ii) U.S. lawful, permanent resident (aka green card holder), (iii) Refugee, or (iv) Asylee",
     "Due to the client contract, you will be assigned, this position requires you to be a U.S. citizen",
     "US citizenship is required, as only US citizens are authorized to access certain necessary systems.",
+    "Currently a US Citizen with capability to obtain and maintain a US Q clearance.",
+    "Ability to obtain and maintain a DOE Q clearance.",
+    "US Citizen",
     "Therefore, we will ask you as part of the application process to identify whether you are a U.S. Citizen or green card holder, or have asylum/refugee status in the U.S.",
   ]) assert.ok(flagsOf(s).includes("citizen"), s);
 });

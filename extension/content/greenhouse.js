@@ -359,6 +359,14 @@
     PHONE_WANT = String(data.fills.find((f) => f.name === "phone")?.value || "");
     if (PHONE_WANT) { sendMsg({ type: "EXEC_MAIN_WORLD", action: "ghPhoneTrap" }).catch(() => {}); watchPhone(); phoneStep = "phone country"; await setPhoneCountry(); }
     let pending = [...data.fills].map((f, i) => ({ f, i, top: pageTop(f) })).sort((a, b) => (a.top - b.top) || (a.i - b.i)).map((x) => x.f);
+    // Race shows only once "Are you Hispanic/Latino?" is answered: unseen at
+    // sorting time it went last, after the whole survey. It goes right after
+    // that question, in its place on the page.
+    {
+      const race = pending.find((f) => f.eeo === "race" && !elementFor(f));
+      const hisp = pending.findIndex((f) => f.eeo === "hispanic");
+      if (race && hisp >= 0) { pending = pending.filter((f) => f !== race); pending.splice(hisp + 1, 0, race); }
+    }
     for (let pass = 1; pass <= MAX_PASSES && pending.length; pass++) {
       if (pass > 1) {
         log(`pass ${pass}: retrying ${pending.length} unfilled field(s)...`);
@@ -370,7 +378,7 @@
           hl.focus(blockFor(f), `Filling: ${f.label}`); phoneStep = `filling ${f.label}`;
           await bringIntoView(f);
           const res = await fillOne(f);
-          await sleep(260);
+          await sleep(f.eeo === "hispanic" ? 700 : 260); // the race question appears after this one
           hl.mark(!!res.ok);
           if (res.ok) {
             ok++;

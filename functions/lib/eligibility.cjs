@@ -45,6 +45,12 @@ const PHRASES = {
     re(`\\b${US} citizen\\s*\\(?\\s*(?:required|only)\\b`),
     re(`\\b${US} citizen(?:ship)? (?:or|and) (?:lawful )?permanent resident(?:s| status)? (?:only|required)\\b`),
     re(`\\b${US} citizenship (?:and|&) [^.;]{0,90}\\b(?:are|is) required\\b`),
+    // A requirement line that states the citizenship: "Currently a US Citizen with capability to
+    // obtain and maintain a US Q clearance." (General Matter, 2026-11-11), "US Citizen".
+    re(`\\bcurrently (?:a |an )?${US} citizen\\b`),
+    re(`^(?:[-•*]\\s*)?(?:must be |be )?(?:a |an )?${US} citizen(?:ship)?\\.?$`),
+    // A DOE Q or L clearance is only granted to US citizens.
+    re(`\\b(?:doe |us |u\\.s\\. )?(?:q|l)[- ]clearance\\b[^.;]{0,40}\\b(?:required|must)\\b|\\b(?:requires?|must (?:have|hold|obtain)|ability to obtain|able to obtain|capability to obtain)(?: and maintain)? (?:an? )?(?:active |current )?(?:doe |us |u\\.s\\. )?(?:q|l)[- ]clearance\\b`),
     // The export-control "U.S. person" list named without a "must": "we will ask you … whether you are a
     // U.S. Citizen or green card holder, or have asylum/refugee status in the U.S." (Echodyne, 2026-11-11).
     re(`\\b${US} citizens?(?:hip)?\\b[^.;]{0,80}\\b(?:green card|permanent resident)[^.;]{0,80}\\b(?:asylum|asylee|refugee)`),
