@@ -227,6 +227,59 @@ async function ghItems(url) {
   } catch (_) { return []; }
 }
 
+const SCHOOL_GENERIC = new Set(["university", "college", "of", "the", "at", "and", "state", "institute", "school", "campus", "polytechnic"]);
+/** The board's school entry for `institution`: every distinctive word present, most words matched. */
+async function bestSchool(institution, search) {
+  const want = normText(institution).split(" ").filter(Boolean);
+  const distinct = want.filter((t) => !SCHOOL_GENERIC.has(t));
+  const terms = [institution, want.join(" "), want.slice(0, 3).join(" "), want.slice(0, 2).join(" ")];
+  let best = null, bestScore = 0;
+  for (const term of [...new Set(terms)]) {
+    for (const i of await search(term)) {
+      const have = new Set(normText(i.text).split(" "));
+      if (!distinct.every((t) => have.has(t))) continue;
+      const extra = [...have].filter((t) => t && !want.includes(t)).length;
+      const score = want.filter((t) => have.has(t)).length / want.length - extra * 0.01;
+      if (score > bestScore) { best = i; bestScore = score; }
+    }
+    if (bestScore >= 0.95) break;
+  }
+  return best && bestScore >= 0.6 ? best : null;
+}
+/** "Master of Science" -> "master's"; null when unknown. */
+function degreeLevel(s) {
+  return /ph\.?\s?d|doctor of philosophy|doctorate/i.test(s) ? "ph.d" :
+    /m\.?b\.?a\b|master of business/i.test(s) ? "m.b.a" :
+      /master|\bm\.?s\.?\b|\bm\.?tech|\bm\.?eng/i.test(s) ? "master's" :
+        /bachelor|\bb\.?s\.?\b|\bb\.?tech|\bb\.?e\.?\b|\bb\.?a\.?\b/i.test(s) ? "bachelor's" :
+          /associate/i.test(s) ? "associate's" :
+            /high school/i.test(s) ? "high school" : null;
+}
+/** The plain level ("Master's Degree") over variants ("Accelerated Master's", "Non-Master's ..."). */
+function bestDegree(items, key) {
+  const t = (i) => String(i.text || "").toLowerCase().replace(/[’]/g, "'");
+  const base = key.replace(/'s$/, "");
+  const hits = items.filter((i) => t(i).includes(key) || (key === "master's" && /\bmasters?\b/.test(t(i))) || (key === "bachelor's" && /\bbachelors?\b/.test(t(i))));
+  const bad = /\bnon[- ]|accelerated|international|equivalent|in progress|some |incomplete|diploma|certificate/;
+  const clean = hits.filter((i) => !bad.test(t(i)));
+  return clean.find((i) => new RegExp(`^${base}'?s?( degree)?$`).test(t(i).trim()))
+    || clean.find((i) => t(i).startsWith(base)) || clean[0] || null;
+}
+/** The discipline the field of study names in full, longest first ("Computer Science", never "Science"). */
+function bestDiscipline(items, field) {
+  const want = normText(field);
+  if (!want) return null;
+  const exact = items.find((i) => normText(i.text) === want);
+  if (exact) return exact;
+  const inside = items.filter((i) => { const n = normText(i.text); return n.length >= 4 && (` ${want} `).includes(` ${n} `); })
+    .sort((a, b) => normText(b.text).length - normText(a.text).length);
+  // A one-word discipline that is only part of the field ("Science" of
+  // "Computer Science") is not the field.
+  const best = inside.find((i) => normText(i.text).split(" ").length > 1 || want.split(" ").length === 1);
+  if (best) return best;
+  return items.find((i) => normText(i.text).startsWith(want)) || null;
+}
+
 async function educationFills(token, form, resume) {
   if (!/education/.test(String(form.education || ""))) return [];
   const ed = (resume.education || [])[0];
@@ -235,47 +288,35 @@ async function educationFills(token, form, resume) {
 
   // School — the board's school search is prefix-based ("California State
   // University, East Bay" returns nothing while "California State University"
-  // works), so retry with progressively shorter terms and score candidates by
-  // how many of the institution's words they contain.
+  // works), so retry with progressively shorter terms. A candidate must carry
+  // every distinctive word ("east", "bay"), not just most words: "California
+  // State University - Monterey Bay" scored 4 of 5 and was picked (IMC, 2026-11-11).
   if (ed.institution) {
-    const wantTokens = normText(ed.institution).split(" ").filter(Boolean);
-    const terms = [ed.institution, wantTokens.join(" "), wantTokens.slice(0, 3).join(" "), wantTokens.slice(0, 2).join(" ")];
-    let best = null, bestScore = 0;
-    for (const term of terms) {
-      const items = await ghItems(`${GH_BASE}/${token}/education/schools?term=${encodeURIComponent(term)}`);
-      for (const i of items) {
-        const have = new Set(normText(i.text).split(" "));
-        const score = wantTokens.filter((t) => have.has(t)).length / wantTokens.length;
-        if (score > bestScore) { best = i; bestScore = score; }
-      }
-      if (bestScore >= 0.99) break; // all words matched — done
-    }
-    if (best && bestScore >= 0.6) out.push({ label: "School", kind: "select", value: best.text });
+    const pick = bestSchool(ed.institution, async (term) => ghItems(`${GH_BASE}/${token}/education/schools?term=${encodeURIComponent(term)}`));
+    const best = await pick;
+    if (best) out.push({ label: "School", kind: "select", value: best.text });
   }
 
-  // Degree — classify the resume degree string into Greenhouse's fixed levels.
+  // Degree — the board's fixed levels. "Accelerated Master's" and "Non-Master's
+  // International Diploma" also contain "master's" and came first (Dropbox,
+  // Stage, 2026-11-11): the plain level wins.
   const degreeStr = ed.degree || "";
-  const degreeKey =
-    /ph\.?\s?d|doctor of philosophy/i.test(degreeStr) ? "ph.d" :
-      /m\.?b\.?a|master of business/i.test(degreeStr) ? "m.b.a" :
-        /master/i.test(degreeStr) ? "master's" :
-          /bachelor/i.test(degreeStr) ? "bachelor's" :
-            /associate/i.test(degreeStr) ? "associate's" :
-              /high school/i.test(degreeStr) ? "high school" : null;
+  const degreeKey = degreeLevel(degreeStr);
   if (degreeKey) {
     const items = await ghItems(`${GH_BASE}/${token}/education/degrees`);
-    const best = items.find((i) => i.text.toLowerCase().includes(degreeKey));
+    const best = bestDegree(items, degreeKey);
     if (best) out.push({ label: "Degree", kind: "select", value: best.text });
   }
 
-  // Discipline — the part after the comma ("Master of Science, Computer Science"),
-  // else any discipline name that appears inside the degree string.
-  const discGuess = (degreeStr.split(",")[1] || "").trim();
+  // Discipline — the field of study ({ field: "Computer Science" } on the
+  // profile's education, else the part after the comma or "in"). Only a
+  // discipline the field names in full; the longest one first. Matching the
+  // degree text picked "Science" out of "Master of Science" on 33 forms
+  // (2026-11-09..12).
   {
+    const field = ed.field || (degreeStr.split(",")[1] || "").trim() || ((degreeStr.match(/\bin\s+(.+)$/i) || [])[1] || "").trim();
     const items = await ghItems(`${GH_BASE}/${token}/education/disciplines`);
-    const want = normText(discGuess);
-    const best = (want && (items.find((i) => normText(i.text) === want) || items.find((i) => normText(i.text).includes(want))))
-      || items.find((i) => normText(degreeStr).includes(normText(i.text)));
+    const best = bestDiscipline(items, field);
     if (best) out.push({ label: "Discipline", kind: "select", value: best.text });
   }
 
@@ -430,4 +471,4 @@ const US_STATES = {
   DC: "District of Columbia",
 };
 
-module.exports = { prepareGreenhouseApplication, nationalPhone };
+module.exports = { prepareGreenhouseApplication, nationalPhone, bestSchool, bestDegree, bestDiscipline, degreeLevel };

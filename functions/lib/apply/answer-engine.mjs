@@ -181,7 +181,7 @@ function classify(label, kind = "") {
   // "Is your citizenship / residency / location in one of: Cuba, Iran, North Korea, Syria…?"
   if (choice && SANCTIONED.test(l) && /\b(one of|any of|following|located|reside|residen|citizen)/.test(l)) return "sanctionedCountry";
   // "Please list the type of support you may require": the visa itself.
-  if (text && /\b(type|kind) of (support|sponsorship|assistance|visa)\b|which (visa|sponsorship) (would|will|do) you (need|require)/.test(l)) return "sponsorshipType";
+  if (text && /\b(type|kind) of (support|sponsorship|assistance|visa)\b|which (visa|sponsorship) (would|will|do) you (need|require)|what (visa |immigration )?sponsorship (would|will|do) you (need|require)/.test(l)) return "sponsorshipType";
   // ── Ashby corpus additions (2026-10-09) ────────────────────────────────────
   // Follow-ups that only apply when an earlier answer was Other/Yes: a blank
   // text box is the honest answer. Only text kinds take this exit, since a
@@ -226,6 +226,15 @@ function classify(label, kind = "") {
   // found "s" in the resume and answered Yes (Allstate, J&J, 2026-11-10).
   if (/driver'?s?'? ?licen[cs]e|driving licen[cs]e|licensed driver/.test(l)) return "driversLicense";
   if (choice && /do you (have|hold|currently hold|possess) .{0,40}\b(licen[cs]e|certification|certificate|certified|cpa|pmp|series \d+)/.test(l)) return "licenseGate";
+  // Work authorization worded with "employed" or "begin employment": "Are you
+  // authorized to be employed in the United States?" read as a past-employer
+  // question and answered No (Superhuman, 2026-11-12); "If offered employment
+  // by Amazon, would you be legally eligible to begin employment immediately?"
+  // went to the AI, which said No (Twitch). Sponsorship wording goes on below.
+  if (!/sponsor|visa|without (any )?restriction|veteran/.test(l) && /authori[sz]ed to (be )?(employed|work)\b|(legally )?eligible to (be employed|begin (employment|work)|start (employment|work)|commence (employment|work))/.test(l)) return "workAuthorized";
+  // One box for both ("What is your gross annual salary expectation for this
+  // role, and do you have a specific notice period?"): both answers (Rain, 2026-11-10).
+  if (text && /salary|compensation/.test(l) && /notice period/.test(l)) return "salaryAndNotice";
   // "Are you currently employed?" names no company: the resume's present role
   // (SHI read it as "employed by SHI" and answered No, 2026-11-10).
   if (choice && /^(are you|is the applicant) (currently|presently|now) (employed|working)( full.?time)?\??$/.test(l)) return "currentlyEmployed";
@@ -679,6 +688,18 @@ export function classifyQuestion(q) {
  * yes/no rule that misread the label, so the question goes to the free-text
  * writer (or stays blank when optional).
  */
+/** The option that is the country itself: a full country list has "UNITED
+ *  STATES OF AMERICA" and "UNITED STATES MINOR OUTLYING ISLANDS", where a
+ *  word match finds two and gives up (KAYAK, 2026-11-12). */
+const US_NAMES = new Set(["united states", "united states of america", "usa", "us", "u s", "u s a", "america"]);
+function countryOption(primary, country) {
+  const opts = primary.values || primary.options || [];
+  const c = norm(country).replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  const isUS = US_NAMES.has(c);
+  const key = (o) => norm(o.label).replace(/[^a-z ]/g, " ").replace(/\s+/g, " ").trim();
+  return opts.find((o) => key(o) === c) || (isUS ? opts.find((o) => US_NAMES.has(key(o))) : null) || null;
+}
+
 export function answerQuestion(q, profile, ai, ctx = {}) {
   // Saved answers (Profile > Saved answers, and what the AI rescue or the
   // person filled before): the person's own come first, the AI's fill gaps.
@@ -1022,6 +1043,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return m ? out([{ name, value: m.value }], SOURCE.RESUME, 0.85, `${tier} ${role} from title`) : unanswered("no job-level option matches the title");
   }
   // Notice period buckets ("1-2 weeks", "1 month", "3+ months").
+  if (key === "salaryAndNotice") {
+    const sal = answerQuestion({ label: "What are your salary expectations?", fields: [{ ...primary, name }], required: true }, profile, ai, ctx);
+    const np = profile.noticePeriod || "2 weeks";
+    const s0 = String(sal.answers?.[0]?.value || "").trim();
+    return out([{ name, value: `${s0 ? `Salary: ${s0}. ` : ""}Notice period: ${np}.` }], SOURCE.PROFILE, 0.9, "salary and notice period");
+  }
   if (key === "noticePeriod") {
     const np = profile.noticePeriod || "2 weeks";
     if (!isSelect) return out([{ name, value: np }], SOURCE.PROFILE, 1);
@@ -1801,7 +1828,7 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   if (key === "whereLocated" && isSelect) {
     const m = findOnly(primary, cityTerms(profile).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)))
       || (profile.region ? findOnly(primary, [new RegExp(`\\b${escapeRe(norm(profile.region))}\\b`)]) : null)
-      || (profile.country ? findOnly(primary, [new RegExp(`\\b${escapeRe(norm(profile.country))}\\b`), /\bunited states\b|\busa?\b/]) : null)
+      || (profile.country ? countryOption(primary, profile.country) || findOnly(primary, [new RegExp(`\\b${escapeRe(norm(profile.country))}\\b`), /\bunited states\b|\busa?\b/]) : null)
       || findOnly(primary, [/^other\b|^elsewhere|outside|none of (the above|these)|not listed|remote/])
       // "Are you based somewhere we can employ you?" as a plain Yes/No for a U.S. profile.
       || (norm(profile.country || "united states") === "united states" ? findOnly(primary, [/^yes\b/]) : null);
