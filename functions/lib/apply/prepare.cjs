@@ -6,7 +6,7 @@
 
 const { buildProfileForJob, parsePlace, REMOTE_LOCATION_DEFAULT } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
-const { aiContext, answerFreeText, pickOption, coverLetter, pool, stripHtml } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption, coverLetter, coverLetterWords, pool, stripHtml } = require("./ai-text.cjs");
 
 const GH_BASE = "https://boards-api.greenhouse.io/v1/boards";
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -167,7 +167,8 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
 
   // 6. Cover letter (plain style) + resume bytes.
   let coverText = "";
-  if (openai) { try { coverText = await coverLetter(ctx, aiDeps); } catch (_) { coverText = ""; } }
+  const coverMustInclude = coverLetterWords([...questions.map((q) => `${q.label} ${stripHtml(q.description || "")}`), ctx.jobDescription]);
+  if (openai) { try { coverText = await coverLetter({ ...ctx, coverMustInclude }, aiDeps); } catch (_) { coverText = ""; } }
   // When the form has a cover-letter question with a paste-text variant, add a
   // fill so the content script pastes the generated letter ("enter manually").
   const clQ = questions.find((q) => (q.fields || []).some((f) => f.name === "cover_letter"));

@@ -2501,12 +2501,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // toggle, then fill the revealed textarea.
         const ghCoverText = async (_id, text) => {
           const wait = (ms) => window.__jwMainWait(ms);
-          const heads = [...document.querySelectorAll("label, legend, h1, h2, h3, h4, strong, span")]
-            .filter(n => /cover letter/i.test(n.textContent || "") && (n.textContent || "").trim().length < 40);
+          // The field's own box first: the 2026 Greenhouse form labels it with a
+          // <div id="upload-label-cover_letter"> inside role=group, which the
+          // heading search below never saw (PsiQuantum, 2026-11-12: required
+          // cover letter left empty as "no cover letter box on this form").
+          const own = document.getElementById("cover_letter_text")?.closest("[role=group], .file-upload, fieldset")
+            || document.getElementById("cover_letter")?.closest("[role=group], .file-upload, fieldset")
+            || document.querySelector("[aria-labelledby='upload-label-cover_letter']")
+            || document.getElementById("upload-label-cover_letter");
+          const heads = own ? [own] : [...document.querySelectorAll("label, legend, h1, h2, h3, h4, strong, span, div")]
+            .filter(n => [...n.childNodes].some(c => c.nodeType === 3 && /cover letter/i.test(c.textContent || "")) && (n.textContent || "").trim().length < 40);
           if (!heads.length) return { ok: false, error: "cover letter section not found" };
           // Walk up until the container holds the textarea or the manual toggle.
           let root = heads[0];
           for (let k = 0; k < 6 && root.parentElement; k++) {
+            if (root.querySelector("textarea") ||
+              [...root.querySelectorAll("button, a")].some(b => /enter manually|paste|write/i.test(b.textContent || ""))) break;
             root = root.parentElement;
             if (root.querySelector("textarea") ||
               [...root.querySelectorAll("button, a")].some(b => /enter manually|paste|write/i.test(b.textContent || ""))) break;

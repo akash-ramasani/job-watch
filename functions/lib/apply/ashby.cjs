@@ -17,7 +17,7 @@ const { applicationResume } = require("./applicationResume.cjs");
 const { METROS } = require("../resumeLocation.cjs");
 const { candidateYearsOf, buildProfileText } = require("../jobFit.cjs");
 const { renderCoverLetterPdf, contactLine } = require("./coverPdf.cjs");
-const { aiContext, answerFreeText, pickOption, coverLetter, pool } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption, coverLetter, coverLetterWords, pool } = require("./ai-text.cjs");
 
 const GQL = "https://jobs.ashbyhq.com/api/non-user-graphql";
 const DEFAULT_FETCH = (...a) => fetch(...a);
@@ -539,7 +539,8 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   const aiDeps = { openai, model, sanitizeText, sanitizeBlock, STYLE_PROMPT, aiTrapIn, readability };
   let coverText = "";
   if (wantsCover && openai) {
-    try { coverText = await coverLetter(ctx, aiDeps); } catch (_) { coverText = ""; }
+    const coverMustInclude = coverLetterWords([...all.map((q) => `${q.label} ${q.description || ""}`), ctx.jobDescription]);
+    try { coverText = await coverLetter({ ...ctx, coverMustInclude }, aiDeps); } catch (_) { coverText = ""; }
   }
   const cache = new Map();
   const aiNotes = new Map();

@@ -583,3 +583,14 @@ test("every location format seen on 1,006 live Ashby postings types a real place
   assert.equal(lf("p", "Strava Denver", P, "Strava").match, "Denver, Colorado");
   assert.equal(lf("p", "Mercor HQ, 181 Fremont Street", P, "Mercor").match, "San Francisco, California");
 });
+
+test("cover letter: a posting's 'include the word' instruction reaches the letter (PsiQuantum, 2026-11-12)", async () => {
+  const { coverLetterWords, coverLetter } = require("../lib/apply/ai-text.cjs");
+  assert.deepEqual(coverLetterWords(['Please include the word "purple" in the cover letter submitted. ', "Why us?", null]), ["purple"]);
+  assert.deepEqual(coverLetterWords(["Include the word 'banana' somewhere"]), []);
+  let calls = 0;
+  const openai = { chat: { completions: { create: async (p) => { calls++; return { choices: [{ message: { content: /purple/.test(p.messages[0].content) && calls > 1 ? "I like purple work." : "I like this work." } }] }; } } } };
+  const ctx = { name: "A", roles: [], jobTitle: "Eng", companyName: "Co", coverMustInclude: ["purple"] };
+  const text = await coverLetter(ctx, { openai, sanitizeBlock: (t) => t, STYLE_PROMPT: "" });
+  assert.match(text, /purple/);
+});

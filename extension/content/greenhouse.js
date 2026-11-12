@@ -395,8 +395,9 @@
             log("filled:", f.label, "=>", f.kind === "file" ? "<resume>" : f.kind === "cover-text" ? "<cover letter>" : f.value);
             answersLog[f.name || f.label] = { label: f.label, answer: f.kind === "file" ? data.resumeName || "resume" : f.kind === "cover-text" ? "<cover letter>" : String(f.value ?? ""), type: f.kind || "text", source: f.source || "" };
           }
-          else if (res.error === "cover letter section not found") {
-            // This form has no cover letter box: nothing to fill.
+          else if (res.error === "cover letter section not found" && !f.required) {
+            // This form has no cover letter box: nothing to fill. A required
+            // one that was not found stays a problem for the person.
             f.absent = true;
             log("no cover letter box on this form");
           }
