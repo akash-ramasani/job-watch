@@ -633,7 +633,10 @@ exports.syncRecentJobsHourly = onSchedule(
     schedule: "every 2 minutes",
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
-    memory: "1GiB",
+    // 2026-11-11: 2 vCPU (the default for 1 GiB is 0.58). The run is CPU-bound
+    // (parsing ~4,500 boards); it must finish inside the 2-minute schedule.
+    memory: "2GiB",
+    cpu: 2,
     maxInstances: 3,
     secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
