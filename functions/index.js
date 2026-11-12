@@ -155,9 +155,10 @@ const storageBucket = admin.storage().bucket("greenhouse-jobs-scrapper.firebases
  * ----------------------------
  */
 const REGION = "us-central1";
-const FEED_CONCURRENCY = 15;
+const FEED_CONCURRENCY = 60; // 2026-11-11: 15 → 60, a full pass of ~4,600 boards in about a minute instead of 3.6
 
 const RECENT_WINDOW_MINUTES = 20;
+const BACKLOG_MS = 45 * 1000; // spare-time re-scoring per scheduled sync
 const TTL_DAYS = 3;
 
 // Job scoring (functions/lib/jobFit.cjs). Each assessment is one ~3-5 s model
@@ -627,7 +628,9 @@ const NON_US_LOCATION_RE = /\b(afghanistan|albania|algeria|angola|argentina|arme
 exports.syncRecentJobsHourly = onSchedule(
   {
     region: REGION,
-    schedule: "every 5 minutes",
+    // 2026-11-11: every 5 → every 2 minutes, so a new job is found in about
+    // 2 minutes (auto-apply's goal: submitted ~5 minutes after it is posted).
+    schedule: "every 2 minutes",
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
     memory: "1GiB",
@@ -1211,9 +1214,11 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   // Spare time: fill in and refresh each AI-enabled user's scores for the Jobs page.
   if (userId === ADMIN_UID) {
     const uids = await listAiEnabledUserIds().catch(() => [ADMIN_UID]);
+    const backlogUntil = onlyFeedIds ? deadlineMs : Date.now() + BACKLOG_MS;
     for (const uid of uids) {
-      if (Date.now() > deadlineMs - 30 * 1000) break;
-      await rescoreBacklog(uid, { deadlineMs }).catch((err) => logger.warn(`rescoreBacklog failed userId=${uid}: ${err?.message || err}`));
+      if (Date.now() > Math.min(deadlineMs, backlogUntil) - 5 * 1000) break;
+      // At most BACKLOG_MS of it per run, so the next 2-minute sync is not skipped.
+      await rescoreBacklog(uid, { deadlineMs: Math.min(deadlineMs, backlogUntil) }).catch((err) => logger.warn(`rescoreBacklog failed userId=${uid}: ${err?.message || err}`));
     }
   }
 

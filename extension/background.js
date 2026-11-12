@@ -580,11 +580,14 @@ const WORKDAY_JOB_TIMEOUT_MS = 25 * 60 * 1000; // account, verification email an
 const WORKDAY_MAX_REVIEW = 5; // Workday applications waiting on Review before more start
 const AUTO_GAP_MS = [1500, 3000]; // back to back: just long enough for the tab to close
 const AUTO_IDLE_MS = 15 * 60 * 1000; // the queue is fetched again at least this often
-const AUTO_POLL_MS = 60 * 1000; // nothing to do: check whether the job list changed this often
+const AUTO_POLL_MS = 20 * 1000; // nothing to do: check whether the job list changed this often (2026-11-11: 60 s → 20 s, new jobs start sooner)
 const AUTO_RETRY_MS = [30 * 60 * 1000, 2 * 60 * 60 * 1000]; // after the 1st and 2nd failure
 const AUTO_MAX_TRIES = 3;
 const AUTO_MAX_OPEN = 3; // "needs you" tabs left open at once
 const AUTO_PARALLEL = 3; // jobs applied to at the same time, each in its own tab
+// Workday forms take up to 25 minutes; at most this many of the slots go to
+// them, so a new Greenhouse/Ashby job (about a minute) never waits behind them.
+const WORKDAY_MAX_PARALLEL = 1;
 const CLOSED_POSTING = /not found|no longer (accepting|available|open)|position (has been )?(filled|closed)|job (is )?closed|posting (was )?(removed|expired|closed)|\b404\b/i;
 let autoBusy = false;
 let autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
@@ -769,8 +772,9 @@ async function autoNextJob(st, busy = new Set()) {
   // and one of them stalls (two Micron jobs 20 s apart, 2026-11-10). A site
   // that showed a maintenance page waits out its pause.
   const wdBusy = new Set(st.running.filter((r) => r.source === "workday").map((r) => workdayTenantOf(r.applyUrl || "")));
+  const wdRunning = st.running.filter((r) => r.source === "workday").length;
   for (const j of autoQueue.list) {
-    if (j.source === "workday" && !workdayOk) continue;
+    if (j.source === "workday" && (!workdayOk || wdRunning >= WORKDAY_MAX_PARALLEL)) continue;
     if (j.source === "workday") {
       const t = workdayTenantOf(j.applyUrl || "");
       if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now()) continue;

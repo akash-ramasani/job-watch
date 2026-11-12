@@ -91,6 +91,9 @@ function resumeFileName(fullName, jobTitle) {
  * companyName, externalId, locationName, postedAt }]; source is "ashby",
  * "greenhouse", "lever" or "workday".
  */
+// A job JobWatch first saw this recently is applied to before the backlog.
+const FRESH_MS = 2 * 60 * 60 * 1000;
+
 async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null } = {}) {
   const ctx = createAssistantContext(db, uid, { adminUid });
   const aggs = db.collection("users").doc(adminUid).collection("aggregations");
@@ -179,16 +182,25 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const ms = (ts) => (ts?.toMillis ? ts.toMillis() : ts?._seconds ? ts._seconds * 1000 : (Date.parse(ts) || 0));
     const postedAt = Math.min(...[ms(j.sourceUpdatedTs), ms(j.firstSeenAt)].filter((t) => t > 0)) || 0;
     const score = typeof scores[j.id]?.score === "number" ? scores[j.id].score : -1;
+    // Fresh: JobWatch first saw it within FRESH_MS. These go first (2026-11-11:
+    // a job posted 10 minutes ago waited hours behind the day's Workday backlog).
+    const seenAt = ms(j.firstSeenAt) || postedAt;
+    const fresh = !test && seenAt > 0 && Date.now() - seenAt <= FRESH_MS;
     out.push({
       jobId: j.id, source: board, applyUrl,
       title: j.title || "", companyName: j.companyName || "", externalId: String(j.externalId || ""),
-      locationName: j.locationName || "", postedAt, score, ...(test ? { test: true } : {}),
+      locationName: j.locationName || "", postedAt, seenAt, score, ...(fresh ? { fresh: true } : {}), ...(test ? { test: true } : {}),
       ...(board === "workday" && !test && (submitAll || submitJobs.has(String(j.id))) ? { submit: true } : {}),
     });
   }
-  // Newest day first; within a day, the best match first; then the newest.
+  // Fresh jobs first, the quick boards (Greenhouse, Ashby, Lever: about a
+  // minute each) before Workday, newest first. Then the rest: newest day
+  // first; within a day, the best match first; then the newest.
   const day = (t) => new Date(t).toLocaleDateString("en-CA", { timeZone: "America/Los_Angeles" });
-  out.sort((a, b) => day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
+  const slow = (j) => (j.source === "workday" ? 1 : 0);
+  out.sort((a, b) => (b.fresh ? 1 : 0) - (a.fresh ? 1 : 0)
+    || (a.fresh && b.fresh ? slow(a) - slow(b) || b.seenAt - a.seenAt : 0)
+    || day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
   // Then the "needs you" forms marked for another try (scripts/retry-stuck.mjs,
   // 2026-11-11): still open when marked, never submitted since. Each carries
   // its mark as retryToken so the runner starts it fresh.

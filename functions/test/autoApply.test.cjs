@@ -86,3 +86,28 @@ test("queue: related Ashby/Greenhouse jobs, newest first, minus applied and unre
   data["users/U/aggregations/myJobScores"].scores.j2 = { score: 39 };
   assert.deepEqual((await buildQueue(db, "U", { adminUid: "A" })).map((j) => j.jobId), ["j8"]);
 });
+
+test("queue: a job first seen in the last 2 hours goes before the backlog, whatever its score (2026-11-11)", async () => {
+  const { buildQueue } = require("../lib/apply/autoApply.cjs");
+  const docs = (rows) => ({ docs: rows.map(([id, data]) => ({ id, data: () => data })), exists: true });
+  const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
+  const gh = (id, ext, title, ts) => ({ id, source: "greenhouse", companyKey: "f1", externalId: ext, title, companyName: "Stitch Fix", jobUrl: "", sourceUpdatedTs: ts, fam: ["software"] });
+  const jobs = [
+    gh("old95", "1", "Staff Engineer", ago(5 * 60)), // this morning, best match
+    gh("new45", "2", "Backend Engineer", ago(10)), // posted 10 minutes ago, weaker match
+    gh("new60", "3", "Platform Engineer", ago(40)),
+  ];
+  const data = {
+    "users/A/aggregations/allJobs": { jobs }, "users/A/aggregations/recentJobs": { jobs: [] },
+    "users/U/aggregations/myJobScores": { scores: { old95: { score: 95 }, new45: { score: 45 }, new60: { score: 60 } } },
+    "users/U/settings/preferences": { jobTypes: ["software"] }, "users/U": {}, "users/U/resume/profile": {},
+  };
+  const coll = { "users/A/feeds": [["f1", { url: "https://boards-api.greenhouse.io/v1/boards/stitchfix/jobs?content=true" }]], "users/U/applications": [] };
+  const ref = (path) => ({ get: async () => (coll[path] ? docs(coll[path]) : { exists: path in data, data: () => data[path] }), collection: (c) => ref(`${path}/${c}`), doc: (d) => ref(`${path}/${d}`) });
+  const q = await buildQueue({ collection: (c) => ref(c) }, "U", { adminUid: "A" });
+  // Today all three; before, the 95 went first and a fresh job waited behind the day's backlog.
+  const fresh = q.filter((j) => j.fresh).map((j) => j.jobId);
+  assert.deepEqual(q.map((j) => j.jobId).slice(0, 2), ["new45", "new60"]);
+  assert.deepEqual(fresh, ["new45", "new60"]);
+  assert.equal(q[2].jobId, "old95");
+});
