@@ -159,7 +159,7 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
   const aiPicked = new Set();
   const parked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] })).filter(({ q }) => q);
   if (openai) {
-    await pool(parked.filter(({ q }) => ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length), 4, async ({ r, q }) => {
+    await pool(parked.filter(({ r, q }) => !/^(only you can answer|ai-use disclosure)/i.test(r.note || "") && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length), 4, async ({ r, q }) => {
       try {
         const opts = q.fields[0].values;
         const kind = fieldKind(q.fields[0]);

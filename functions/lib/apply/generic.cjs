@@ -549,7 +549,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
   const qOf = (r) => questions[mapped.answers.indexOf(r)];
   if (openai) {
     const choiceParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
-      .filter(({ r, q }) => q && !/^only you can answer/i.test(r.note || "") && !fills.some((f) => f.path === q.path) && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
+      .filter(({ r, q }) => q && !/^(only you can answer|ai-use disclosure)/i.test(r.note || "") && !fills.some((f) => f.path === q.path) && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
     await pool(choiceParked, 4, async ({ r, q }) => {
       try {
         const opts = q.fields[0].values;
@@ -563,7 +563,7 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
       } catch (e) { aiNotes.set(r.label, `AI pick failed: ${String(e?.message || e).slice(0, 80)}`); }
     });
     const openParked = mapped.review.map((r) => ({ r, q: qOf(r) }))
-      .filter(({ r, q }) => q && aiMayWrite(q) && !/^only you can answer/i.test(r.note || "") && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
+      .filter(({ r, q }) => q && aiMayWrite(q) && !/^(only you can answer|ai-use disclosure)/i.test(r.note || "") && !aiPicked.has(r.label) && !fills.some((f) => f.path === q.path) && /unrecognized field/i.test(r.note || "") && ["number", "text", "longtext"].includes(fieldKind(q.fields[0])));
     await pool(openParked, 4, async ({ r, q }) => {
       try {
         const num = fieldKind(q.fields[0]) === "number";

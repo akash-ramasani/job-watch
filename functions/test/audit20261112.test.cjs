@@ -48,3 +48,45 @@ test("education: Computer Science not Science, the plain Master's, the right cam
   const block = it(["California State University - Monterey Bay", "California State University - East Bay"]);
   assert.equal((await bestSchool("California State University, East Bay", async () => block)).text, "California State University - East Bay");
 });
+
+// Second review (2026-11-12): sponsorship rule set by the person, other
+// countries, Profile-only answers, and misreads found in code review.
+const YN = ["Yes", "No"];
+test("without sponsorship: Yes when only now is asked (OPT), No for any future", () => {
+  assert.equal(val(sel("Are you authorized to work in the U.S. without company sponsorship?", YN)), "Yes");
+  assert.equal(val(sel("Are you currently authorized to work in the United States without employer sponsorship?", YN)), "Yes");
+  assert.equal(val(sel("Are you legally eligible to work in the country where the position is located without sponsorship or visa transfer?", YN)), "Yes");
+  assert.equal(val(sel("Are you authorized to work in the United States without sponsorship now or in the future?", YN)), "No");
+  assert.equal(val(sel("Are you located in and able to work in the US without visa sponsorship for the next 5 years?", YN)), "No");
+  assert.equal(val(sel("This position is not eligible for Visa Sponsorship. Applicants must be authorized to work in the United States without sponsorship. Are you?", YN)), "No");
+  assert.equal(val(sel("Will you now or in the future require sponsorship for employment visa status?", YN)), "Yes");
+});
+
+test("work authorization for another country is No; New Mexico is the US", () => {
+  assert.equal(val(sel("Are you authorized to work in Canada?", YN)), "No");
+  assert.equal(val(sel("Are you legally authorized to work in the United Kingdom?", YN)), "No");
+  assert.equal(val(sel("Are you authorized to work in New Mexico?", YN)), "Yes");
+});
+
+test("Profile-only answers: criminal history, AI use, H-1B; unanswered ones are left for the person", () => {
+  const p = { ...P, criminalHistory: "No", aiUsageDisclosure: "No", currentlyH1B: "No" };
+  assert.equal(val(sel("Have you ever been convicted of a felony?", YN), p), "No");
+  assert.equal(val(sel("Are you under indictment or information in any court for a felony, or any other crime?", YN), p), "No");
+  assert.equal(val(sel("Did you use AI to complete this application?", YN), p), "No");
+  assert.equal(val(sel("Do you currently hold an H-1B visa?", YN), p), "No");
+  const r = ae.answerQuestion(sel("Have you ever been convicted of a felony?", YN), P, null);
+  assert.equal(r.answers.length, 0);
+  assert.match(r.note, /^Only you can answer/);
+  // A background-check consent is not a criminal-history question.
+  assert.notEqual(ae.classifyQuestion(sel("Do you consent to a criminal background check?", YN)), "criminalHistory");
+});
+
+test("misreads: SMS opt-in, Box vs Dropbox, skills 'worked with', office policy", () => {
+  assert.notEqual(ae.classifyQuestion(sel("Do you want to opt in to receive SMS updates?", YN)), "currentVisaStatus");
+  const p = { ...P, roles: [{ company: "Dropbox" }], willingToWorkHybrid: "Yes" };
+  assert.equal(val(sel("Have you ever been employed by Box?", YN), p), "No");
+  assert.equal(val(sel("Have you ever been employed by Dropbox?", YN), p), "Yes");
+  assert.notEqual(ae.classifyQuestion(sel("Have you worked with Kafka before?", YN)), "workedHereBefore");
+  assert.notEqual(ae.classifyQuestion(txt("Please summarize your employment history")), "workedHereBefore");
+  assert.equal(val(sel("Are you comfortable with our in-office policy of 3 days a week?", YN), p), "Yes");
+});

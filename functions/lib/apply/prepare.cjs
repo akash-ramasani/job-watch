@@ -118,7 +118,9 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   //     (a salary number, a link only the person has) stay for the person.
   const aiPicked = new Set();
   if (openai) {
-    const parkedQs = mapped.review.map((r) => ({ r, q: qByLabel0.get(r.label) })).filter(({ q }) => q && q.fields?.[0]);
+    // Questions the rules leave for the person (criminal history, visa status,
+    // AI use, driver's license) never go to the AI.
+    const parkedQs = mapped.review.map((r) => ({ r, q: qByLabel0.get(r.label) })).filter(({ r, q }) => q && q.fields?.[0] && !/^(only you can answer|ai-use disclosure)/i.test(r.note || ""));
     await pool(parkedQs, 4, async ({ r, q }) => {
       const kind = fieldKind(q.fields[0]);
       const opts = q.fields[0].values || [];

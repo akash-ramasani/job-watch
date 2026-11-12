@@ -593,7 +593,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
   const aiPicked = new Set();
   if (openai) {
     const choiceParked = mapped.review.map((r) => ({ r, q: questions[mapped.answers.indexOf(r)] }))
-      .filter(({ q }) => q && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
+      .filter(({ r, q }) => q && !/^(only you can answer|ai-use disclosure)/i.test(r.note || "") && ["select", "multiselect", "boolean"].includes(fieldKind(q.fields[0])) && (q.fields[0].values || []).length);
     await pool(choiceParked, 4, async ({ r, q }) => {
       try {
         const opts = q.fields[0].values;

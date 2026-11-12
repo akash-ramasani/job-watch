@@ -59,6 +59,9 @@ function regionVariants(value) {
 
 const stripHtml = (s) => (s || "").replace(/<[^>]+>/g, " ").replace(/&[a-z]+;/gi, " ").replace(/\s+/g, " ").trim();
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Countries other than the US named in a work-authorization question. Not
+// "New Mexico", and not names that are also US states (Georgia).
+const NON_US_COUNTRY_RE = /\b(canada|(?<!new )mexico|united kingdom|\buk\b|great britain|england|scotland|ireland|germany|france|india|australia|netherlands|spain|italy|poland|portugal|belgium|austria|switzerland|sweden|denmark|norway|finland|czech|romania|singapore|japan|china|hong kong|taiwan|korea|philippines|israel|brazil|argentina|colombia|chile|new zealand|south africa|united arab emirates|uae|european union|\beu\b|europe)\b/;
 
 /** Does option text `ol` name the place `t`? Whole words only, so a state
  *  abbreviation ("ca") never matches inside another city ("Chicago"). */
@@ -165,6 +168,9 @@ function classify(label, kind = "") {
   const choice = ["boolean", "select", "multiselect"].includes(kind);
   // Profile questions the person answers once (Profile > Application
   // questions, 2026-11-10), asked on Workday in many wordings:
+  // Criminal history (Profile: criminalHistory): convictions, pending charges,
+  // indictment. Not a consent to a background check.
+  if (choice && /\b(convicted|conviction|pled guilty|plead(ed)? (guilty|no contest|nolo)|under indictment|felony|misdemeanou?r|criminal (record|history|charges?|offen[cs]e))\b/.test(l) && !/(consent|authori[sz]e|agree to|willing to (undergo|submit)|background (check|screen))/.test(l) && !/^(i |attention|it is unlawful|please note|note:|by (submitting|signing|checking))/.test(l)) return "criminalHistory";
   // AI review consent (Labcorp, Visa, McKesson, Medtronic, Travelers, ADI).
   if (choice && /(artificial intelligence|\bai\b|automated tools?)/.test(l) && /(consent|permit|allow|agree|opt|use|uses|using|may use)/.test(l) && /(review|evaluat|assess|process|screen|insight|match|consider|identify)/.test(l) && !/^are you (familiar with|open to|comfortable)/.test(l)) return "aiConsent";
   // Being considered or contacted for other, future or contract roles (JLL, Amgen, Travelers).
@@ -226,6 +232,9 @@ function classify(label, kind = "") {
   // found "s" in the resume and answered Yes (Allstate, J&J, 2026-11-10).
   if (/driver'?s?'? ?licen[cs]e|driving licen[cs]e|licensed driver/.test(l)) return "driversLicense";
   if (choice && /do you (have|hold|currently hold|possess) .{0,40}\b(licen[cs]e|certification|certificate|certified|cpa|pmp|series \d+)/.test(l)) return "licenseGate";
+  // "Are you authorized to work in Canada / the UK / Germany?" (the profile's
+  // work authorization is for the US only).
+  if (!/veteran/.test(l) && /(authori[sz]ed|eligible|permitted|entitled|right|legally able)\b.{0,40}\b(work|employ)/.test(l) && NON_US_COUNTRY_RE.test(l) && !/united states|\bu\.?s\.?a?\b|america\b/.test(l)) return "workAuthorizedOtherCountry";
   // Work authorization worded with "employed" or "begin employment": "Are you
   // authorized to be employed in the United States?" read as a past-employer
   // question and answered No (Superhuman, 2026-11-12); "If offered employment
@@ -316,7 +325,9 @@ function classify(label, kind = "") {
   // Willingness, not history: "Do you want to work 100% remote long-term?"
   if (choice && /(want|like|open|willing|comfortable|happy) .{0,25}\b(work|working|being) .{0,20}(100% |fully |entirely )?remote/.test(l) && !/previously|before|have you (ever )?worked/.test(l)) return "remoteOk";
   // "Do you currently live in the SF Bay Area OR Chicago Metro?" — a fact about the person.
-  if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) (in|near|within) /.test(l) && (/:\s*\S/.test(l) || !/following|below|listed|these|one of/.test(l))) return "livesIn";
+  // "Are you located in and able to work in the US without visa sponsorship
+  // for the next 5 years?" is a sponsorship question (handled below).
+  if (choice && !/sponsor/.test(l) && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) (in|near|within) /.test(l) && (/:\s*\S/.test(l) || !/following|below|listed|these|one of/.test(l))) return "livesIn";
   // "Are you located within 50 miles of one of the following office hubs" (Writer):
   // the hubs are after a colon, in the details, or in the options.
   if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) within \d+ ?(miles|mi|km|kilometers)\b/.test(l)) return "livesIn";
@@ -333,7 +344,9 @@ function classify(label, kind = "") {
 
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
-  if (has("authorized", "work") && l.includes("without") && (l.includes("sponsor") || l.includes("visa"))) return "authorizedWithoutSponsorship";
+  // "Are you eligible / able / legally permitted to work … without sponsorship?"
+  // answered Yes from workAuthorized alone (4 forms, 2026-11-12 audit).
+  if (/(authori[sz]ed|eligible|able|permitted|entitled|right)\b.{0,60}\b(work|employ)|\b(work|employment) authori[sz]ation/.test(l) && /without|not requir|no need/.test(l) && /sponsor|visa|work permit|immigration/.test(l) && !/veteran/.test(l)) return "authorizedWithoutSponsorship";
   // "Authorized … without any restrictions to the length of employment? (Answer
   // No if you are in a non-immigrant status such as H, L, F, including OPT)"
   // (U.S. Bank): a status question; OPT is authorized but time-limited.
@@ -350,7 +363,7 @@ function classify(label, kind = "") {
   // Word-bounded: "opt" as a substring misfires on "option", "cpt" on
   // "acceptance", etc. (this once routed "select the option that best
   // describes you" to the visa-status handler).
-  if (/currently.{0,20}(status|visa)/.test(l) || /\bo-?1\b|\bh-?1b\b|\bf-?1\b|\bopt\b(?!-?(in|out)\b)|\bcpt\b|\bj-?1\b/.test(l) || (l.includes("student") && l.includes("status"))) return "currentVisaStatus";
+  if (/currently.{0,20}(status|visa)/.test(l) || /\bo-?1\b|\bh-?1b\b|\bf-?1\b|\bopt\b(?!\s*-?\s*(in|out)\b)|\bcpt\b|\bj-?1\b/.test(l) || (l.includes("student") && l.includes("status"))) return "currentVisaStatus";
   // "Are you legally authorized for employment in the United States?" (Centene).
   // Not a veteran statement that mentions "authorized" (Cadence's VEVRAA text).
   if (!/veteran/.test(l) && /legally authori[sz]ed|authori[sz]ed for employment/.test(l)) return "workAuthorized";
@@ -370,7 +383,7 @@ function classify(label, kind = "") {
   // not the AI's guess of No. Interviewing is not applying: those stay out.
   if (!/interview/.test(l) && (/previously applied|applied (to|for) (a |an )?.{0,30}(position|role|job)|applied (here|before|with us)/.test(l)
     || /(have|had) you (ever |previously )?(applied|submitted an application)\b|applied on (any )?previous occasions|ever applied (for|to|at|with)|applied for (work|employment)/.test(l))) return "previouslyApplied";
-  if (has("worked", "before") || has("previously", "worked") || has("consult", "before") || /have you (ever )?worked (at|for)/.test(l) || /worked (here|at this company)/.test(l) || /former .{0,25}(employee|intern)/.test(l) || /been employed (by|at|with)/.test(l) || /provided services to/.test(l) || /employment agency|placement firm/.test(l) || /employment history/.test(l) || /currently (an? )?.{0,30}(employee|contractor|intern)s? (at|of|with)\b/.test(l)) return "workedHereBefore";
+  if ((has("worked", "before") && (/worked (with|for) (us|our)\b/.test(l) || !/worked (with|on|using|in|as)\b/.test(l))) || has("previously", "worked") || has("consult", "before") || /have you (ever )?worked (at|for)/.test(l) || /worked (here|at this company)/.test(l) || /former .{0,25}(employee|intern)/.test(l) || /been employed (by|at|with)/.test(l) || /provided services to/.test(l) || /employment agency|placement firm/.test(l) || (choice && /employment history/.test(l)) || /currently (an? )?.{0,30}(employee|contractor|intern)s? (at|of|with)\b/.test(l)) return "workedHereBefore";
   // Conflict-of-interest disclosures (family at the company/vendors, outside
   // business activities, government-official ties). Checked before
   // relatedToEmployee/currentCompany so compound COI questions land here.
@@ -398,7 +411,9 @@ function classify(label, kind = "") {
   if (choice && /level of experience with ai|experience with ai tools|ai (tools?|fluency|proficiency|maturity) level|how (would you )?(describe|rate) your .{0,30}\bai\b/.test(l)) return "aiToolsLevel";
   // "Are you comfortable working from the location listed on this job description?"
   if (choice && /(comfortable|able|willing) (to work|working|with working) (from|in|at) the location (listed|on|in|of)/.test(l)) return "locationComfortable";
-  if (choice && (/do you have (a )?(minimum|at least|more than|over)\b/.test(l) || /\b\d+\+? (or more )?(years?|yrs) (of )?.{0,40}experience/.test(l)
+  // Office, onsite, hybrid and travel arrangements are willingness questions,
+  // not skills ("Are you comfortable with our in-office policy?" got No).
+  if (choice && !/\b(office|onsite|on-site|in.?person|hybrid|remote|relocat|commut|travel|days? (a|per) week|schedule|shift|weekends?)\b/.test(l) && (/do you have (a )?(minimum|at least|more than|over)\b/.test(l) || /\b\d+\+? (or more )?(years?|yrs) (of )?.{0,40}experience/.test(l)
     || /do you have (any |hands.?on |practical |professional |direct |prior |previous |work |industry |relevant |paid |full.?time |real.?world |significant |extensive )*experience (with|in|using|building|deploying|working|of|as)/.test(l)
     || /have you (ever |personally |previously |directly )?(worked|led|built|deployed|shipped|managed|contributed|run|designed|developed|operated|reviewed|completed|implemented|written|used|owned|trained|coached)\b/.test(l) || /^are you familiar with/.test(l)
     || /^are you (proficient|experienced|skilled|fluent|comfortable|strong) (in|with|using|at)\b/.test(l)
@@ -1372,11 +1387,17 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   }
 
   // Authorized to work without sponsorship: resolve from BOTH fields.
+  // The person's rule (2026-11-12): authorized NOW without sponsorship -> Yes
+  // (F-1 OPT); anything about the future ("now or in the future", "will you",
+  // "next 5 years", a role that does not sponsor) -> No, since sponsorship is
+  // needed later. The same question had gone out as both Yes and No.
   if (key === "authorizedWithoutSponsorship") {
     const req = norm(profile.requiresSponsorship);
     const auth = norm(profile.workAuthorized);
+    const ll = norm(label);
+    const future = /future|will (you|it)|would you|at any (point|time)|going forward|later|\bnow (or|and)\b|both now|ongoing|long.?term|duration|next \d+|\d+ years|(not|unable to|cannot|can't|does not|do not|will not|won't) (be )?(eligible for|able to|offer|provide|sponsor|support)|no (visa )?sponsorship (is|will be) (available|offered|provided)|not (be )?(offering|providing|sponsoring)|ever (need|require)|employment visa (now|status)/.test(ll);
     let ans = null;
-    if (req === "yes") ans = "No"; // needs sponsorship -> not authorized without it
+    if (req === "yes") ans = auth === "yes" && !future ? "Yes" : "No";
     else if (req === "no" && auth === "yes") ans = "Yes";
     if (!ans) return unanswered("cannot resolve authorized-without-sponsorship from profile");
     if (isSelect) {
@@ -1388,6 +1409,20 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     return out([{ name, value: ans }], SOURCE.PROFILE, 1);
   }
 
+  if (key === "workAuthorizedOtherCountry") {
+    if (!isSelect) return out([{ name, value: "No" }], SOURCE.PROFILE, 1);
+    const m = matchOption(primary, "No") || findOnly(primary, [/^no\b/]);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "work authorization is for the US only") : unanswered('no "No" option');
+  }
+  // Profile yes/no answers the person gives once; never the AI's guess.
+  if (key === "criminalHistory") {
+    const raw = profile[key];
+    const v = raw === true || /^y/i.test(String(raw ?? "")) ? "Yes" : raw === false || /^n/i.test(String(raw ?? "")) ? "No" : null;
+    if (!v) return unanswered("Only you can answer: criminal history (not answered in the Profile)");
+    if (!isSelect) return out([{ name, value: v }], SOURCE.PROFILE, 1);
+    const m = matchOption(primary, v) || findOnly(primary, [new RegExp("^" + v.toLowerCase() + "\\b"), v === "No" ? /\b(have not|haven't|did not|didn't|do not|don't|never|not)\b/ : /\b(i have|i did|i do)\b/]);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `Profile: ${key}`) : unanswered(`Only you can answer: no "${v}" option`);
+  }
   // Specific current-visa-status questions (O-1/H1B/F-1/OPT ...). Only answerable
   // if profile.visaStatus explicitly encodes it; otherwise PARK, never guess.
   if (key === "currentVisaStatus") {
@@ -1396,9 +1431,11 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     const isStudent = /\bf-?1\b|\bopt\b|\bcpt\b|\bstudent\b|\btrainee\b|\bj-?1\b/.test(ll);
     const isSponsored = /\bo-?1\b|\bh-?1b\b|\btn\b|\be-?3\b|sponsored status/.test(ll);
     let ans = null;
-    if (isStudent && vs.student != null) ans = vs.student ? "Yes" : "No";
+    const h1b = profile.currentlyH1B;
+    if (/\bh-?1b?\b/.test(ll) && !isStudent && h1b != null && h1b !== "") ans = /^y/i.test(String(h1b)) || h1b === true ? "Yes" : "No";
+    else if (isStudent && vs.student != null) ans = vs.student ? "Yes" : "No";
     else if (isSponsored && vs.sponsored != null) ans = vs.sponsored ? "Yes" : "No";
-    if (!ans) return unanswered("current visa status question needs your input");
+    if (!ans) return unanswered("Only you can answer: current visa status (not in the Profile)");
     if (isSelect) { const m = matchOption(primary, ans); return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1) : unanswered(`no "${ans}" option`); }
     return out([{ name, value: ans }], SOURCE.PROFILE, 1);
   }
@@ -1634,7 +1671,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     const co = norm(profile.companyName || profile.jobCompanyName || "");
     const employers = (profile.roles || []).map((r) => norm(r.company || ""));
     const target = named && !/any|the following|a current|one/.test(named) ? named : co;
-    const worked = !!target && employers.some((e) => e && (e.includes(target) || target.includes(e)));
+    // Whole words: "employed by Box?" is not Dropbox, Meta is not Metabase.
+    const word = (a, b) => new RegExp(`(^|[^a-z0-9])${escapeRe(b)}($|[^a-z0-9])`).test(a);
+    const worked = !!target && employers.some((e) => e && (e === target || word(e, target) || word(target, e)));
     const interviewing = /interviewing|being considered|candidate/.test(ll) && profile.appliedToCompanyBefore === true;
     const ans = worked || interviewing ? "Yes" : "No";
     return pickYesNo(ans, worked ? "resume lists that employer" : interviewing ? "applied there before" : "no relationship on the resume", SOURCE.RESUME, 0.9);
