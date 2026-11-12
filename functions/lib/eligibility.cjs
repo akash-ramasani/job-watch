@@ -91,7 +91,7 @@ const PHRASES = {
 // Softeners for every kind.
 const SOFT = /\b(preferred|a plus|is a plus|nice to have|desired|desirable|bonus|ideally|advantageous|not required|not a requirement|is not necessary|isn't required|no clearance|(?:does|do|will|would) not (?:require|need)|doesn't (?:require|need)|don't (?:require|need)|not needed)\b/i;
 // Hedged or partial statements.
-const HEDGES = /\b(may|might|could|possibly|(?:for|in|to) certain|certain (?:roles|positions|other|restricted|jobs)|some roles|some positions|positions with|roles with|remote roles|every role|every candidate|all roles|case[- ]by[- ]case|unless|usually|typically|generally|uncleared|are welcome|is welcome)\b/i;
+const HEDGES = /\b(may|might|could|possibly|(?:for|in|to) certain|certain (?:roles|positions|other|restricted|jobs|assignments|programs|projects)|if required (?:for|by)|work[- ]study|some roles|some positions|positions with|roles with|remote roles|every role|every candidate|all roles|case[- ]by[- ]case|unless|usually|typically|generally|uncleared|are welcome|is welcome)\b/i;
 const SOFT_BY_KIND = {
   citizen: /\bnot (?:be )?required to be (?:a )?(?:us|u\.s\.) citizen\b/i,
   clearance: /\b(ability to obtain|able to obtain|eligib\w* (?:to|for)|obtain and maintain|willing(?:ness)? to obtain|or have the ability|clearance required:?\s*none|public trust)\b/i,
@@ -99,7 +99,7 @@ const SOFT_BY_KIND = {
 };
 // A citizenship line that also accepts visa holders doesn't rule them out.
 // Export-control rules that allow "or be eligible to obtain the required authorizations" (an export license) aren't a bar either.
-const VISA_ALTERNATIVE = /\b(or|and)\b[^.;]{0,80}\b(visa|f-?1|opt|cpt|h-?1b|work authori[sz]ation|authorized to work|eligible to work|employment authori[sz]ation|valid work)\b|\bor be eligible to obtain the required (?:export )?authori[sz]ations?\b|\bexport licen[sc]e\b/i;
+const VISA_ALTERNATIVE = /\b(or|and)\b[^.;]{0,80}\b(visa|f-?1|opt|cpt|h-?1b|work authori[sz]ation|authorized to work|eligible to work|employment authori[sz]ation|valid work|lawfully authorized|authorized non-?(?:us |u\.s\. )?citizens?)\b|\bor be eligible to obtain the required (?:export )?authori[sz]ations?\b|\bexport licen[sc]e\b/i;
 // Export rules that name the only citizenships allowed ("you may be
 // ineligible for this role if you do not hold citizenship of Australia,
 // Japan, ... or a country that is part of NATO", Rocket Lab ITAR): a bar for
@@ -131,6 +131,12 @@ function eligibilityOf(description) {
     for (const [flag, patterns] of Object.entries(PHRASES)) {
       if (evidence[flag] || SOFT_BY_KIND[flag].test(sentence) || !patterns.some((p) => p.test(sentence))) continue;
       if (flag === "citizen" && VISA_ALTERNATIVE.test(sentence)) continue;
+      // Green-card sponsorship not offered still leaves a work visa (Nebraska:
+      // "not eligible for employment-based permanent residency sponsorship").
+      // Sponsoring a security clearance is not a visa ("Bluestaq will sponsor eligible
+      // candidates through the clearance process"), and "does not guarantee" is no refusal.
+      if (flag === "no_sponsorship" && (/\bsponsor\w*\b[^.;]{0,60}\bclearance\b/i.test(sentence) || /\bnot guarantee\b/i.test(sentence))) continue;
+      if (flag === "no_sponsorship" && /\b(?:permanent residen\w*|green card) sponsorship\b/i.test(sentence) && !/\b(?:visa|h-?1b|work authori[sz]ation|opt|tn)\b/i.test(sentence)) continue;
       evidence[flag] = sentence.slice(0, 300);
     }
   }

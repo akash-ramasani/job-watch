@@ -65,6 +65,13 @@ test("clearance requirements are caught", () => {
 
 test("legitimate jobs are never flagged", () => {
   for (const s of [
+    "WSU employs only U.S. citizens and lawfully authorized non-U.S. citizens.",
+    "If you don't currently hold one, Bluestaq will sponsor eligible candidates through the clearance process based on program needs.",
+    "The University at Buffalo does not guarantee that it will sponsor, support, or otherwise assist with obtaining work authorization.",
+    "This position is not eligible for employment-based permanent residency sponsorship.",
+    "Certain assignments require an active US Government Secret security clearance.",
+    "This position requires the ability to obtain and maintain a US government security clearance, if required for assigned programs, for which US citizenship is needed.",
+    "Off campus work study positions are available only to US citizens on financial aid with a federal work study commitment.",
     // EEO boilerplate and plain work authorization
     "We are an equal opportunity employer and do not discriminate on the basis of race, national origin, citizenship status, or any other protected characteristic.",
     "Candidates must be authorized to work in the United States.",
