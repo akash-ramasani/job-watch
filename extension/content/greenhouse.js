@@ -363,7 +363,9 @@
     // sorting time it went last, after the whole survey. It goes right after
     // that question, in its place on the page.
     {
-      const race = pending.find((f) => f.eeo === "race" && !elementFor(f));
+      // (Some boards keep the race box in the page but hidden; it failed on
+      // pass 1 and was filled on the retry, after Veteran Status.)
+      const race = pending.find((f) => f.eeo === "race");
       const hisp = pending.findIndex((f) => f.eeo === "hispanic");
       if (race && hisp >= 0) { pending = pending.filter((f) => f !== race); pending.splice(hisp + 1, 0, race); }
     }
@@ -378,7 +380,14 @@
           hl.focus(blockFor(f), `Filling: ${f.label}`); phoneStep = `filling ${f.label}`;
           await bringIntoView(f);
           const res = await fillOne(f);
-          await sleep(f.eeo === "hispanic" ? 700 : 260); // the race question appears after this one
+          await sleep(260);
+          if (f.eeo === "hispanic" && res.ok) {
+            // Race appears once this is answered: wait for it (up to 3 s) so it is filled next.
+            const race = pending.find((x) => x.eeo === "race");
+            const shown = () => { const el = race && elementFor(race); const box = el && (el.closest("div.field, div[class*='field'], fieldset") || el); return !!box && box.getClientRects().length > 0 && getComputedStyle(box).visibility !== "hidden"; };
+            for (let w = 0; race && w < 15 && !shown(); w++) await sleep(200);
+            await sleep(300);
+          }
           hl.mark(!!res.ok);
           if (res.ok) {
             ok++;
