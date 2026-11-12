@@ -179,7 +179,10 @@
     if (!box || !current) return;
     box.classList.remove("jw-hl-active");
     box.classList.add(ok ? "jw-hl-ok" : "jw-hl-bad");
-    tag.textContent = text || (ok ? "Filled" : "Needs you");
+    // A miss here is mid-fill: every form retries it (up to 3 passes, then the
+    // check before Submit). What truly needs the person is reported at the end,
+    // so this never says "Needs you" (Affirm, Veteran Status, 2026-11-12).
+    tag.textContent = text || (ok ? "Filled" : "Trying again");
     schedule();
   }
 
