@@ -155,7 +155,7 @@ const storageBucket = admin.storage().bucket("greenhouse-jobs-scrapper.firebases
  * ----------------------------
  */
 const REGION = "us-central1";
-const FEED_CONCURRENCY = 60; // 2026-11-11: 15 → 60, a full pass of ~4,600 boards in about a minute instead of 3.6
+const FEED_CONCURRENCY = 120; // 2026-11-11: 15 → 120; the run waits on the boards' responses, so more at once is what shortens it
 
 const RECENT_WINDOW_MINUTES = 20;
 const BACKLOG_MS = 45 * 1000; // spare-time re-scoring per scheduled sync
@@ -633,10 +633,10 @@ exports.syncRecentJobsHourly = onSchedule(
     schedule: "every 2 minutes",
     timeZone: "America/Los_Angeles",
     timeoutSeconds: 540,
-    // 2026-11-11: 2 vCPU (the default for 1 GiB is 0.58). The run is CPU-bound
-    // (parsing ~4,500 boards); it must finish inside the 2-minute schedule.
-    memory: "2GiB",
-    cpu: 2,
+    // 2026-11-11: 1 vCPU (the 1 GiB default is 0.58). 2 vCPU was tried: only
+    // ~20% faster for ~2.8x the CPU cost; the run waits on the boards, not CPU.
+    memory: "1GiB",
+    cpu: 1,
     maxInstances: 3,
     secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY],
   },
