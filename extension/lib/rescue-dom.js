@@ -53,6 +53,21 @@
     return blocks.find(open) || blocks[0] || null;
   }
 
+  /** Text (question + chosen answer) of the nearest earlier block that holds a form control. */
+  function prevQuestionText(block) {
+    for (let node = block, up = 0; node && node !== document.body && up < 5; node = node.parentElement, up++) {
+      for (let sib = node.previousElementSibling, k = 0; sib && k < 4; sib = sib.previousElementSibling, k++) {
+        if (!sib.querySelector?.(CONTROL)) continue;
+        const t = (sib.innerText || sib.textContent || "").replace(/\s+/g, " ").trim();
+        // A ticked radio or box shows no answer in the text: name it.
+        const ticked = [...sib.querySelectorAll("input[type=radio]:checked, input[type=checkbox]:checked")]
+          .map((c) => (c.labels?.[0]?.textContent || c.closest("label")?.textContent || c.value || "").replace(/\s+/g, " ").trim()).filter(Boolean);
+        if (t.length > 8) return `${t.slice(-400)}${ticked.length ? ` (chosen: ${ticked.join(", ")})` : ""}`;
+      }
+    }
+    return "";
+  }
+
   /** The smallest block around a question heading that holds its controls. */
   function blockOf(h) {
     let node = h;
@@ -132,6 +147,13 @@
       .filter((o) => visible(o) && !block.contains(o)).slice(0, 80);
     open.forEach(tag);
     let html = cleanHtml(block);
+    // A follow-up ("If yes, please explain.") means nothing alone: the question
+    // just before it and its answer go along (Humana's "If yes" got a
+    // sponsorship story after "Have you worked for Humana? No", 2026-11-11).
+    if (/^\s*(if (yes|no|so|applicable)\b|please (explain|provide|describe|specify|list)\b|explain\b|details?\b)/i.test(question)) {
+      const before = prevQuestionText(block);
+      if (before) html = `<!-- the question just before this one on the form, with its answer: ${before.replace(/--/g, "-")} -->\n${html}`;
+    }
     if (open.length) html += `\n<!-- open dropdown options -->\n<ul>${open.map((o) => `<li data-jw-ref="${o.getAttribute("data-jw-ref")}">${o.textContent.replace(/\s+/g, " ").trim().slice(0, 140)}</li>`).join("")}</ul>`;
     return { ok: true, html: html.slice(0, 12000), required: requiredOf(block, question), filled: filledOf(block), refs: n };
   }

@@ -7,7 +7,7 @@
 
 const { applicantNotes } = require("./applicantNotes.cjs");
 
-const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1",
+const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1", "addressLine2",
   "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
   "clearanceStatus", "clearanceLevel", "usPersonExportControl", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
@@ -51,7 +51,7 @@ Rules:
 - A required question about experience, skills or background the resume does not show still gets an honest answer: in a text box, one or two plain first-person sentences that say so (for example "I have not done that myself.") and name the closest related work the resume shows; a Yes/No or option question gets the truthful option (No, None, Less than 1 year).
 - Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number or a reference's contact.
 - A signature, "Application Date Signed", "Date", "Today's Date" or similar signing date is today's date (given below), in the format the field asks for (MM/DD/YYYY when it does not say). An electronic signature or "type your full name" box is the applicant's full legal name.
-- A follow-up that asks for details only if an earlier answer applies ("Please provide details...", "If yes, explain") gets "N/A" when the form shows that earlier answer as No or None.
+- A follow-up that asks for details only if an earlier answer applies ("Please provide details...", "If yes, explain") gets "N/A" when the form shows that earlier answer as No or None. The HTML may open with a comment giving the question just before this one and its answer: that is the question the follow-up belongs to. Explain only that question (not sponsorship or anything else from the profile); "If yes" after a No, or "If no" after a Yes, is "N/A".
 - Never put a security or verification code from an email into a question field.
 - Work authorization, sponsorship, visa, EEO and similar answers come only from the profile. Statements that the applicant's answers are their own work are confirmed (their standing choice).
 - A long <select> marked data-options-shown lists only some options: you may still "select" any option by its exact text (for example the applicant's university), or the list's "Other" option when theirs is surely not offered.
