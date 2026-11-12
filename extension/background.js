@@ -777,7 +777,7 @@ async function autoNextJob(st, busy = new Set()) {
     if (j.source === "workday" && (!workdayOk || wdRunning >= WORKDAY_MAX_PARALLEL)) continue;
     if (j.source === "workday") {
       const t = workdayTenantOf(j.applyUrl || "");
-      if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now() || (st.wdDown?.["*"] || 0) > Date.now()) continue;
+      if (wdBusy.has(t) || (st.wdDown?.[t] || 0) > Date.now()) continue;
     }
     if (!busy.has(j.jobId) && await autoDue(j, st)) return j;
   }
@@ -954,13 +954,13 @@ async function autoTick() {
           await fsAdd(`users/${uid}`, "workdayTraces", { kind: "result", tenant: workdayTenantOf(j.applyUrl), jobId: j.jobId, companyName: j.companyName || "", title: j.title || "", test: !!j.test, url: String(tab.url || "").slice(0, 500), at: new Date().toISOString(), version: chrome.runtime.getManifest().version,
             json: JSON.stringify({ status: "error", note, step: "", tabTitle: tab.title }) }, idToken);
         } catch (_) { /* best effort */ }
-        // Workday's own outage page (community.workday.com/maintenance-page,
-        // 2026-11-12) is every company at once: all Workday jobs wait, else each
-        // next job opened the same page. An outage does not use up a try.
-        const allDown = /community\.workday\.com/i.test(tab.url || "");
+        // Workday's "currently unavailable" page (community.workday.com) came
+        // 20-40 s after a Sign In, while other companies worked (11 of 223
+        // Workday jobs, 2026-11-10..12): Workday turning that sign-in away, not
+        // an outage. Only that company waits; it does not use up a try.
         await autoFinish({ status: "error", note, keepTries: true }, j.tabId, j.jobId);
         // Only this company's site waits (U.S. Bank's outage was its own).
-        await withAutoLock(async () => { const st = await autoState(); st.wdDown = { ...(st.wdDown || {}), [allDown ? "*" : workdayTenantOf(j.applyUrl || "")]: Date.now() + 30 * 60 * 1000 }; await saveAuto(st); });
+        await withAutoLock(async () => { const st = await autoState(); st.wdDown = { ...(st.wdDown || {}), [workdayTenantOf(j.applyUrl || "")]: Date.now() + 30 * 60 * 1000 }; await saveAuto(st); });
       }
       // Off Workday on the company's own site (Labcorp's closed posting went to
       // careers.labcorp.com/.../404 and sat 25 minutes, 2026-11-10): no page

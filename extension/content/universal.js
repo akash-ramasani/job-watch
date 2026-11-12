@@ -520,7 +520,12 @@
     // your account might be locked"): a company with no account yet gets one
     // (Create Account); an account that exists is reset to the saved password
     // (Forgot your password? -> the email's link -> Reset Password), then Sign In.
-    let mode = mem.mode || "signin";
+    // A company with no account saved yet starts at Create Account (2026-11-12:
+    // Sign In first was refused 87 of 90 times there, and those failed sign-ins,
+    // often then a reset, came just before Workday's "currently unavailable"
+    // page, its answer to what looks like password guessing). "Already exists"
+    // still leads to the reset.
+    let mode = mem.mode || (creds.hasAccount ? "signin" : "create");
     // The company's own password rules ("Password must include: A minimum of 12
     // characters", Citi): only a new saved password helps.
     // Only the refusal ("Error: Password must include: A minimum of 12 characters"),
@@ -549,6 +554,8 @@
     authSave(mem);
     banner(mode === "create" ? "Auto-apply: creating your Workday account for this company." : "Auto-apply: signing in to Workday.");
     const r = await gen("workdayAuth", { email: creds.email, password: creds.password, mode }).catch((e) => ({ ok: false, error: e.message }));
+    // No Create Account form on this site: Sign In next time, as before.
+    if (!r?.ok && mode === "create" && !mem.resetAt) authSave({ ...mem, mode: "signin" });
     if (!r?.ok) { trace("auth", { phase: "action failed", did: mode, error: r?.error }); warn("workday auth:", r?.error); if (mem.tries >= 3) autoReport("needs_attention", `Workday sign-in: ${r?.error}`); return; }
     for (let i = 0; i < 15; i++) {
       await sleep(1000);
