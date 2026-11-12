@@ -111,7 +111,7 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     else if (name === "org") text(name, profile.currentCompany);
     else if (name === "resume") fills.push({ path: name, kind: "file", label: q.label, file: "resume", source: "profile" });
     else if (name === "location") {
-      const f = locationFill(name, job.locationName, profile);
+      const f = locationFill(name, job.locationName, profile, job.companyName || "");
       // Lever's suggestions read "New York, NY, USA": match on the state code.
       const place = f && parsePlace(f.match);
       if (f) fills.push({ ...f, match: place?.abbr ? `${place.city}, ${place.abbr}` : f.match, label: q.label || "Current location" });

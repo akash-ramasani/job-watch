@@ -554,3 +554,32 @@ test("an office named after its city is that city (TypeSafe AI 'San Francisco Of
   // "HQ" alone names no place: the person's remote city is used.
   assert.equal(lf("p", "HQ", P).value, "San Francisco");
 });
+
+test("every location format seen on 1,006 live Ashby postings types a real place (2026-11-11 audit)", () => {
+  const { locationFill: lf } = require("../lib/apply/ashby.cjs");
+  const P = { city: "San Francisco", region: "CA", country: "United States" };
+  const cases = [
+    ["San Francisco-HQ", "San Francisco, California"], ["Hub - San Francisco", "San Francisco, California"], ["Toronto GTA", "Toronto"],
+    ["US | Illinois | Chicago", "Chicago, Illinois"], ["India | Pune", "Pune"], ["Union Square, New York City", "New York, New York"],
+    ["Onsite Hybrid - Palo Alto (CA), New York City (NY), or Phoenix (AZ)", "Palo Alto, California"], ["Hybrid (San Francisco, CA)", "San Francisco, California"],
+    ["US California (Redwood City) - Office", "Redwood City, California"], ["NYC or Palo Alto (in office)", "Palo Alto, California"],
+    ["Brighton, CO - US", "Brighton, Colorado"], ["USA - Provo UT", "Provo, Utah"], ["US CA San Mateo", "San Mateo, California"],
+    ["Washington D.C.", "Washington, District of Columbia"], ["District of Columbia (DC)", "Washington, District of Columbia"],
+    ["US-IL-Chicago-MSO", "Chicago, Illinois"], ["US-VA-McLean", "McLean, Virginia"], ["IN-Bangalore-MSO", "Bangalore"], ["CA-Ontario-Toronto", "Toronto"],
+    ["DE-Berlin-Trion Building", "Berlin"], ["Dublin - IE", "Dublin"], ["Tel Aviv - IL", "Tel Aviv"], ["UK - Birmingham", "Birmingham"], ["CA - British Columbia ; CA - Vancouver", "Vancouver"],
+    ["Los Angeles – East Side", "Los Angeles, California"], ["Remote U.S. or Pittsburgh, PA", "Pittsburgh, Pennsylvania"], ["SF or Remote (US/Canada)", "San Francisco, California"],
+    // remote roles, regions and home offices: the person's own city
+    ["Remote (Houston, TX)", "San Francisco, California"], ["Remote, Ontario", "San Francisco, California"], ["EMEA", "San Francisco, California"],
+    ["Home Office (United Kingdom)", "San Francisco, California"], ["Eastern Standard Time Zone", "San Francisco, California"],
+    // of several places: the person's metro, then state, then a US one
+    ["London; Boston; New York City", "Boston, Massachusetts"], ["Hub - New York; Hub - San Francisco; Hub - Seattle", "San Francisco, California"],
+    ["Texas, United States; California, United States", "California"],
+  ];
+  for (const [loc, want] of cases) assert.equal(lf("p", loc, P).match, want, loc);
+  // the company's own name is no place
+  assert.equal(lf("p", "Credal HQ (Brooklyn, NY)", P, "Credal").match, "Brooklyn, New York");
+  assert.equal(lf("p", "Binti HQ - San Francisco, CA; Satellite Office - Seattle, WA", P, "Binti").match, "San Francisco, California");
+  assert.equal(lf("p", "Weave - Headquarters (Lehi, UT)", P, "Weave").match, "Lehi, Utah");
+  assert.equal(lf("p", "Strava Denver", P, "Strava").match, "Denver, Colorado");
+  assert.equal(lf("p", "Mercor HQ, 181 Fremont Street", P, "Mercor").match, "San Francisco, California");
+});

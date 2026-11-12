@@ -167,69 +167,167 @@ function metroTerms(city) {
 
 /** Parse "San Francisco, CA" / "New York City" / "Remote - US" into parts. */
 // Short names postings use for big cities.
-const CITY_ALIAS = { sf: "San Francisco", nyc: "New York", "new york city": "New York", sea: "Seattle", la: "Los Angeles", atx: "Austin", chi: "Chicago", dc: "Washington", "washington dc": "Washington", "washington d.c.": "Washington", bos: "Boston", den: "Denver", pdx: "Portland", sj: "San Jose", "bay area": "San Francisco", "sf bay area": "San Francisco" };
+const CITY_ALIAS = { sf: "San Francisco", nyc: "New York", "new york city": "New York", sea: "Seattle", la: "Los Angeles", atx: "Austin", chi: "Chicago", dc: "Washington", "d.c": "Washington", "washington dc": "Washington", "washington d.c": "Washington", "washington d.c.": "Washington", "district of columbia": "Washington", bos: "Boston", den: "Denver", pdx: "Portland", sj: "San Jose", "bay area": "San Francisco", "sf bay area": "San Francisco" };
 const isState = (s) => { const t = String(s || "").trim(); return (t.length === 2 && !!STATE_FULL[t.toUpperCase()]) || !!STATE_ABBR[t.toLowerCase()]; };
+const aliasOf = (c) => CITY_ALIAS[String(c || "").toLowerCase().trim()] || c;
+// Regions, time zones and the like name no city: the person's own city is used.
+const REGION_RE = /^(?:emea|apac|apj|amer|namer|latam|lat am|latin america|south america|central america|north america|americas|europe|eu|asia|asia pacific|africa|middle east|(?:the )?caribbean|international|any location|anywhere|central(?: region)?|midwest|mid-?atlantic|new england|mountain west|(?:us[- ]?)?(?:west|east) coast|us ?east|us ?west|southeast|southwest|northeast|northwest|pacific northwest|(?:eastern|central|mountain|pacific)(?: standard)? time(?: zone)?|[a-z ]+ time zone)$/i;
+const CA_PROVINCE_RE = /^(?:ontario|quebec|québec|british columbia|alberta|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland(?: and labrador)?|prince edward island)$/i;
+const COUNTRY_RE = /^(?:us|usa|u\.s\.a?\.?|united states(?: of america)?|uk|united kingdom|gb|great britain|england|india|mexico|canada|germany|france|japan|china|brazil|ireland|spain|australia|singapore|israel|(?:the )?netherlands|asia|europe)$/i;
+const MODE = "(?:hybrid|on[- ]?site|in[- ]office|office[- ]based|in[- ]person)";
+const sameState = (m, code) => !!m && (m.state === code || m.state === STATE_FULL[code] || STATE_ABBR[String(m.state).toLowerCase()] === code);
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Strip what is not a place from one listed location, before it is split:
+ *  the company's name ("IRIS Software Group, Manchester", "Strava Denver"),
+ *  HQ / hub / office labels ("Binti HQ - San Francisco, CA", "Hub - Seattle",
+ *  "Weave - Headquarters (Lehi, UT)", "San Francisco-HQ", "Toronto GTA"),
+ *  work modes ("Onsite Hybrid - Palo Alto (CA)"), "City (ST)" → "City, ST",
+ *  and "US California (Redwood City) - Office" → "Redwood City, California".
+ *  A remote or home-office location with no plain city returns "". */
+function cleanSegment(seg, company = "") {
+  let s = String(seg || "").replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
+  if (company) {
+    const first = company.split(/\s+/)[0];
+    for (const c of [company, first]) if (c && c.length >= 3) s = s.replace(new RegExp(`^${esc(c)}\\b\\s*(?:[-:,]\\s*)?`, "i"), "");
+  }
+  s = s.replace(/^[a-z]+ only\s*-\s*/i, ""); // "Fins Only-AU-Sydney"
+  if (new RegExp(`^(?:${MODE}|office|hq|headquarters|on[- ]?site|onsite)$`, "i").test(s)) return ""; // "In-Office" alone
+  s = s.replace(/\s*-\s*(?:US|USA)$/, ""); // "Brighton, CO - US"
+  // "Hybrid (San Francisco, CA)": a work mode around the place.
+  const modeWrap = s.match(new RegExp(`^${MODE}\\s*\\(([^()]+)\\)$`, "i")); if (modeWrap) s = modeWrap[1];
+  s = s.replace(/\b(remote|hybrid)\s*\([^()]*\)/gi, "$1"); // "SF or Remote (US/Canada)"
+  if (/^home office\b/i.test(s) || /^(?:remote|wfh|work from home)\s*[,(]/i.test(s) && !/\bor\b/i.test(s)) {
+    // "Remote (Houston, TX)", "Remote, Ontario": a remote role; the person's own city answers.
+    return "";
+  }
+  // "<name> HQ - City", "<name> HQ (City, ST)", "<name> - Headquarters (City, ST)", "Satellite Office - Seattle, WA".
+  s = s.replace(/^[^(]*?\b(?:hq|headquarters|head office|main office|satellite office)\b\s*(?:-\s+|:\s*|(?=\())/i, "");
+  s = s.replace(/^(?:hq|headquarters|head office|main office|office|hub)\s*[-:|,]\s*/i, "");
+  s = s.replace(new RegExp(`^(?:${MODE}[\\s,/&]*)+(?:-|:|\\bin\\b)\\s*`, "i"), "");
+  // "(Brooklyn, NY)" left on its own.
+  const whole = s.match(/^\(([^()]+)\)$/); if (whole) s = whole[1];
+  // "US California (Redwood City) - Office", "IN Tamil Nadu (Chennai) - Office".
+  const wd = s.match(/^(US|USA|IN|UK|GB|CA|MX|DE|FR|BR|AU)\s+([A-Za-z .]+?)\s*\(([^()]+)\)/);
+  if (wd && !new RegExp(`^${MODE}$`, "i").test(wd[3])) s = wd[1] === "US" && isState(wd[2]) ? `${wd[3]}, ${wd[2]}` : wd[3];
+  // "Palo Alto (CA)", "District of Columbia (DC)".
+  s = s.replace(/([A-Za-z.' ]+?)\s*\(([A-Z]{2})\)/g, (m, c, st) => (isState(st) ? `${c.trim()}, ${st}` : m));
+  // Office / site words after the city: "San Francisco-HQ", "Toronto GTA", "Elk Grove Village, IL - Data Center", "IN-Mumbai-MSO".
+  s = s.replace(/(?:[\s-]+(?:office|offices|hq|headquarters|head office|hub|campus|gta|data center|mso|ww))+$/i, "");
+  return s.trim();
+}
 
 /** One place from one piece of text: "San Francisco, CA", "CA - San Francisco", "NYC". */
 function placeOf(text) {
-  const MODE = "(?:hybrid|on[- ]?site|in[- ]office|office[- ]based|in[- ]person)";
   // Stray dashes and a country prefix: "-REMOTE, USA-" (Smartsheet) is no city
   // called "USA-"; "USA-Bellevue, WA" is Bellevue.
-  let raw = String(text || "").replace(/^[\s\-–—_*•.]+|[\s\-–—_*•.]+$/g, "")
-    .replace(/^(?:usa|us|u\.s\.a?\.?|united states)\s*[-–:]\s*(?=\S)/i, "")
-    .replace(/\s*[-–]\s*US$/i, "")
-    .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-–:|]|\\bin\\b)\\s*`, "i"), "")
-    .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
+  let raw = String(text || "").replace(/[–—]/g, "-").replace(/^[\s\-_*•.]+|[\s\-_*•]+$/g, "");
+  let country = "";
+  // Country-code site names: "US-IL-Chicago-MSO", "US-VA-McLean", "GB-London",
+  // "IN-Bangalore-MSO" (India, not Indiana), "CA-Ontario-Toronto" (Canada),
+  // "DE-Berlin-Trion Building". A code that is also a state ("TX-Abilene") is
+  // the state unless it is a country's too and the city is no US metro's.
+  const cc = raw.match(/^([A-Z]{2})-(\S.*)$/);
+  if (cc) {
+    const parts = cc[2].split("-").map((x) => x.trim()).filter(Boolean);
+    const AMBIG = /^(?:CA|IN|DE|ID|IL|AL|AR|CO|GA|LA|MA|MD|ME|MN|MT|NE|PA|SC|TN|VA)$/;
+    if (cc[1] === "US" && parts.length >= 2 && isState(parts[0])) raw = `${parts[1]}, ${parts[0]}`;
+    else if (cc[1] === "US") raw = parts[0];
+    else if (parts.length >= 2 && CA_PROVINCE_RE.test(parts[0])) { raw = parts[1]; country = "CA"; }
+    else if (isState(cc[1]) && (sameState(metroOf(aliasOf(parts[0])), cc[1]) || !AMBIG.test(cc[1]))) raw = `${parts[0]}, ${cc[1]}`;
+    else { raw = parts[0]; country = cc[1]; }
+  }
+  raw = raw
+    .replace(/^(?:usa|us|u\.s\.a?\.?|united states)\s*[-:]\s*(?=\S)/i, "")
+    .replace(/\s*[-,]\s*(?:US|USA|United States)$/i, "")
+    .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-:|]|\\bin\\b)\\s*`, "i"), "")
+    .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-|]\\s*${MODE})\\s*$`, "i"), "")
     .replace(/\s*\((?:[^)]*)\)\s*$/, "")
     // An office named after its city is the city: "San Francisco Office"
     // (TypeSafe AI), "NYC HQ", "Headquarters - Austin", "Seattle Hub, WA".
-    .replace(/^(?:hq|headquarters|head office|main office|office)\s*[-–:|]\s*(?=\S)/i, "")
-    .replace(/\s+(?:office|offices|hq|headquarters|head office|hub|campus)(?=\s*(?:,|$))/i, "")
+    .replace(/^(?:hq|headquarters|head office|main office|office|hub)\s*[-:|]\s*(?=\S)/i, "")
+    .replace(/[\s-]+(?:office|offices|hq|headquarters|head office|hub|campus|gta)(?=\s*(?:,|$))/i, "")
     .trim();
   // A work mode alone is no place: "In-Office" (Cloudflare) once read as the
   // city "Office" in IN, Indiana.
   if (new RegExp(`^(?:${MODE}|office|hq|headquarters|in[- ]?office|on[- ]?site|onsite)$`, "i").test(raw)) return null;
   if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
   if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
+  if (/^\d/.test(raw)) return null; // a street address ("181 Fremont Street")
+  // "US CA San Mateo".
+  const usSt = raw.match(/^(?:US|USA)\s+([A-Z]{2})\s+(.+)$/);
+  if (usSt && isState(usSt[1])) raw = `${usSt[2]}, ${usSt[1]}`;
   // "CA - San Francisco": state first.
-  const st = raw.match(/^([A-Za-z]{2})\s*[-–]\s*(.+)$/);
-  if (st && isState(st[1])) raw = `${st[2]}, ${st[1]}`;
-  const parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  const st = raw.match(/^([A-Za-z]{2})\s*-\s*(.+)$/);
+  const CA_CITY = /^(?:toronto|vancouver|montr[eé]al|ottawa|calgary|edmonton|waterloo|qu[eé]bec(?: city)?|winnipeg|halifax|victoria|mississauga|kitchener)$/i;
+  if (!country && st && st[1].toUpperCase() === "CA" && (CA_PROVINCE_RE.test(st[2].trim()) || CA_CITY.test(st[2].trim()))) { raw = st[2]; country = "CA"; }
+  else if (!country && st && isState(st[1]) && !CA_PROVINCE_RE.test(st[2].split("-")[0].trim())) raw = `${st[2]}, ${st[1]}`;
+  // "City - qualifier": "Los Angeles - East Side", "Dublin - IE", "Tel Aviv - IL" (Israel), "Chicago - IL".
+  const dash = !raw.includes(",") && raw.match(/^(.+?)\s+-\s+(.+)$/);
+  if (dash) {
+    const [, a, b] = dash;
+    if (/^[A-Z]{2,3}$/.test(b)) { if (isState(b) && sameState(metroOf(aliasOf(a)), b)) raw = `${a}, ${b}`; else { raw = a; country = b; } }
+    else if (COUNTRY_RE.test(a)) { raw = b; if (!/^(?:us|usa|u\.s\.a?\.?|united states(?: of america)?)$/i.test(a)) country = a; }
+    else raw = metroOf(aliasOf(a)) || !metroOf(aliasOf(b)) ? a : b;
+  }
+  // "Provo UT", "London UK".
+  raw = raw.replace(/^(.+?)\s+([A-Z]{2})$/, (m, c, s2) => (isState(s2) ? `${c}, ${s2}` : m)).replace(/\s+(?:uk|usa)$/i, "");
+  let parts = raw.split(",").map((x) => x.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  // A neighbourhood before its city: "Union Square, New York City".
+  if (parts.length >= 2 && !isState(parts[1]) && !COUNTRY_RE.test(parts[1]) && metroOf(aliasOf(parts[1])) && !metroOf(aliasOf(parts[0]))) parts = parts.slice(1);
   // "San Francisco Bay Area", "Greater Boston Area", "Seattle Metro": the metro's main city.
   const areaOf = (c) => { const bare = c.replace(/^greater\s+/i, "").replace(/\s+(bay area|metro(politan)?( area)?|area|region)$/i, "").trim(); const m = bare !== c ? metroOf(bare) || metroOf(c) : null; return m ? m.display.split(",")[0] : bare !== c ? bare : ""; };
   const city = CITY_ALIAS[parts[0].toLowerCase()] || areaOf(parts[0]) || parts[0];
+  if (REGION_RE.test(city) || CA_PROVINCE_RE.test(city)) return null;
   let state = parts[1] || "";
   if (/^(united states|usa|us)$/i.test(state) || !isState(state)) state = "";
-  if (!state) { const m = metroOf(city); if (m) state = m.state; }
+  if (!state && !country) { const m = metroOf(city); if (m) state = m.state; }
   const abbr = state.length === 2 ? state.toUpperCase() : STATE_ABBR[state.toLowerCase()] || "";
   return { city, state: STATE_FULL[abbr] || state, abbr };
 }
 
 /** Every place a posting lists: "San Francisco, Seattle, New York",
- *  "San Francisco, CA • New York, NY", "CA - San Francisco; WA - Seattle". */
-function parsePlaces(locationName) {
-  const segs = String(locationName || "").split(/\s*(?:;|\||•|·|\bor\b|\band\b|&|\/)\s*/).filter(Boolean);
+ *  "San Francisco, CA • New York, NY", "CA - San Francisco; WA - Seattle",
+ *  "US | Illinois | Chicago" (country | state | city, not three places). */
+function parsePlaces(locationName, company = "") {
   const out = [];
-  for (const seg of segs) {
-    // A comma list of cities ("San Francisco, Seattle, New York") or "City, ST, City, ST".
-    const parts = seg.split(",").map((x) => x.trim()).filter(Boolean);
-    const pieces = [];
-    for (let k = 0; k < parts.length; k++) {
-      if (k + 1 < parts.length && isState(parts[k + 1])) { pieces.push(`${parts[k]}, ${parts[k + 1]}`); k++; }
-      else pieces.push(parts[k]);
+  const add = (p) => { if (p && !out.some((o) => o.city === p.city && o.state === p.state)) out.push(p); };
+  for (const top of String(locationName || "").split(/\s*(?:;|•|·)\s*/)) {
+    let seg = top.replace(/\s+l\s+/g, " | ");
+    const bars = seg.split(/\s*\|\s*/).filter(Boolean);
+    if (bars.length >= 2 && (COUNTRY_RE.test(bars[0]) || REGION_RE.test(bars[0]))) {
+      const rest = bars.slice(1);
+      seg = rest.length >= 2 && isState(rest[rest.length - 2]) ? `${rest[rest.length - 1]}, ${rest[rest.length - 2]}` : rest[rest.length - 1];
     }
-    for (const piece of pieces) { const p = placeOf(piece); if (p && !out.some((o) => o.city === p.city && o.state === p.state)) out.push(p); }
+    seg = cleanSegment(seg, company);
+    if (!seg) continue;
+    for (const s2 of seg.split(/\s*(?:\||\bor\b|\band\b|&|\/)\s*/).filter(Boolean)) {
+      // A comma list of cities ("San Francisco, Seattle, New York") or "City, ST, City, ST".
+      const parts = cleanSegment(s2, company).split(",").map((x) => x.trim()).filter(Boolean);
+      const pieces = [];
+      for (let k = 0; k < parts.length; k++) {
+        if (k + 1 < parts.length && (isState(parts[k + 1]) || COUNTRY_RE.test(parts[k + 1]) && !COUNTRY_RE.test(parts[k]))) { pieces.push(`${parts[k]}, ${parts[k + 1]}`); k++; }
+        else if (k + 1 < parts.length && !metroOf(aliasOf(parts[k])) && metroOf(aliasOf(parts[k + 1])) && !isState(parts[k]) && parts.length === 2) { pieces.push(`${parts[k]}, ${parts[k + 1]}`); k++; }
+        else pieces.push(parts[k]);
+      }
+      for (const piece of pieces) add(placeOf(piece));
+    }
   }
+  // "Lytle/San Antonio, TX": a city listed beside one in the same state shares it.
   return out;
 }
 
 /** The place to apply from: of the places a posting lists, the one in the
- *  person's own metro when it is there, else the first. */
-function parsePlace(locationName, prefer = "") {
-  const all = parsePlaces(locationName);
+ *  person's own metro when it is there, else the first US one (a US applicant
+ *  gives Boston for "London; Boston; New York City"), else the first. */
+function parsePlace(locationName, prefer = "", company = "") {
+  const all = parsePlaces(locationName, company);
   if (!all.length) return null;
   const want = prefer ? metroOf(placeOf(prefer)?.city || prefer) : null;
-  return (want && all.find((p) => metroOf(p.city) === want)) || all[0];
+  const wantState = prefer ? (placeOf(prefer)?.abbr || want?.state || "") : "";
+  const stateOf = (p) => p.abbr || STATE_ABBR[String(p.city).toLowerCase()] || "";
+  return (want && all.find((p) => metroOf(p.city) === want)) || (wantState && all.find((p) => stateOf(p) === wantState || STATE_ABBR[String(wantState).toLowerCase()] === stateOf(p))) || all.find((p) => stateOf(p)) || all[0];
 }
 
 /** Value + match string for Ashby's location autocomplete. Suggestions read
@@ -248,7 +346,7 @@ function salaryRangeIn(text) {
 }
 
 const REMOTE_LOCATION_DEFAULT = "San Francisco, CA";
-function locationFill(path, jobLocationName, profile) {
+function locationFill(path, jobLocationName, profile, company = "") {
   const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
   // Remote postings (or no city on the posting): the person's chosen city for
   // remote roles, users/{uid}.remoteLocation, default San Francisco, CA.
@@ -256,7 +354,7 @@ function locationFill(path, jobLocationName, profile) {
   // users/{uid}.locationStrategy = "profile" switches the widget to the
   // applicant's own city on every form (the engine's text answers already are).
   const prefer = profile.city || profile.remoteLocation || REMOTE_LOCATION_DEFAULT;
-  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName, prefer) || remote) : (parsePlace(jobLocationName, prefer) || remote || own);
+  const place = profile.locationStrategy === "profile" ? (own || parsePlace(jobLocationName, prefer, company) || remote) : (parsePlace(jobLocationName, prefer, company) || remote || own);
   if (!place) return null;
   // Queries to try when the typeahead finds nothing for the bare city
   // (Virta's widget had "No results" for "Hayward"): city + state code, city +
@@ -427,7 +525,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
         fills.push({ path: q.path, kind: "select", label: q.label, value: profile.country || "United States", source: "profile" });
         continue;
       }
-      const f = locationFill(q.path, job.locationName, profile);
+      const f = locationFill(q.path, job.locationName, profile, job.companyName || "");
       if (f) fills.push({ ...f, label: q.label });
     }
   }
