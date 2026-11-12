@@ -540,3 +540,17 @@ test("office hubs listed in the details or the options; which job board brought 
   const board = { label: "Please specify which job board brought you to Horizon3.", required: true, fields: [{ name: "t", type: "input_text" }] };
   assert.deepEqual(val(board), ["LinkedIn"]);
 });
+
+test("an office named after its city is that city (TypeSafe AI 'San Francisco Office')", () => {
+  const { locationFill: lf } = require("../lib/apply/ashby.cjs");
+  const P = { city: "Austin", region: "TX" };
+  const f = lf("p", "San Francisco Office", P);
+  assert.equal(f.value, "San Francisco");
+  assert.equal(f.match, "San Francisco, California");
+  assert.ok(f.alternates.includes("San Francisco, CA"));
+  assert.equal(lf("p", "NYC HQ", P).value, "New York");
+  assert.equal(lf("p", "Headquarters - Austin, TX", P).value, "Austin");
+  assert.equal(lf("p", "Boston Campus", P).value, "Boston");
+  // "HQ" alone names no place: the person's remote city is used.
+  assert.equal(lf("p", "HQ", P).value, "San Francisco");
+});

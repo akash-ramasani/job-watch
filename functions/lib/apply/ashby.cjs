@@ -181,10 +181,14 @@ function placeOf(text) {
     .replace(new RegExp(`^\\s*${MODE}\\s*(?:[-–:|]|\\bin\\b)\\s*`, "i"), "")
     .replace(new RegExp(`\\s*(?:\\(\\s*${MODE}\\s*\\)|[-–|]\\s*${MODE})\\s*$`, "i"), "")
     .replace(/\s*\((?:[^)]*)\)\s*$/, "")
+    // An office named after its city is the city: "San Francisco Office"
+    // (TypeSafe AI), "NYC HQ", "Headquarters - Austin", "Seattle Hub, WA".
+    .replace(/^(?:hq|headquarters|head office|main office|office)\s*[-–:|]\s*(?=\S)/i, "")
+    .replace(/\s+(?:office|offices|hq|headquarters|head office|hub|campus)(?=\s*(?:,|$))/i, "")
     .trim();
   // A work mode alone is no place: "In-Office" (Cloudflare) once read as the
   // city "Office" in IN, Indiana.
-  if (new RegExp(`^(?:${MODE}|office|in[- ]?office|on[- ]?site|onsite)$`, "i").test(raw)) return null;
+  if (new RegExp(`^(?:${MODE}|office|hq|headquarters|in[- ]?office|on[- ]?site|onsite)$`, "i").test(raw)) return null;
   if (!raw || /remote|anywhere|distributed|work from home|wfh|global|worldwide|hybrid$/i.test(raw)) return null;
   if (/^(united states( of america)?|usa|us|u\.s\.?|north america|americas)$/i.test(raw)) return null;
   // "CA - San Francisco": state first.
