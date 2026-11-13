@@ -210,6 +210,9 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   // Then the "needs you" forms marked for another try (scripts/retry-stuck.mjs,
   // 2026-11-11): still open when marked, never submitted since. Each carries
   // its mark as retryToken so the runner starts it fresh.
+  // Top matches the person asked to apply to first (scripts/apply-top-matches.mjs):
+  // ahead of everything, best score first.
+  const first = [];
   if (!test) {
     const queued = new Set(out.map((j) => j.jobId));
     // A retry whose job is still listed passes the same check as a new job
@@ -228,10 +231,12 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
       if (queued.has(jobId) || applied.ids.has(jobId)) continue;
       const rk = a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle);
       if (rk && applied.roles.has(rk)) continue;
-      out.push({ jobId, source: board, applyUrl: a.retryApplyUrl, title: a.jobTitle || "", companyName: a.companyName || "", externalId: String(a.postingId || ""), locationName: "", postedAt: 0, score: -1, retryToken: String(a.retryRequested),
+      (a.retryPriority ? first : out).push({ jobId, source: board, applyUrl: a.retryApplyUrl, title: a.jobTitle || "", companyName: a.companyName || "", externalId: String(a.postingId || ""), locationName: "", postedAt: 0, score: typeof a.retryScore === "number" ? a.retryScore : -1, retryToken: String(a.retryRequested), ...(a.retryPriority ? { priority: true } : {}),
         ...(board === "workday" && (submitAll || submitJobs.has(String(a.jobId || ""))) ? { submit: true } : {}) });
     }
   }
+  first.sort((a, b) => b.score - a.score);
+  out.unshift(...first);
   const list = out.slice(0, test ? Math.max(1, Number(test.limit) || 60) : limit);
   stats.ashby.left = out.filter((j) => j.source === "ashby").length;
   stats.greenhouse.left = out.filter((j) => j.source === "greenhouse").length;
