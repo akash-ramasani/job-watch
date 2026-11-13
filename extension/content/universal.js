@@ -186,7 +186,10 @@
     // (the person's call, 2026-11-10). A box Workday flags on Save and Continue
     // (refill) is answered even when it did not read as required.
     const questionStep = isWorkday && /^(application questions|voluntary disclosures|self identify)/i.test(await gen("stepName").catch(() => ""));
-    const sendable = domFields.filter((d) => (!d.filled || refill.has(d.id)) && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || ""))
+    // A field the tick chose (onlyIds) goes even when filled: Workday's answer
+    // from an earlier attempt is replaced with today's (State Street's notice
+    // period stayed "1 Week" because filled fields were never sent, 2026-11-13).
+    const sendable = domFields.filter((d) => (!d.filled || refill.has(d.id) || (AUTO && isWorkday && onlyIds && onlyIds.has(d.id))) && (!onlyIds || onlyIds.has(d.id)) && !(isWorkday && EXPERIENCE_SECTION.test(d.section || ""))
       && (!questionStep || d.required || refill.has(d.id)));
     if (!sendable.length && pkgCache) return [];
     banner("JobWatch is working out your answers.");
@@ -1058,6 +1061,9 @@
       if (stopped) return;
       if (isWorkday && /experience/i.test(step) && pkgCache) {
         await workdayExperience(pkgCache);
+        // Copies of the resume left by earlier attempts at this job: one kept.
+        const dd = await gen("workdayDedupeFiles").catch(() => null);
+        if (dd?.removed) log(`removed ${dd.removed} duplicate upload(s)`);
         const now = await gen("scan", { readOptions: false }).catch(() => []);
         now.forEach((f) => done.add(f.id));
       }

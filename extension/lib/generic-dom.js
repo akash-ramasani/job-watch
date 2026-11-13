@@ -1245,5 +1245,27 @@
     return /page you are looking for (doesn't|does not) exist|this job (posting )?is no longer available|no longer accepting applications|job requisition (is )?closed/i.test(t);
   }
 
-  window.__jwGeneric = { scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdaySubmit, workdayClosed };
+  /** Workday: one copy of each uploaded file. Every retry of a job whose
+   *  resume box was already filled kept the old copies, and a new upload
+   *  added one: seven of the same resume at State Street, two of them behind
+   *  "MORE (2)" (2026-11-13). Opens "More", keeps the first of each name. */
+  async function workdayDedupeFiles() {
+    for (let k = 0; k < 3; k++) {
+      const more = [...document.querySelectorAll("button, a, [role=button]")].find((b) => visible(b) && /^\+?\s*more\s*\(\d+\)$/i.test(clean(textOf(b))));
+      if (!more) break;
+      realClick(more);
+      await sleep(700);
+    }
+    const seen = new Set();
+    let removed = 0;
+    for (const it of [...document.querySelectorAll("[data-automation-id=file-upload-item]")]) {
+      const name = clean(textOf(it.querySelector("[data-automation-id=file-upload-item-name]")));
+      if (!name) continue;
+      if (!seen.has(name)) { seen.add(name); continue; }
+      const del = it.querySelector("[data-automation-id=delete-file]");
+      if (del) { realClick(del); await sleep(900); removed++; }
+    }
+    return { removed, kept: seen.size };
+  }
+  window.__jwGeneric = { workdayDedupeFiles, scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdaySubmit, workdayClosed };
 })();
