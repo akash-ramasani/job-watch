@@ -32,8 +32,18 @@ const OUTCOME = {
   rejection: { label: "Rejected", cls: "bg-red-50 text-red-700 ring-red-200" },
   offer: { label: "Offer", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
 };
+// Marked for auto-apply to try again (scripts/clear-needs-attention.mjs) and
+// not started since: waiting in the queue, not waiting on the person. A retry
+// that stops again is back under Needs attention.
+const awaitingRetry = (a) => {
+  if (!a.retryRequested || a.status === "submitted" || a.status === "dismissed") return false;
+  const asked = Date.parse(a.retryRequested) || 0;
+  const started = Date.parse(toDate(a.lastStartedAt)?.toISOString?.() || a.lastStartedAt || "") || 0;
+  return asked > started;
+};
 const TABS = [
-  { key: "attention", label: "Needs attention", match: (a) => ["needs_attention", "error", "in_progress"].includes(a.status) },
+  { key: "attention", label: "Needs attention", match: (a) => ["needs_attention", "error", "in_progress"].includes(a.status) && !awaitingRetry(a) },
+  { key: "retrying", label: "Retrying", match: awaitingRetry },
   { key: "ready", label: "Ready", match: (a) => a.status === "ready" },
   { key: "submitted", label: "Submitted", match: (a) => a.status === "submitted" },
   { key: "replies", label: "Replies", match: (a) => ["interview", "assessment", "offer"].includes(a.outcome) },

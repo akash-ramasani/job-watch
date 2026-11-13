@@ -64,7 +64,9 @@ function profileSummary(user, resume) {
   const p = {};
   for (const k of PROFILE_KEYS) if (user[k] != null && String(user[k]).trim() !== "") p[k] = user[k];
   const roles = (resume.roles || resume.experience || []).slice(0, 6).map((r) => `${r.title || r.role || ""} at ${r.company || r.employer || ""} (${r.startDate || ""} - ${r.endDate || "present"}): ${String(r.description || "").replace(/\*\*/g, "").slice(0, 400)}`);
-  const education = (resume.education || []).slice(0, 3).map((e) => `${e.degree || ""}, ${e.institution || ""} ${[e.startDate, e.endDate].filter(Boolean).join(" to ")}`.trim());
+  // With each school's GPA from the Profile (Rhombus Power was held: "the
+  // profile does not include a GPA", 2026-11-12).
+  const education = (resume.education || []).slice(0, 3).map((e) => `${[e.degree, e.field].filter(Boolean).join(" in ")}, ${e.institution || ""} ${[e.startDate, e.endDate].filter(Boolean).join(" to ")}${e.gpa ? `, GPA ${e.gpa}` : ""}`.trim());
   const skills = [...(resume.skills || []), ...(resume.skillGroups || []).flatMap((g) => g.skills || [])].slice(0, 60);
   const notes = applicantNotes(user);
   if (notes) p.inTheirOwnWords = notes;

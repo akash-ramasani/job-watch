@@ -26,7 +26,7 @@ function aiContext(profile, resume, job) {
     summary: plain(resume.summary),
     roles: roles.slice(0, 3).map((r) => `${r.title || r.role || ""} at ${r.company || r.employer || ""} (${[r.startDate, r.endDate || "present"].filter(Boolean).join(" to ")}): ${plain(r.description).slice(0, 500)}`),
     projects: (resume.projects || []).slice(0, 3).map((x) => `${x.name || ""}: ${plain(x.description).slice(0, 220)}`),
-    education: (resume.education || []).slice(0, 2).map((e) => `${e.degree || ""}, ${e.institution || ""} ${[e.startDate, e.endDate].filter(Boolean).join(" to ")}`.trim()),
+    education: (resume.education || []).slice(0, 2).map((e) => `${[e.degree, e.field].filter(Boolean).join(" in ")}, ${e.institution || ""} ${[e.startDate, e.endDate].filter(Boolean).join(" to ")}${e.gpa ? `, GPA ${e.gpa}` : ""}`.trim()),
     // The person's own word on which employers were startups (Profile page).
     startups: String(profile.startupCompanies || "").trim(),
     // The applicant's own answers from the Profile page (applicantNotes.cjs).

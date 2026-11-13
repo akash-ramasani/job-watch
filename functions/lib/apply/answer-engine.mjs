@@ -226,7 +226,7 @@ function classify(label, kind = "") {
   if (choice && (/\bare you (comfortable|ok|okay|fine|happy|alright) with (that|this|it)\??$/.test(l) || /(comfortable|willing|open|able) (to |with )?(complet\w*|tak\w*|do\w*|participat\w*) .{0,50}(take.?home|assessment|assignment|exercise|coding (test|challenge)|technical (interview|screen))/.test(l))) return "comfortableYes";
 
   // Scores and grades: profile values only (gpa, satScore, actScore), never guessed.
-  if (/^(cumulative |undergraduate |graduate |overall )?gpa\b|\bgpa\s*\(|what (was|is) your (\w+ ){0,3}gpa|^sat score|^act score|\b(sat|act) (score|result)/.test(l)) return "testScore";
+  if (/^(cumulative |undergraduate |graduate |overall )?gpa\b|\bgpa\s*\(|\(gpa\)|what (was|is) your (\w+ ){0,3}gpa|\bgpa\b.{0,30}\b(each|every|all|both)\b.{0,15}\b(degrees?|schools?)|^(please )?(provide|list|enter|share|state) your (cumulative |overall )?gpa\b|^sat score|^act score|\b(sat|act) (score|result)/.test(l)) return "testScore";
   // "<Language> Proficiency", "What is your level of English proficiency?"
   if (choice && /^[a-z]+ proficiency\b|level of [a-z]+ proficiency|proficiency in [a-z]+$|fluent in\b|languages? (in which )?you (are|speak)|which languages/.test(l) && !/program|coding|computer/.test(l)) return "languageProficiency";
   // Degree gates: "Do you have a four year degree?", "Master's, PhD or equivalent".
@@ -1628,6 +1628,20 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       : /\bgraduate\b|master|post.?grad|\bm\.?s\.?\b/.test(ll) ? edu.find((e) => e.gpa && isGrad(e))?.gpa : null;
     // Only a single GPA saved (no per-school values): it answers as before.
     const perSchool = edu.some((e) => e.gpa);
+    // "Please provide your GPA for each degree you've obtained" (Rhombus Power,
+    // 2026-11-12, held for the person): every school's, in one line.
+    if (!isSelect && perSchool && /\b(each|every|all|both)\b/.test(ll) && /gpa|grade point/.test(ll)) {
+      const line = edu.filter((e) => e.gpa).map((e) => `${[e.degree, e.field].filter(Boolean).join(" in ")}, ${e.institution || e.school || ""}: ${e.gpa}`).join("; ");
+      return out([{ name, value: line }], SOURCE.PROFILE, 1, "GPA for each degree");
+    }
+    // A plain "GPA" with only per-school values: the most recent degree's.
+    if (perSchool && !profile.gpa && /gpa|grade point/.test(ll) && !/undergrad|bachelor|\bgraduate\b|master/.test(ll)) {
+      const latest = edu.find((e) => e.gpa);
+      if (latest) {
+        if (isSelect) { const m = matchOption(primary, String(latest.gpa)) || findOnly(primary, [new RegExp("^" + escapeRe(norm(String(latest.gpa))))]); if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 1, "most recent degree's GPA"); }
+        else return out([{ name, value: String(latest.gpa) }], SOURCE.PROFILE, 1, "most recent degree's GPA");
+      }
+    }
     const v = /gpa|grade point/.test(ll) ? (schoolGpa != null ? schoolGpa : perSchool && /undergrad|bachelor|\bgraduate\b|master/.test(ll) ? null : profile.gpa) : /\bsat\b/.test(ll) ? profile.satScore : /\bact\b/.test(ll) ? profile.actScore : null;
     if (v == null || v === "") {
       // "Not applicable / Did not take / Do not recall" is an honest pick when no score is saved.

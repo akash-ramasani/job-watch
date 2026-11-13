@@ -55,3 +55,14 @@ test("location preference: the job's city, else an office, never Remote only (Di
   assert.equal(val(q), "Austin");
   assert.equal(val(q, { ...P, jobLocationName: "Charlotte, NC" }), "Charlotte");
 });
+
+test("GPA per school: each degree in one line, a plain GPA is the latest degree's (Rhombus Power, Marathon)", () => {
+  const edu = [{ institution: "California State University, East Bay", degree: "Master of Science", field: "Computer Science", gpa: "3.9" },
+    { institution: "KL University", degree: "Bachelor of Technology", field: "Computer Science and Artificial Intelligence", gpa: "4.0" }];
+  const p = { ...P, education: edu };
+  assert.equal(val(txt("Please provide your GPA for each degree you've obtained."), p),
+    "Master of Science in Computer Science, California State University, East Bay: 3.9; Bachelor of Technology in Computer Science and Artificial Intelligence, KL University: 4.0");
+  assert.equal(val(txt("Overall Result (GPA)"), p), "3.9");
+  assert.equal(val(txt("What was your undergraduate cumulative GPA?"), p), "4.0");
+  assert.equal(val(txt("What was your graduate cumulative GPA?"), p), "3.9");
+});
