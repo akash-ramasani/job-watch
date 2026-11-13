@@ -6,7 +6,15 @@ service cloud.firestore {
     // 1. User Metadata Rules
     // Allows users to read/write only their own profile information
     match /users/{userId} {
-      allow read, write: if request.auth != null && (request.auth.uid == userId || request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
+      allow read: if isOwner(userId) || isAdmin();
+      // The admin manages every account. A person creates their own record
+      // only with an invite they just used (Signup.jsx), and with AI off.
+      allow create: if isAdmin() || (isOwner(userId) && createWithInvite());
+      // A person edits their own profile, but not the fields the admin
+      // controls: AI access (spends the admin's AI budget), account type and
+      // trial dates. They may only deactivate themselves (trial end, App.jsx).
+      allow update: if isAdmin() || (isOwner(userId) && ownerUpdateOk());
+      allow delete: if isAdmin() || isOwner(userId);
       
       // Public read for the admin's mapClusters aggregation only — used by the
       // landing-page hero map (shown to signed-out visitors). Contains only
@@ -19,7 +27,7 @@ service cloud.firestore {
       // This is the ONLY rule that exposes personal collections such as
       // sessions, sessionHistory, settings, and resume — restricted to the
       // owner so session tokens, IPs, and resume data never leak cross-user.
-      match /{allSubcollections=**} {
+      match /{subcollection}/{rest=**} { // at least one segment: {x=**} alone also matched users/{uid} itself
         allow read, write: if request.auth != null && request.auth.uid == userId;
       }
 
@@ -47,8 +55,10 @@ service cloud.firestore {
       // Write is handled by Cloud Functions or user-specific rules
     }
     
+    // Nothing writes here any more (the landing form is gone); it was open to
+    // anyone, unauthenticated, with no limits.
     match /interestedUsers/{docId} {
-      allow create: if true;
+      allow create: if false;
       allow read: if request.auth != null && (request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133");
     }
 
@@ -74,6 +84,33 @@ service cloud.firestore {
     }
 
     
+    function isAdmin() {
+      return request.auth != null && request.auth.uid == "7Tojjo8l5PZIYctPmdwncf7PC133";
+    }
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+    // Admin-controlled fields on users/{uid}.
+    function guardedKeys() {
+      return ['aiAccess', 'accountStatus', 'accountType', 'trialEndsAt', 'trialDays', 'inviteCode'];
+    }
+    function createWithInvite() {
+      let d = request.resource.data;
+      let invite = get(/databases/$(database)/documents/invites/$(d.inviteCode)).data;
+      return d.inviteCode is string
+        && invite.usedBy == request.auth.uid
+        && d.get('aiAccess', false) == false
+        && d.get('accountType', 'trial') == invite.get('accountType', 'trial')
+        && d.get('accountStatus', 'trial') in ['trial', 'active'];
+    }
+    function ownerUpdateOk() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !changed.hasAny(guardedKeys())
+        || (changed.hasOnly(['accountStatus', 'aiAccess'])
+            && request.resource.data.accountStatus == 'deactivated'
+            && request.resource.data.get('aiAccess', false) == false);
+    }
+
     // Helper function to extract UID from path if needed
     function userIdFromPath(path) {
       return path[1]; // Returns 'uid' from /users/{uid}/...

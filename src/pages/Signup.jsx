@@ -85,6 +85,7 @@ export default function Signup() {
         createdAt: serverTimestamp(),
         lastFetchAt: null,
         aiAccess: false,     // AI always off until admin enables it
+        inviteCode: inviteRef.id, // the database rules allow creating this record only with an invite this account used
         accountStatus,
         accountType,
         trialDays,

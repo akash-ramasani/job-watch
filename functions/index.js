@@ -3665,6 +3665,30 @@ async function sendPushNotification(userId, summary, durationMs) {
  * Trigger:
  * https://us-central1-<PROJECT_ID>.cloudfunctions.net/askAssistant
  */
+/**
+ * AI features cost money on the admin's key: only the admin and accounts the
+ * admin enabled (users/{uid}.aiAccess === true, not deactivated) may use them.
+ * A signed-in token alone is not enough: the invite is only checked in the
+ * browser, and anyone can create a Firebase Auth account (review, 2026-11-12).
+ */
+async function hasAiAccess(uid) {
+  if (!uid) return false;
+  if (uid === ADMIN_UID) return true;
+  const snap = await db.collection("users").doc(uid).get().catch(() => null);
+  const d = snap?.exists ? snap.data() : null;
+  return !!d && d.aiAccess === true && d.accountStatus !== "deactivated";
+}
+/** An invited, active account (signup creates the record only with an invite). */
+async function isMember(uid) {
+  if (!uid) return false;
+  if (uid === ADMIN_UID) return true;
+  const snap = await db.collection("users").doc(uid).get().catch(() => null);
+  return !!snap?.exists && snap.data()?.accountStatus !== "deactivated";
+}
+async function requireAiAccess(uid) {
+  if (!(await hasAiAccess(uid))) throw new HttpsError("permission-denied", "AI features are not enabled for this account.");
+}
+
 exports.askAssistant = onRequest(
   { region: REGION, timeoutSeconds: 120, memory: "1GiB", maxInstances: 10, cors: CORS_ORIGINS, secrets: [OPENAI_API_KEY, ANTHROPIC_API_KEY] },
   async (req, res) => {
@@ -3678,6 +3702,7 @@ exports.askAssistant = onRequest(
 
       const { messages } = req.body || {};
       const activeUserId = decodedToken.uid;
+      if (!(await hasAiAccess(activeUserId))) return res.status(403).json({ error: "AI features are not enabled for this account." });
 
       if (!Array.isArray(messages)) {
         return res.status(400).json({ error: "Messages array is required." });
@@ -3803,6 +3828,7 @@ exports.parseResume = onRequest(
     } catch (err) {
       return res.status(err.statusCode || 401).json({ error: err.message });
     }
+    if (!(await isMember(decodedToken.uid))) return res.status(403).json({ error: "This account is not active." });
 
     try {
       // ─── 1. Parse multipart form data with Busboy ───────────────────────
@@ -4078,6 +4104,7 @@ exports.generateTailoredResume = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "You must be logged in to generate a resume.");
+    await requireAiAccess(uid);
 
     const sessionToken = request.rawRequest?.headers?.["x-session-token"];
     if (sessionToken) {
@@ -4498,6 +4525,7 @@ exports.mapFormFields = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    await requireAiAccess(uid);
 
     const { fields = [], jobTitle = "", companyName = "", jobLocationName = "", jobWorkplaceType = "", errorContext = null } = request.data;
     if (!Array.isArray(fields) || fields.length === 0) {
@@ -4864,7 +4892,8 @@ exports.generateNamePronunciation = onRequest(
 
     // Verify Firebase ID token before spending any OpenAI credits.
     try {
-      await verifyToken(req);
+      const tok = await verifyToken(req);
+      if (!(await isMember(tok.uid))) return res.status(403).json({ error: "This account is not active." });
     } catch (err) {
       return res.status(err.statusCode || 401).json({ error: err.message });
     }
@@ -4909,6 +4938,7 @@ exports.prepareGreenhouseApplication = onCall(
     if (dup.alreadyApplied) { logger.info(`prepareGreenhouseApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
     let openai = null;
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareGreenhouseApplication: no OpenAI client, free text will park:", e.message); }
+    if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
     const out = await prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
     logger.info(`prepareGreenhouseApplication: uid=${uid} token=${token} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
@@ -4932,6 +4962,7 @@ exports.prepareAshbyApplication = onCall(
     if (dup.alreadyApplied) { logger.info(`prepareAshbyApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
     let openai = null;
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareAshbyApplication: no OpenAI client, free text will park:", e.message); }
+    if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
     const out = await prepareAshbyApplication(uid, String(org), String(id), { db, openai, model: OPENAI_FAST_MODEL }, {
       domFields: Array.isArray(domFields) ? domFields.slice(0, 80) : [], jobTitle, companyName, jobLocationName,
@@ -4958,6 +4989,7 @@ exports.prepareLeverApplication = onCall(
     if (dup.alreadyApplied) { logger.info(`prepareLeverApplication: uid=${uid} ${formKey} already submitted ${dup.submittedAt}`); return { alreadyApplied: true, submittedAt: dup.submittedAt, formKey }; }
     let openai = null;
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareLeverApplication: no OpenAI client, free text will park:", e.message); }
+    if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
     const out = await prepareLeverApplication(uid, String(site), String(id), { db, openai, model: OPENAI_FAST_MODEL }, {
       domFields: domFields.slice(0, 120), jobTitle, companyName, jobLocationName, eu: eu === true,
@@ -4988,6 +5020,7 @@ exports.prepareGenericApplication = onCall(
     }
     let openai = null;
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareGenericApplication: no OpenAI client, free text will park:", e.message); }
+    if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
     const out = await prepareGenericApplication(uid, { db, openai, model: OPENAI_FAST_MODEL, sharedJobs: db.collection("users").doc(ADMIN_UID).collection("jobs") }, {
       source: String(source).slice(0, 40), applyUrl: String(applyUrl).slice(0, 2000), externalId: String(externalId).slice(0, 200),
@@ -5028,6 +5061,7 @@ exports.tailoredResumeFile = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    await requireAiAccess(uid);
     let { jobId = "", source = "", externalId = "" } = request.data || {};
     const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
     if (!jobId && externalId) {
@@ -5070,6 +5104,7 @@ exports.rescueField = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    await requireAiAccess(uid);
     const d = request.data || {};
     if (!d.question || !d.html) throw new HttpsError("invalid-argument", "question and html are required.");
     const key = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
@@ -5096,6 +5131,7 @@ exports.reviewApplication = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    await requireAiAccess(uid);
     const d = request.data || {};
     if (!Array.isArray(d.items)) throw new HttpsError("invalid-argument", "items is required.");
     const key = (ANTHROPIC_API_KEY.value() || process.env.ANTHROPIC_API_KEY || "").trim();
@@ -5133,6 +5169,7 @@ exports.trackApplicationEmails = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+    await requireAiAccess(uid);
     let ai = null;
     try { ai = requireOpenAI(); } catch (e) { logger.warn("trackApplicationEmails: no AI client:", e.message); }
     const t0 = Date.now();
