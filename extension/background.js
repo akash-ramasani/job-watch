@@ -907,6 +907,21 @@ async function autoFinishNow(result, tabId, jobId) {
  *  strip, and a person's browser does not grow three hidden tabs at a time.
  *  Falls back to a background tab where a window cannot be made. */
 let jobWindowLock = Promise.resolve();
+const JOB_WINDOW_PAGE = chrome.runtime.getURL("jobwindow.html");
+/** Windows left by versions before 1.12.23: one pinned about:blank tab and
+ *  nothing else (each extension reload made a new one). Closed once. */
+async function closeOldBlankJobWindows() {
+  try {
+    const wins = await chrome.windows.getAll({ populate: true, windowTypes: ["normal"] });
+    for (const w of wins) {
+      const tabs = w.tabs || [];
+      if (tabs.length === 1 && tabs[0].pinned && /^about:blank$/.test(tabs[0].url || tabs[0].pendingUrl || "")) {
+        await chrome.windows.remove(w.id).catch(() => {});
+        console.log("[JobWatch] closed an empty job window left by an older version");
+      }
+    }
+  } catch (_) { /* tabs permission or no windows */ }
+}
 /** One at a time: three jobs start together, and each used to find no job
  *  window yet and make its own (three windows of one tab each). */
 function openJobTab(url) {
@@ -923,12 +938,24 @@ async function openJobTabNow(url) {
     const { jwJobWindow } = await chrome.storage.session.get("jwJobWindow");
     let win = jwJobWindow ? await chrome.windows.get(jwJobWindow).catch(() => null) : null;
     if (win && win.type !== "normal") win = null;
+    // Session storage is emptied when the extension reloads, but the window
+    // can still be there (a worker restart): find it by its placeholder page.
+    if (!win) {
+      const [keeper] = await chrome.tabs.query({ url: JOB_WINDOW_PAGE });
+      if (keeper) {
+        win = await chrome.windows.get(keeper.windowId).catch(() => null);
+        if (win) await chrome.storage.session.set({ jwJobWindow: win.id, jwKeeperTab: keeper.id });
+      }
+    }
     if (!win) {
       // The window starts with a blank pinned tab that stays: when the last job
       // tab closed, the window closed with it, and making a new one for the
       // next job pulled the person to it on macOS (watching YouTube, 2026-11-11).
       // Made once per browser session; jobs only add tabs to it after that.
-      win = await chrome.windows.create({ url: "about:blank", state: "minimized", focused: false });
+      // The placeholder is JobWatch's own page (it was about:blank): it says
+      // what the window is, and Chrome closes it when the extension reloads,
+      // so a reload no longer leaves an empty window behind (2026-11-12).
+      win = await chrome.windows.create({ url: JOB_WINDOW_PAGE, state: "minimized", focused: false });
       await chrome.storage.session.set({ jwJobWindow: win.id, jwKeeperTab: win.tabs?.[0]?.id ?? null });
       if (win.tabs?.[0]?.id != null) chrome.tabs.update(win.tabs[0].id, { pinned: true }).catch(() => {});
       return await chrome.tabs.create({ windowId: win.id, url, active: true });
@@ -1116,9 +1143,9 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick();
 });
 // The browser opened: carry on where it left off (a job whose tab is gone is retried later).
-chrome.runtime.onStartup.addListener(() => { requeueRefused({ browserRestarted: true }).then(autoTick); });
+chrome.runtime.onStartup.addListener(() => { closeOldBlankJobWindows(); requeueRefused({ browserRestarted: true }).then(autoTick); });
 // Reloaded with new code (selfUpdate, or the Reload button): carry on too.
-chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") requeueRefused().then(autoTick); });
+chrome.runtime.onInstalled.addListener((d) => { closeOldBlankJobWindows(); if (d.reason === "update") requeueRefused().then(autoTick); });
 
 /** After an update: every job that stopped (needs you, or an error) goes back
  *  in the queue so the new code gets its chance, with its stale tab closed
