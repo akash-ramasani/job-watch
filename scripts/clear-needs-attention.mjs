@@ -25,6 +25,9 @@ const require = createRequire(new URL("../functions/index.js", import.meta.url))
 const { createAssistantContext } = require("./lib/assistantTools.cjs");
 const { classifyTitle } = require("./lib/jobFamilies.cjs");
 const { workdayPostingApi } = require("./lib/apply/generic.cjs");
+const ledger = require("./lib/apply/ledger.cjs");
+// Boards the auto-apply queue takes (lib/apply/autoApply.cjs); others are applied to by hand.
+const QUEUE_BOARDS = new Set(["greenhouse", "ashby", "lever", "workday"]);
 
 const write = process.argv.includes("--write");
 const db = await getDb();
@@ -109,13 +112,18 @@ const submitted = all.filter((a) => a.status === "submitted");
 const subForms = new Set(submitted.map((a) => a.formKey).filter(Boolean));
 const subJobs = new Set(submitted.map((a) => a.jobId).filter(Boolean));
 const subKeys = new Set(submitted.map(keyOf));
-const rows = all.filter((a) => ["needs_attention", "error"].includes(a.status)
+// The queue's own same-role test ("AI deployment engineer (East)" and "(West)").
+const subRoles = new Set(submitted.map((a) => a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle)).filter(Boolean));
+// Already marked and not started since: waiting in the queue ("Retrying"), not on the person.
+const awaitingRetry = (a) => a.retryRequested && Date.parse(a.retryRequested) > ms(a.lastStartedAt);
+const rows = all.filter((a) => !awaitingRetry(a)).filter((a) => ["needs_attention", "error"].includes(a.status)
   || (a.status === "in_progress" && now - ms(a.lastStartedAt || a.startedAt || a.updatedAt) > STALE_MS));
 
 const out = { dup: [], notMatch: [], closed: [], person: [], retry: [] };
 for (const a of rows) {
   const board = String(a.formKey || a.id).split("|")[0];
-  if ((a.formKey && subForms.has(a.formKey)) || (a.jobId && subJobs.has(a.jobId)) || subKeys.has(keyOf(a))) { out.dup.push(a); continue; }
+  if ((a.formKey && subForms.has(a.formKey)) || (a.jobId && subJobs.has(a.jobId)) || subKeys.has(keyOf(a)) || subRoles.has(a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle))) { out.dup.push(a); continue; }
+  if (!QUEUE_BOARDS.has(board)) { out.closed.push({ ...a, why: `auto-apply does not take ${board} forms: apply by hand` }); continue; }
   if (!(await matchesToday(a))) { out.notMatch.push(a); continue; }
   const who = PERSON_ONLY.find(([re]) => re.test(notesOf(a)));
   const open = await isOpen(a, a.id);
