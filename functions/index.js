@@ -140,6 +140,7 @@ const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
 const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-haiku-5-5"; // the check before Submit: Haiku 5.5 (cost, 2026-11-10)
 const { postingFromUrl } = require("./lib/apply/postingFromUrl.cjs");
+const { sweepApplications: sweepStopped, tabCounts } = require("./lib/apply/sweep.cjs");
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");
@@ -5343,6 +5344,33 @@ exports.getAdminUsersList = onCall({ region: REGION, maxInstances: 3, enforceApp
  * =====================================================================================
  */
 const { rebuildAggregations } = require("./lib/aggregations.cjs");
+
+// Every application that stopped is looked at every 30 minutes and ends in one
+// place: dismissed with its reason (closed, not eligible, below the score,
+// submitted elsewhere), retried ahead of new jobs, or left in Needs
+// attention only when the person alone can finish it (lib/apply/sweep.cjs).
+exports.sweepApplications = onSchedule(
+  { region: REGION, schedule: "every 30 minutes", timeZone: "America/Los_Angeles", timeoutSeconds: 540, memory: "512MiB" },
+  async () => {
+    const t0 = Date.now();
+    const r = await sweepStopped({ db, uid: ADMIN_UID, adminUid: ADMIN_UID });
+    logger.info(`sweepApplications: checked=${r.checked} writes=${r.writes} min=${r.minScore} ${JSON.stringify(r.outcomes)} ms=${Date.now() - t0}`);
+  }
+);
+
+// The Applications page's tab counts for the extension's popup, so the two
+// always agree (the popup kept its own counts: "120 ready" with none on the page).
+exports.applicationCounts = onCall({ region: REGION, maxInstances: 10 }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+  const col = db.collection("users").doc(uid).collection("applications");
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const [open, recent] = await Promise.all([
+    col.where("status", "in", ["needs_attention", "error", "in_progress", "ready"]).get(),
+    col.where("submittedAt", ">=", dayAgo).get(),
+  ]);
+  return tabCounts([...open.docs, ...recent.docs].map((d) => d.data()));
+});
 
 exports.dailyAggregationReconciliation = onSchedule(
   {

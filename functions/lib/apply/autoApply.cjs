@@ -207,10 +207,10 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   out.sort((a, b) => (b.fresh ? 1 : 0) - (a.fresh ? 1 : 0)
     || (a.fresh && b.fresh ? slow(a) - slow(b) || b.seenAt - a.seenAt : 0)
     || day(b.postedAt).localeCompare(day(a.postedAt)) || b.score - a.score || b.postedAt - a.postedAt);
-  // Then the "needs you" forms marked for another try (scripts/retry-stuck.mjs,
+  // Then the "needs you" forms marked for another try (the sweep, lib/apply/sweep.cjs; first
   // 2026-11-11): still open when marked, never submitted since. Each carries
   // its mark as retryToken so the runner starts it fresh.
-  // Top matches the person asked to apply to first (scripts/apply-top-matches.mjs):
+  // Retries the sweep marked (lib/apply/sweep.cjs: open, eligible, score 60+):
   // ahead of everything, best score first.
   const first = [];
   if (!test) {
@@ -220,7 +220,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const listed = new Map(lists.filter((j) => j?.id).map((j) => [String(j.id), j]));
     for (const d of appsSnap.docs) {
       const a = d.data() || {};
-      // Only the retries the person chose (scripts/apply-top-matches.mjs, score
+      // Only retries marked retryPriority (the sweep, score
       // 60+): the clean-up's wider marks had brought back Samsung's AMHS
       // Engineer and Target's Executive Team Leader, 2026-11-13.
       if (!a.retryRequested || !a.retryPriority || a.status === "submitted" || a.status === "dismissed" || !a.retryApplyUrl) continue;

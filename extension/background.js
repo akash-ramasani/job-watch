@@ -607,7 +607,7 @@ async function autoDue(j, st) {
     if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
     return true;
   }
-  // Marked for another try (scripts/retry-stuck.mjs): a new mark starts it
+  // Marked for another try (the sweep, functions/lib/apply/sweep.cjs): a new mark starts it
   // fresh, even after its tries ran out; its old tab closes.
   if (j.retryToken && r.retryToken !== j.retryToken) {
     if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
@@ -651,7 +651,9 @@ async function autoState() {
   // after a day; the server's applications record keeps it from a second
   // application. Jobs still waiting on a retry stay until they are done.
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [id, r] of Object.entries(out.results)) if (["submitted", "skipped"].includes(r.status) && (r.at || 0) < dayAgo) delete out.results[id];
+  // A form left on Review a day ago is the server's record now (the popup's
+  // count comes from it); kept here it held 120 "ready" with none on the page.
+  for (const [id, r] of Object.entries(out.results)) if ((["submitted", "skipped"].includes(r.status) || (r.status === "review" && !r.tabId)) && (r.at || 0) < dayAgo) delete out.results[id];
   return out;
 }
 // The old "Feeds" list in the popup is gone: drop what it stored.
@@ -1208,14 +1210,24 @@ chrome.notifications?.onClicked.addListener((id) => {
   chrome.notifications.clear(id);
 });
 
+// The Applications page's counts (functions applicationCounts), so the popup
+// and the page always agree; refreshed at most once a minute.
+let ledgerCounts = { at: 0, v: null };
+async function ledgerCountsNow() {
+  if (Date.now() - ledgerCounts.at < 60000) return ledgerCounts.v;
+  ledgerCounts.at = Date.now();
+  try { ledgerCounts.v = await callFunction("applicationCounts", {}); } catch (e) { console.warn("[JobWatch] applicationCounts:", e.message); }
+  return ledgerCounts.v;
+}
 async function autoStatus() {
   const st = await autoState();
+  const lc = await ledgerCountsNow();
   const results = Object.entries(st.results || {}).map(([jobId, r]) => ({ jobId, ...r })).sort((a, b) => b.at - a.at);
   const count = (s) => results.filter((r) => r.status === s).length;
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
   const stopped = results.filter((r) => ["needs_attention", "error"].includes(r.status) && r.at >= Date.now() - 864e5);
-  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: count("submitted"), review: count("review"), needs: count("needs_attention"), errors: count("error"), skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: lc ? lc.submitted24h : count("submitted"), review: lc ? lc.ready : count("review"), needs: lc ? lc.needsYou : count("needs_attention"), errors: lc ? lc.errors : count("error"), ledgerRetrying: lc ? lc.retrying : 0, skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────

@@ -32,7 +32,7 @@ const OUTCOME = {
   rejection: { label: "Rejected", cls: "bg-red-50 text-red-700 ring-red-200" },
   offer: { label: "Offer", cls: "bg-emerald-50 text-emerald-700 ring-emerald-200" },
 };
-// Marked for auto-apply to try again (scripts/clear-needs-attention.mjs) and
+// Marked for auto-apply to try again (the sweep, functions/lib/apply/sweep.cjs) and
 // not started since: waiting in the queue, not waiting on the person. A retry
 // that stops again is back under Needs attention.
 const awaitingRetry = (a) => {

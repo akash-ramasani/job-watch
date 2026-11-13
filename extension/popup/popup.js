@@ -177,7 +177,8 @@ function renderAuto(st) {
   $("btn-auto-retry").textContent = `Retry ${failed} failed job${failed === 1 ? "" : "s"}`;
   $("auto-reasons").style.display = st.reasons ? "block" : "none";
   $("auto-reasons").textContent = st.reasons ? `Stopped today by: ${st.reasons}.` : "";
-  const cells = [["Submitted (24 h)", st.submitted], ...(st.review ? [["Ready to submit", st.review]] : []), ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]];
+  // The same counts as the Applications page (Needs attention = Needs you + Errors).
+  const cells = [["Submitted (24 h)", st.submitted], ...(st.review ? [["Ready to submit", st.review]] : []), ...(st.ledgerRetrying ? [["Retrying", st.ledgerRetrying]] : []), ["Needs you", st.needs], ["Errors", st.errors], ["Left", st.left ?? "–"]];
   $("auto-stats").style.gridTemplateColumns = `repeat(${cells.length}, 1fr)`;
   $("auto-stats").innerHTML = cells
     .map(([k, v]) => `<div><b>${v ?? 0}</b><span>${k}</span></div>`).join("");
