@@ -163,10 +163,17 @@ $("btn-fill-page").addEventListener("click", () => {
 function renderAuto(st) {
   if (!st) return;
   const pill = $("auto-pill");
-  pill.textContent = st.on ? (st.aiDownSince && !st.current ? "Paused" : st.current ? "Applying" : st.idle ? "Waiting" : "On") : "Off";
-  pill.className = `auto-pill${st.on ? " on" : ""}`;
+  const paused = st.pausedUntil > Date.now();
+  const until = paused ? new Date(st.pausedUntil).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "";
+  $("auto-pause").style.display = paused ? "none" : "flex";
+  $("btn-auto-resume").style.display = paused ? "block" : "none";
+  $("btn-auto-resume").textContent = paused ? `Stopped until ${until} · Resume now` : "Resume now";
+  pill.textContent = paused ? "Stopped" : st.on ? (st.aiDownSince && !st.current ? "Paused" : st.current ? "Applying" : st.idle ? "Waiting" : "On") : "Off";
+  pill.className = `auto-pill${paused ? " warn" : st.on ? " on" : ""}`;
   const running = st.running || (st.current ? [st.current] : []);
-  $("auto-line").textContent = st.aiDownSince && !running.length
+  $("auto-line").textContent = paused
+    ? `Stopped until ${until}: no new job starts until then${running.length ? `; ${running.length} already running will finish (${running.map((j) => j.companyName).join(", ")})` : ""}. New jobs wait in the queue.`
+    : st.aiDownSince && !running.length
     ? `Paused since ${new Date(st.aiDownSince).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}: the AI is out of credits, so there are no tailored resumes or AI answers. Add credits at console.anthropic.com; JobWatch checks every 15 minutes and carries on by itself.`
     : running.length
     ? `Now applying to ${running.length}: ${running.map((j) => j.companyName).join(", ")}`
@@ -245,6 +252,12 @@ $("btn-wd-save").addEventListener("click", () => {
 });
 refreshWorkday();
 
+document.querySelectorAll("#auto-pause button").forEach((b) => b.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "AUTO_PAUSE", hours: Number(b.dataset.hours) }, () => setTimeout(refreshAuto, 200));
+}));
+$("btn-auto-resume").addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "AUTO_PAUSE", hours: 0 }, () => setTimeout(refreshAuto, 200));
+});
 $("btn-auto-retry").addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "AUTO_RETRY" }, () => setTimeout(refreshAuto, 300));
 });

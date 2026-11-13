@@ -986,7 +986,14 @@ async function autoTick() {
   try {
     // 1. Jobs whose tab is gone or that ran too long end as errors.
     const st0 = await autoState();
-    keepAwake(true);
+    // Stopped for a while from the popup (1, 2, 4 or 8 hours): jobs already
+    // running finish; no new one starts until the time is up.
+    if (st0.pausedUntil && Date.now() >= st0.pausedUntil) {
+      await withAutoLock(async () => { const st = await autoState(); delete st.pausedUntil; st.nextAt = 0; await saveAuto(st); });
+      notify("Auto-apply is back on", "The pause is over; applications carry on.");
+    }
+    const paused = !!(st0.pausedUntil && Date.now() < st0.pausedUntil);
+    keepAwake(!paused || st0.running.length > 0);
     for (const j of st0.running) {
       const alive = j.tabId ? await chrome.tabs.get(j.tabId).then(() => true).catch(() => false) : true;
       if (j.tabId && !alive) await autoFinish({ status: "error", note: "the tab was closed" }, j.tabId, j.jobId);
@@ -1061,6 +1068,7 @@ async function autoTick() {
       const job = await withAutoLock(async () => {
         const st = await autoState();
         if (st.running.length >= AUTO_PARALLEL) return null;
+        if (st.pausedUntil && Date.now() < st.pausedUntil) return null;
         if (st.nextAt && Date.now() < st.nextAt) return null;
         const busy = new Set(st.running.map((r) => r.jobId));
         const next = await autoNextJob(st, busy);
@@ -1227,7 +1235,7 @@ async function autoStatus() {
   const left = autoQueue.list.filter((j) => !st.results[j.jobId]).length;
   const retrying = results.filter((r) => ["error", "needs_attention"].includes(r.status) && !r.closed && (r.tries || 1) < AUTO_MAX_TRIES).length;
   const stopped = results.filter((r) => ["needs_attention", "error"].includes(r.status) && r.at >= Date.now() - 864e5);
-  return { on: !!st.on, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: lc ? lc.submitted24h : count("submitted"), review: lc ? lc.ready : count("review"), needs: lc ? lc.needsYou : count("needs_attention"), errors: lc ? lc.errors : count("error"), ledgerRetrying: lc ? lc.retrying : 0, skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
+  return { on: !!st.on, pausedUntil: st.pausedUntil > Date.now() ? st.pausedUntil : 0, idle: !!st.idle, aiDownSince: st.aiDownSince || 0, nextAt: st.nextAt || 0, current: st.running[0] || null, running: st.running, reasons: stopReasons(stopped), submitted: lc ? lc.submitted24h : count("submitted"), review: lc ? lc.ready : count("review"), needs: lc ? lc.needsYou : count("needs_attention"), errors: lc ? lc.errors : count("error"), ledgerRetrying: lc ? lc.retrying : 0, skipped: count("skipped"), retrying, left: autoQueue.at ? left : null, recent: results.slice(0, 8) };
 }
 
 // ─── Gmail: Greenhouse's emailed security code ───────────────────────────────
@@ -1640,6 +1648,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         keepAwake(true);
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
+        autoTick();
+        sendResponse({ ok: true });
+        return;
+      }
+      if (message.type === "AUTO_PAUSE") {
+        // hours > 0: no new job starts for that long; 0: carry on now.
+        const hours = Math.min(Math.max(Number(message.hours) || 0, 0), 24);
+        await withAutoLock(async () => {
+          const st = await autoState();
+          if (hours) st.pausedUntil = Date.now() + hours * 3600e3; else delete st.pausedUntil;
+          st.nextAt = 0;
+          await saveAuto(st);
+        });
+        if (hours) chrome.alarms.create("jwAutoKick", { when: Date.now() + hours * 3600e3 + 1000 });
         autoTick();
         sendResponse({ ok: true });
         return;

@@ -59,6 +59,10 @@
     .auto-head { display: flex; align-items: center; justify-content: space-between; }
     .auto-pill { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: #f3f4f6; color: #6b7280; }
     .auto-pill.on { background: #ecfdf5; color: #065f46; }
+    .auto-pause { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 11px; color: #6b7280; }
+    .auto-pause span { margin-right: 2px; }
+    .auto-pause button { flex: 1; padding: 6px 0; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; color: #374151; font: 600 11px inherit; font-family: inherit; cursor: pointer; }
+    .auto-pause button:hover { border-color: #c7d2fe; color: #4338ca; background: #eef2ff; }
     .auto-pill.warn { background: #fffbeb; color: #b45309; }
     .auto-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
     .auto-stats div { text-align: center; border-radius: 8px; background: #f9fafb; padding: 6px 2px; }
@@ -298,6 +302,11 @@
       <div class="auto-head"><span class="section-label" style="margin:0;">Auto-apply</span><span id="auto-pill" class="auto-pill">Off</span></div>
       <p id="auto-line" class="section-hint" style="margin:6px 0 8px;">Applies to every Ashby, Greenhouse, Lever and Workday job on your Jobs page, newest first and best match first, with a resume tailored to each role. Always on while the browser is open: it keeps the computer awake and starts on a new job within a minute of it appearing on your Jobs page.</p>
       <div id="auto-stats" class="auto-stats"></div>
+      <div id="auto-pause" class="auto-pause">
+        <span>Stop for</span>
+        <button data-hours="1">1H</button><button data-hours="2">2H</button><button data-hours="4">4H</button><button data-hours="8">8H</button>
+      </div>
+      <button class="btn" id="btn-auto-resume" style="display:none; margin-top:8px; background:#fff; color:#065f46; border:1px solid #a7f3d0; box-shadow:none;">Resume now</button>
       <p id="auto-reasons" class="section-hint" style="display:none; margin:8px 0 0;"></p>
       <button class="btn" id="btn-auto-retry" style="display:none; margin-top:8px; background:#fff; color:#4338ca; border:1px solid #c7d2fe; box-shadow:none;">Retry failed jobs</button>
     </div>
