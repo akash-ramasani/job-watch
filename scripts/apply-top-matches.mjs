@@ -19,6 +19,9 @@
 //   node scripts/apply-top-matches.mjs              # dry run: every job with its score and outcome
 //   node scripts/apply-top-matches.mjs --write      # mark the qualifying ones
 //   node scripts/apply-top-matches.mjs --min 70     # another threshold
+//   add --dismiss-unsuitable to also dismiss the Ready jobs that do not
+//   qualify (closed, not eligible, below --min, nothing to score), each with
+//   its reason; they can be reopened on the Applications page.
 import { createRequire } from "node:module";
 import { db as getDb, ADMIN_UID } from "../worker/lib/firestore.mjs";
 import { posting, applyUrlOf } from "./lib/postings.mjs";
@@ -30,6 +33,7 @@ const { eligibilityOf, blockedReason, needsSponsorship } = require("./lib/eligib
 
 const args = process.argv.slice(2);
 const write = args.includes("--write");
+const dismissUnsuitable = args.includes("--dismiss-unsuitable");
 const minArg = args.indexOf("--min");
 const MIN = minArg !== -1 ? Number(args[minArg + 1]) || 60 : 60;
 
@@ -90,7 +94,22 @@ const go = rows.filter((x) => x.out === "apply").sort((x, y) => y.score - x.scor
 console.log(`\nTo apply (score >= ${MIN}): ${go.length}`);
 for (const x of go) console.log(`  ${String(x.score).padStart(3)} ${x.how.padEnd(6)} ${x.tab.padEnd(8)} ${x.board.padEnd(10)} ${String(x.a.companyName || "?").slice(0, 26).padEnd(26)} | ${String(x.a.jobTitle || "").slice(0, 60)}`);
 
-if (!write) { console.log("\nDry run. Add --write to queue these first."); process.exit(0); }
+const drop = dismissUnsuitable ? rows.filter((x) => x.tab === "Ready" && x.out !== "apply") : [];
+if (dismissUnsuitable) {
+  console.log(`\nReady jobs to dismiss: ${drop.length}`);
+  const why = {}; for (const x of drop) { const k = x.out.startsWith("not eligible") ? "not eligible" : x.out; why[k] = (why[k] || 0) + 1; }
+  console.log(`  ${JSON.stringify(why)}`);
+}
+if (!write) { console.log("\nDry run. Add --write to apply."); process.exit(0); }
+if (drop.length) {
+  const iso0 = new Date().toISOString();
+  for (let i = 0; i < drop.length; i += 400) {
+    const batch = db.batch();
+    for (const x of drop.slice(i, i + 400)) batch.update(x.a.ref, { status: "dismissed", dismissedAt: iso0, dismissReason: x.out === "closed" ? "posting closed" : x.score != null ? `${x.out} (match score ${x.score})` : x.out });
+    await batch.commit();
+  }
+  console.log(`Dismissed ${drop.length} Ready jobs.`);
+}
 const iso = new Date().toISOString();
 for (let i = 0; i < go.length; i += 400) {
   const batch = db.batch();
