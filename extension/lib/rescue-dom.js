@@ -134,17 +134,39 @@
     return clone.outerHTML.replace(/\s+/g, " ").replace(/>\s+</g, "><");
   }
 
-  function snapshot(question) {
+  const OPTION = "[role=listbox] [role=option], [role=menu] [role=menuitem], [data-automation-id=promptOption], [class*=option i][id*=option i]";
+  const shownOptions = (block) => [...document.querySelectorAll(OPTION)]
+    .filter((o) => visible(o) && !/^no (options|results|matches)/i.test(o.textContent.trim()));
+  /** A search-as-you-type list whose options are not on the page until it
+   *  opens (Greenhouse's "Current Location:" at Ooma: the AI saw an empty box
+   *  holding the typed "San Francisco, California, United States" and "No
+   *  options", 2026-11-13): clear the typed search and open it, so the AI
+   *  sees the real options and their format. */
+  async function openList(block) {
+    if (shownOptions(block).length) return;
+    const box = block.querySelector("input[role=combobox], [role=combobox] input, input[aria-autocomplete], [aria-haspopup=listbox], button[aria-haspopup]");
+    if (!box) return;
+    if (box.tagName === "INPUT" && box.value) setNative(box, "");
+    box.focus();
+    realClick(box);
+    for (let i = 0; i < 10 && !shownOptions(block).length; i++) await new Promise((r) => setTimeout(r, 100));
+    if (!shownOptions(block).length && box.tagName === "INPUT") { press(box, "ArrowDown"); await new Promise((r) => setTimeout(r, 400)); }
+  }
+
+  async function snapshot(question) {
     const block = findBlock(question);
     if (!block) return { ok: false, error: "field not found on the page" };
+    await openList(block).catch(() => {});
     document.querySelectorAll("[data-jw-ref]").forEach((e) => e.removeAttribute("data-jw-ref"));
     let n = 0;
     const tag = (el) => { if (!el.hasAttribute("data-jw-ref")) el.setAttribute("data-jw-ref", `r${n++}`); };
     block.querySelectorAll(CONTROL).forEach(tag);
     block.querySelectorAll("label").forEach(tag);
-    // Options of a dropdown this field opened (often rendered elsewhere on the page).
-    const open = [...document.querySelectorAll("[role=listbox] [role=option], [role=menu] [role=menuitem], [data-automation-id=promptOption], [class*=option i][id*=option i]")]
-      .filter((o) => visible(o) && !block.contains(o)).slice(0, 80);
+    // Options of a dropdown this field opened (often rendered elsewhere on the
+    // page): all of them when there are 10 or fewer; else the first 10 and how
+    // many there are, so the AI sees the format and types to narrow the list.
+    const all = shownOptions(block).filter((o) => !block.contains(o) || o.closest("[role=listbox]"));
+    const open = all.slice(0, all.length > 10 ? 10 : all.length);
     open.forEach(tag);
     let html = cleanHtml(block);
     // A follow-up ("If yes, please explain.") means nothing alone: the question
@@ -154,7 +176,7 @@
       const before = prevQuestionText(block);
       if (before) html = `<!-- the question just before this one on the form, with its answer: ${before.replace(/--/g, "-")} -->\n${html}`;
     }
-    if (open.length) html += `\n<!-- open dropdown options -->\n<ul>${open.map((o) => `<li data-jw-ref="${o.getAttribute("data-jw-ref")}">${o.textContent.replace(/\s+/g, " ").trim().slice(0, 140)}</li>`).join("")}</ul>`;
+    if (open.length) html += `\n<!-- open dropdown options: ${all.length > 10 ? `the first 10 of ${all.length}; this is their format. To pick one not shown, type part of it in the box to narrow the list, then click it` : `all ${all.length}; pick the one that fits, as written`} -->\n<ul>${open.map((o) => `<li data-jw-ref="${o.getAttribute("data-jw-ref")}">${o.textContent.replace(/\s+/g, " ").trim().slice(0, 140)}</li>`).join("")}</ul>`;
     return { ok: true, html: html.slice(0, 12000), required: requiredOf(block, question), filled: filledOf(block), refs: n };
   }
 

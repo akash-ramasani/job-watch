@@ -440,6 +440,9 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     if (m) p.metroArea = m.display.split(",")[0];
   }
   p.metroAreas = [...new Set([...(user.metroAreas || []), ...metroTerms(p.city)])];
+  // Every city of the person's metro ("sunnyvale" for San Francisco): an
+  // office list without their own city picks one in the same metro.
+  p.metroCities = metroOf(p.city)?.cities || [];
   return p;
 }
 

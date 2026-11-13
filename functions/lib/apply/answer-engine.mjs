@@ -337,6 +337,8 @@ function classify(label, kind = "") {
   if (choice && /^(do you|are you) (currently |presently )?(live|living|reside|residing|based|located) within \d+ ?(miles|mi|km|kilometers)\b/.test(l)) return "livesIn";
   // "Where are you located?" as a pick list (Montreal | Other).
   if (choice && /^where (are you|do you) (currently )?(located|based|live|reside)/.test(l)) return "whereLocated";
+  // "Current Location:" as a list of offices (Ooma: Boca Raton, Newark, Sunnyvale...).
+  if (choice && /^(your |the )?(current|present) location\b|^location of residence\b/.test(l)) return "whereLocated";
   // Procurement / contract-award involvement for this company: a conflict-of-interest check.
   if (choice && /procurement|contract award/.test(l)) return "conflictOfInterest";
   // "Are you a CURRENT / FORMER U.S. federal government civilian or military employee?" (RTX).
@@ -1922,7 +1924,19 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // "Where are you located?" as a pick list: the applicant's city, region or
   // country when offered, else an "Other" style option.
   if (key === "whereLocated" && isSelect) {
+    // Several options in the person's state (Ooma: Newark, Poway and Sunnyvale,
+    // California, for a San Francisco profile; it typed the full address and
+    // found nothing, 2026-11-13): the job's own city among them, else one in
+    // the person's metro, else the only one.
+    const opts = primary.values || primary.options || [];
+    const inState = profile.region ? opts.filter((o) => new RegExp(`\\b${escapeRe(norm(profile.region))}\\b`).test(norm(o.label))) : [];
+    const cityOf = (o) => norm(String(o.label).split(",")[0]);
+    const jobCity = norm(String(profile.jobLocationName || "").split(/[,;|]/)[0]);
+    const nearby = inState.length > 1
+      ? (inState.find((o) => jobCity && cityOf(o) === jobCity) || inState.find((o) => (profile.metroCities || []).includes(cityOf(o))) || null)
+      : null;
     const m = findOnly(primary, cityTerms(profile).map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)))
+      || nearby
       || (profile.region ? findOnly(primary, [new RegExp(`\\b${escapeRe(norm(profile.region))}\\b`)]) : null)
       || (profile.country ? countryOption(primary, profile.country) || findOnly(primary, [new RegExp(`\\b${escapeRe(norm(profile.country))}\\b`), /\bunited states\b|\busa?\b/]) : null)
       || findOnly(primary, [/^other\b|^elsewhere|outside|none of (the above|these)|not listed|remote/])
