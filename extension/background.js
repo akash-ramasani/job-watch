@@ -619,14 +619,20 @@ async function autoDue(j, st) {
     return true;
   }
   if ((r.tries || 1) >= AUTO_MAX_TRIES || r.closed) return false;
-  if (r.status === "error") return Date.now() >= (r.retryAt || 0);
+  if (r.status === "error") return !!r.dueNow || Date.now() >= (r.retryAt || 0);
   if (r.status === "needs_attention") {
     // Tried again on its own (30 min, then 2 h; three tries in all), or at
     // once when the person saved a new answer. Its old tab is closed: the job
     // reopens fresh as an auto-apply job.
-    const due = autoQueue.answersUpdatedAt > r.at || (!r.personOnly && Date.now() >= r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]));
+    const due = !!r.dueNow || autoQueue.answersUpdatedAt > r.at || (!r.personOnly && Date.now() >= r.at + (AUTO_RETRY_MS[(r.tries || 1) - 1] || AUTO_RETRY_MS[AUTO_RETRY_MS.length - 1]));
     if (!due) return false;
-    if (r.tabId) await chrome.tabs.remove(r.tabId).catch(() => {});
+    if (r.tabId) {
+      // The person is in that tab right now (finishing it by hand): leave it.
+      const tab = await chrome.tabs.get(r.tabId).catch(() => null);
+      const win = tab && await chrome.windows.get(tab.windowId).catch(() => null);
+      if (tab?.active && win?.focused) return false;
+      await chrome.tabs.remove(r.tabId).catch(() => {});
+    }
     return true;
   }
   return false;
@@ -684,7 +690,16 @@ async function tailoredResumeFor(ref) {
   if (hit?.failedAt && Date.now() - hit.failedAt < 10 * 60 * 1000) return { error: hit.error || "failed" };
   try {
     const r = await callFunction("tailoredResumeFile", ref);
-    await chrome.storage.session.set({ [key]: { fileName: r.fileName, pdfBase64: r.pdfBase64, jobId: r.jobId } });
+    // Session storage holds ~10 MB; each PDF is kept only while its job runs
+    // (autoFinishNow removes it). If it is full anyway, drop the other jobs'
+    // PDFs: a failed write here ended every later job as "no tailored resume".
+    const entry = { [key]: { fileName: r.fileName, pdfBase64: r.pdfBase64, jobId: r.jobId } };
+    try { await chrome.storage.session.set(entry); }
+    catch (_) {
+      const all = await chrome.storage.session.get(null);
+      await chrome.storage.session.remove(Object.keys(all).filter((k) => k.startsWith("tr:") && k !== key));
+      await chrome.storage.session.set(entry).catch(() => {});
+    }
     return r;
   } catch (err) {
     console.warn("[JobWatch] tailored resume unavailable, using the saved resume:", err.message);
@@ -801,14 +816,18 @@ async function closeSubmittedTab(tabId) {
 /** A "needs you" tab the person finished by hand: count it submitted and close
  *  the tab like the runner's own. Returns whether the tab was one of those. */
 async function finishedByHand(tabId, isSameForm = null) {
-  const st = await autoState();
   let hit = false;
-  for (const r of Object.values(st.results || {})) {
-    if (r.status === "submitted" || !(r.tabId === tabId || (isSameForm && isSameForm(r.url)))) continue;
-    if (r.tabId === tabId) hit = true;
-    r.status = "submitted"; r.note = "finished by hand"; r.at = Date.now(); r.tabId = null;
-  }
-  if (hit || isSameForm) await saveAuto(st);
+  // Under the lock: a job finishing in another tab at the same moment must not
+  // be overwritten (review, 2026-11-12).
+  await withAutoLock(async () => {
+    const st = await autoState();
+    for (const r of Object.values(st.results || {})) {
+      if (r.status === "submitted" || !(r.tabId === tabId || (isSameForm && isSameForm(r.url)))) continue;
+      if (r.tabId === tabId) hit = true;
+      r.status = "submitted"; r.note = "finished by hand"; r.at = Date.now(); r.tabId = null;
+    }
+    if (hit || isSameForm) await saveAuto(st);
+  });
   if (hit) await closeSubmittedTab(tabId);
   return hit;
 }
@@ -824,6 +843,10 @@ async function autoFinishNow(result, tabId, jobId) {
   const tries = (prev?.tries || 0) + (result.keepTries ? 0 : 1);
   const note = String(result.note || "").slice(0, 300);
   focusRelease(cur.tabId);
+  // Its tailored PDF is in the form already (or the job ended): free the space.
+  chrome.storage.session.remove(`tr:${cur.jobId}`).catch(() => {});
+  // The debugger may still be attached after a worker restart (focusTabs is in memory).
+  if (/myworkday(jobs|site)\.com/i.test(cur.applyUrl || "") && cur.tabId != null) chrome.debugger.detach({ tabId: cur.tabId }).catch(() => {});
   // A test run (autoApplyTest): traced, tab closed, never retried or submitted.
   if (cur.test) {
     st.results[cur.jobId] = { status: result.status, note, title: cur.title, companyName: cur.companyName, url: cur.applyUrl, at: Date.now(), tries: AUTO_MAX_TRIES, test: true };
@@ -1093,28 +1116,38 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === "jwAutoTick" || a.name === "jwAutoKick") autoTick();
 });
 // The browser opened: carry on where it left off (a job whose tab is gone is retried later).
-chrome.runtime.onStartup.addListener(() => { requeueRefused().then(autoTick); });
+chrome.runtime.onStartup.addListener(() => { requeueRefused({ browserRestarted: true }).then(autoTick); });
 // Reloaded with new code (selfUpdate, or the Reload button): carry on too.
 chrome.runtime.onInstalled.addListener((d) => { if (d.reason === "update") requeueRefused().then(autoTick); });
 
 /** After an update: every job that stopped (needs you, or an error) goes back
  *  in the queue so the new code gets its chance, with its stale tab closed
  *  so it reopens as an auto-apply job. A closed posting stays out. */
-async function requeueRefused() {
-  return withAutoLock(requeueRefusedNow);
+async function requeueRefused(opts = {}) {
+  return withAutoLock(() => requeueRefusedNow(opts));
 }
-async function requeueRefusedNow() {
+async function requeueRefusedNow({ browserRestarted = false } = {}) {
   const st = await autoState();
   let n = 0;
+  // After a browser restart every saved tab id is stale: Chrome numbers tabs
+  // afresh, so closing "r.tabId" could close one of the person's restored tabs.
+  // Forget them instead (review, 2026-11-12).
+  const closeTab = (id) => { if (id && !browserRestarted) chrome.tabs.remove(id).catch(() => {}); };
+  if (browserRestarted) for (const r of Object.values(st.results || {})) if (r.tabId) r.tabId = null;
   // Jobs that were mid-way lost their page script with the old code: restart them.
-  for (const j of st.running) { if (j.tabId) chrome.tabs.remove(j.tabId).catch(() => {}); n++; }
+  for (const j of st.running) { closeTab(j.tabId); n++; }
   st.running = [];
-  for (const [id, r] of Object.entries(st.results || {})) {
+  for (const r of Object.values(st.results || {})) {
     if (!["needs_attention", "error"].includes(r.status) || r.closed) continue;
-    if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
-    delete st.results[id];
+    // Its tries are kept: a reload used to delete the result, so the 3-try
+    // limit never held and person-only jobs (assessments, references) ran
+    // again on every version. Now only jobs with tries left go again, now.
+    if (r.personOnly || (r.tries || 1) >= AUTO_MAX_TRIES) continue;
+    closeTab(r.tabId); r.tabId = null;
+    r.dueNow = true; // autoDue: try it now, with the new code
     n++;
   }
+  if (browserRestarted) await saveAuto(st);
   if (n) { st.idle = false; st.nextAt = 0; autoQueue = { at: 0, list: [], answersUpdatedAt: 0 }; await saveAuto(st); console.log(`[JobWatch] re-queued ${n} refused job(s) after the update`); }
 }
 
@@ -1196,7 +1229,21 @@ function mailText(payload) {
  *  a code is handed out once (a second ask from the same tab means the first
  *  was wrong), and an email naming the tab's company comes first (Smartsheet,
  *  2026-11-09: one form took the other's code twice). */
-async function greenhouseCode(sinceMs, retried = false, { tabId = null, company = "" } = {}) {
+// Tabs waiting for a code right now (tabId -> { co, at }): an email that names
+// none of them may go to a tab only when no other company is waiting, so three
+// Greenhouse tabs in parallel no longer take each other's codes.
+const ghCodeWaiters = new Map();
+let ghCodeLock = Promise.resolve();
+async function greenhouseCode(sinceMs, retried = false, opts = {}) {
+  // Waiting from the moment it asks, so a lookup running for another tab sees it.
+  if (opts.tabId != null) ghCodeWaiters.set(opts.tabId, { co: String(opts.company || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(), at: Date.now() });
+  // One lookup at a time: jwGhCodes is read, then written (review, 2026-11-12).
+  const run = ghCodeLock.then(() => greenhouseCodeNow(sinceMs, retried, opts), () => greenhouseCodeNow(sinceMs, retried, opts));
+  ghCodeLock = run.catch(() => {});
+  return run;
+}
+async function greenhouseCodeNow(sinceMs, retried = false, { tabId = null, company = "" } = {}) {
+  for (const [t, w] of ghCodeWaiters) if (Date.now() - w.at > 15 * 60 * 1000) ghCodeWaiters.delete(t);
   const token = await gmailToken(false);
   const auth = { headers: { Authorization: `Bearer ${token}` } };
   const q = encodeURIComponent('from:greenhouse newer_than:1d (security code OR verification code)');
@@ -1204,7 +1251,7 @@ async function greenhouseCode(sinceMs, retried = false, { tabId = null, company 
   // An expired or revoked sign-in is an answer, not "no email yet" for three minutes.
   if (list.error) {
     // A stale sign-in: drop it and get a fresh one without asking, once.
-    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return greenhouseCode(sinceMs, true, { tabId, company }); }
+    if (list.error.code === 401 && !retried) { await chrome.storage.local.set({ jwGmail: { ...(await gmailState()), token: "", exp: 0 } }); return greenhouseCodeNow(sinceMs, true, { tabId, company }); }
     throw new Error(`Gmail: ${list.error.message || list.error.code} (reconnect Gmail in the JobWatch popup)`);
   }
   const { jwGhCodes = {} } = await chrome.storage.local.get("jwGhCodes");
@@ -1223,12 +1270,18 @@ async function greenhouseCode(sinceMs, retried = false, { tabId = null, company 
       || text.match(/\b(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])([A-Za-z0-9]{8})\b/);
     if (!hit || jwGhCodes[hit[1]]) continue; // handed out before: another form's, or this one's wrong one
     const subject = (msg.payload?.headers || []).find((h) => /^subject$/i.test(h.name))?.value || "";
-    const names = co && ` ${`${subject} ${text}`.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `.includes(` ${co} `);
-    found.push({ code: hit[1], at: Number(msg.internalDate), names });
+    const flat = ` ${`${subject} ${text}`.toLowerCase().replace(/[^a-z0-9]+/g, " ")} `;
+    const names = co && flat.includes(` ${co} `);
+    found.push({ code: hit[1], at: Number(msg.internalDate), names, flat });
   }
-  // Newest first, the company's own email before any other.
-  const pick = found.find((f) => f.names) || found[0];
+  // Newest first, the company's own email before any other. An email that does
+  // not name this company goes to it only if it names no other waiting
+  // company, and only when this is the one Greenhouse tab waiting.
+  const others = [...ghCodeWaiters].filter(([t, w]) => t !== tabId && w.co && w.co !== co).map(([, w]) => w.co);
+  const pick = found.find((f) => f.names)
+    || (others.length ? null : found.find((f) => !others.some((o) => f.flat.includes(` ${o} `))));
   if (!pick) return "";
+  if (tabId != null) ghCodeWaiters.delete(tabId);
   jwGhCodes[pick.code] = { tabId, at: Date.now() };
   await chrome.storage.local.set({ jwGhCodes });
   return pick.code;
@@ -1538,9 +1591,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       if (message.type === "AUTO_START") {
-        const st = await autoState();
-        st.on = true; st.idle = false; st.nextAt = 0; st.startedAt = st.startedAt || Date.now();
-        await saveAuto(st);
+        await withAutoLock(async () => {
+          const st = await autoState();
+          st.on = true; st.idle = false; st.nextAt = 0; st.startedAt = st.startedAt || Date.now();
+          await saveAuto(st);
+        });
         keepAwake(true);
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
         autoTick();
@@ -1549,15 +1604,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.type === "AUTO_RETRY") {
         // Jobs that needed the person or failed go back in the queue (after a fix).
-        const st = await autoState();
-        let n = 0;
-        for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") {
-          // Its old tab would sit in manual mode; the job reopens fresh instead.
-          if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
-          delete st.results[id]; n++;
-        }
-        st.idle = false; st.nextAt = 0;
-        await saveAuto(st);
+        let n = 0, st;
+        await withAutoLock(async () => {
+          st = await autoState();
+          for (const [id, r] of Object.entries(st.results || {})) if (r.status === "needs_attention" || r.status === "error") {
+            // Its old tab would sit in manual mode; the job reopens fresh instead.
+            if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
+            delete st.results[id]; n++;
+          }
+          st.idle = false; st.nextAt = 0;
+          await saveAuto(st);
+        });
         autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
         if (st.on) autoTick();
         sendResponse({ ok: true, retried: n });

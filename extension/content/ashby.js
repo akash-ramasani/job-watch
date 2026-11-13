@@ -1319,7 +1319,7 @@
       prefix: "Auto-apply",
       say: (t, items) => (items ? window.__jwNotify.show(t, "warning", { items }) : showOverlay(t)),
       button: ashbySubmitButton,
-      submitted: async () => { try { return (await execAshby("submitted")) === true; } catch { return !document.querySelector(".ashby-application-form-container"); } },
+      submitted: async () => { try { return (await execAshby("submitted")) === true; } catch { return false; } }, // a failed check is not a submission
       errors: async () => {
         const now = await scanNow();
         return (await execAshby("errors").then((x) => (Array.isArray(x) ? x : [])).catch(() => []))
@@ -1382,7 +1382,7 @@
         showOverlay("⏳ Submitting…");
         await sleep(3000);
         let done = false;
-        try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
+        try { done = (await execAshby("submitted")) === true; } catch { done = false; } // a failed check is not a submission
         if (!done) showOverlay("⚠️ Ashby did not accept it yet. Fix any field marked in red, then press Submit again.", "warning", { action: submitAction(message, type) });
       },
     };
@@ -1675,7 +1675,7 @@
     const watchStart = Date.now();
     const watch = setInterval(async () => {
       let done = false;
-      try { done = (await execAshby("submitted")) === true; } catch { done = !document.querySelector(".ashby-application-form-container"); }
+      try { done = (await execAshby("submitted")) === true; } catch { done = false; } // a failed check is not a submission
       if (done) {
         clearInterval(watch);
         ledger("submitted", { ...jobMeta(pendingJob), answersLog });
@@ -1767,10 +1767,11 @@
   // record and the queue advances. Never clicks Submit.
   function watchForSubmit(pendingJob, answersLog) {
     const watchStart = Date.now();
-    const watch = setInterval(() => {
-      const isSuccess = !document.querySelector(".ashby-application-form-container") ||
-        window.location.href.includes("success") ||
-        !!document.querySelector(".ashby-application-success, [class*='successContainer']");
+    const watch = setInterval(async () => {
+      // The same check as the auto flow (lib/ashby-dom.js submitted()): the form
+      // being gone alone is not a submission.
+      let isSuccess = false;
+      try { isSuccess = (await execAshby("submitted")) === true; } catch { isSuccess = false; }
       if (isSuccess) {
         clearInterval(watch);
         ledger("submitted", { ...jobMeta(pendingJob), answersLog });

@@ -629,7 +629,14 @@
   }
 
   function submitted() {
-    return !document.querySelector(".ashby-application-form-container")
+    // The form being gone is not enough on its own: Ashby's Overview tab, a
+    // re-render or an error page also remove it, and the job was then recorded
+    // as submitted and never retried (review, 2026-11-12). It counts when the
+    // submit request was seen to succeed, or when nothing is watching requests.
+    const formGone = !document.querySelector(".ashby-application-form-container");
+    const net = window.__jwNet;
+    const sentOk = !!net && (net.submits || []).some((x) => x.ok);
+    return (formGone && (sentOk || !net))
       || /success|submitted|thank/i.test(window.location.href)
       || !!document.querySelector(".ashby-application-success, [class*='successContainer'], [class*='_success_']")
       // The green banner some boards show in place of the form (Harvey, 2026-11-02).
