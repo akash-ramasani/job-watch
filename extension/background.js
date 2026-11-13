@@ -37,7 +37,46 @@ async function getStoredAuth() {
   });
 }
 
+// ─── One browser, several JobWatch accounts ──────────────────────────────────
+// Everything auto-apply keeps in the browser belongs to the account that made
+// it: its runner state and counts, its Gmail and Workday sign-in, its mail
+// scan. A second account signing in on the web page (Riti, 2026-11-13) saw
+// Akash's counts, Gmail and Workday password, and would have applied with them
+// and written his mail into her record. On a change of account, the old
+// account's data is put away and the new one's comes back.
+const PER_ACCOUNT_KEYS = ["jwAuto", "jwWorkday", "jwWdAuth", "jwGmail", "jwCachedUserDoc", "jwCachedResumeDoc", "jwGhCodes", "jwWdLinks", "jwMailSeen", "jwMailEvents", "jwMailBackfilled2", "jwRescueMemo", "jwDailyReport"];
+let accountLock = Promise.resolve();
+function useAccount(uid) {
+  const run = accountLock.then(() => useAccountNow(uid));
+  accountLock = run.catch(() => {});
+  return run;
+}
+async function useAccountNow(uid) {
+  if (!uid) return;
+  let { jwDataOwner, jwAuto } = await chrome.storage.local.get(["jwDataOwner", "jwAuto"]);
+  // Before 1.12.35 the data had no owner: only the admin had used auto-apply.
+  if (!jwDataOwner) jwDataOwner = jwAuto ? ADMIN_UID : uid;
+  if (jwDataOwner === uid) { await chrome.storage.local.set({ jwDataOwner: uid }); return; }
+  // The old account's open jobs stop here (their tabs would report to the new
+  // account); they come back in its queue when it signs in again.
+  const old = await chrome.storage.local.get(PER_ACCOUNT_KEYS);
+  if (old.jwAuto) {
+    for (const j of old.jwAuto.running || []) if (j.tabId) await chrome.tabs.remove(j.tabId).catch(() => {});
+    old.jwAuto = { ...old.jwAuto, running: [], nextAt: 0, idle: false };
+  }
+  const key = (u) => `jwAccount:${u}`;
+  const { [key(uid)]: mine = {} } = await chrome.storage.local.get(key(uid));
+  await chrome.storage.local.set({ [key(jwDataOwner)]: old });
+  await chrome.storage.local.remove([...PER_ACCOUNT_KEYS, key(uid)]);
+  await chrome.storage.local.set({ ...mine, jwDataOwner: uid });
+  autoQueue = { at: 0, list: [], answersUpdatedAt: 0 };
+  ledgerCounts = { at: 0, v: null };
+  jobsStampSeen = "";
+  console.log(`[JobWatch] account changed: ${jwDataOwner} -> ${uid}`);
+}
+
 async function saveAuth({ idToken, refreshToken, uid, expiresIn }) {
+  await useAccount(uid);
   const expiry = Date.now() + (parseInt(expiresIn, 10) - 60) * 1000;
   await chrome.storage.local.set({
     jwIdToken: idToken,
@@ -984,6 +1023,7 @@ async function autoTick() {
   if (autoBusy) return;
   autoBusy = true;
   try {
+    { const { jwUid } = await getStoredAuth(); if (jwUid) await useAccount(jwUid); }
     // 1. Jobs whose tab is gone or that ran too long end as errors.
     const st0 = await autoState();
     // Stopped for a while from the popup (1, 2, 4 or 8 hours): jobs already

@@ -454,6 +454,11 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
   // Every city of the person's metro ("sunnyvale" for San Francisco): an
   // office list without their own city picks one in the same metro.
   p.metroCities = metroOf(p.city)?.cities || [];
+  // The visa status, from the Profile page's Yes/No answers when the account
+  // has no structured one (only the admin's was set by hand; Riti, 2026-11-13).
+  if (!user.visaStatus && (user.onStudentVisa || user.currentlyH1B)) {
+    p.visaStatus = { student: /^yes/i.test(user.onStudentVisa || ""), sponsored: /^yes/i.test(user.currentlyH1B || "") };
+  }
   return p;
 }
 

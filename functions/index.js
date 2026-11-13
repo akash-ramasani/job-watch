@@ -5362,9 +5362,17 @@ const { rebuildAggregations } = require("./lib/aggregations.cjs");
 exports.sweepApplications = onSchedule(
   { region: REGION, schedule: "every 30 minutes", timeZone: "America/Los_Angeles", timeoutSeconds: 540, memory: "512MiB" },
   async () => {
-    const t0 = Date.now();
-    const r = await sweepStopped({ db, uid: ADMIN_UID, adminUid: ADMIN_UID });
-    logger.info(`sweepApplications: checked=${r.checked} writes=${r.writes} min=${r.minScore} ${JSON.stringify(r.outcomes)} ms=${Date.now() - t0}`);
+    // Every account that auto-applies, not only the admin's (Riti, 2026-11-13).
+    const users = (await db.collection("users").select().get()).docs.map((d) => d.id);
+    for (const uid of users) {
+      const t0 = Date.now();
+      try {
+        const any = await db.collection("users").doc(uid).collection("applications").limit(1).get();
+        if (any.empty) continue;
+        const r = await sweepStopped({ db, uid, adminUid: ADMIN_UID });
+        logger.info(`sweepApplications: uid=${uid} checked=${r.checked} writes=${r.writes} min=${r.minScore} ${JSON.stringify(r.outcomes)} ms=${Date.now() - t0}`);
+      } catch (e) { logger.error(`sweepApplications: uid=${uid}: ${e.message}`); }
+    }
   }
 );
 
