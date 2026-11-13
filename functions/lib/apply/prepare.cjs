@@ -256,6 +256,15 @@ async function bestSchool(institution, search) {
   }
   return best && bestScore >= 0.6 ? best : null;
 }
+/** The board's "Other" school, for a school its list lacks (IMC has no Cal
+ *  State East Bay; School stayed empty and the form was refused, 2026-11-13). */
+async function otherSchool(search) {
+  for (const term of ["Other", "Not listed", "None of the above"]) {
+    const hit = (await search(term)).find((i) => /^(other|other school|school not listed|not listed|none of the above)\b/i.test(String(i.text || "").trim()));
+    if (hit) return hit;
+  }
+  return null;
+}
 /** "Master of Science" -> "master's"; null when unknown. */
 function degreeLevel(s) {
   return /ph\.?\s?d|doctor of philosophy|doctorate/i.test(s) ? "ph.d" :
@@ -303,7 +312,7 @@ async function educationFills(token, form, resume) {
   // State University - Monterey Bay" scored 4 of 5 and was picked (IMC, 2026-11-11).
   if (ed.institution) {
     const pick = bestSchool(ed.institution, async (term) => ghItems(`${GH_BASE}/${token}/education/schools?term=${encodeURIComponent(term)}`));
-    const best = await pick;
+    const best = await pick || await otherSchool(async (term) => ghItems(`${GH_BASE}/${token}/education/schools?term=${encodeURIComponent(term)}`));
     if (best) out.push({ label: "School", kind: "select", value: best.text });
   }
 
@@ -481,4 +490,4 @@ const US_STATES = {
   DC: "District of Columbia",
 };
 
-module.exports = { prepareGreenhouseApplication, nationalPhone, bestSchool, bestDegree, bestDiscipline, degreeLevel };
+module.exports = { prepareGreenhouseApplication, nationalPhone, bestSchool, otherSchool, bestDegree, bestDiscipline, degreeLevel };
