@@ -66,3 +66,12 @@ test("GPA per school: each degree in one line, a plain GPA is the latest degree'
   assert.equal(val(txt("What was your undergraduate cumulative GPA?"), p), "4.0");
   assert.equal(val(txt("What was your graduate cumulative GPA?"), p), "3.9");
 });
+
+test("Ashby location box asking for the state you live in: your state, as the list writes it (Crusoe)", () => {
+  const fs = require("node:fs");
+  const src = fs.readFileSync(require.resolve("../lib/apply/ashby.cjs"), "utf8");
+  assert.match(src, /state\|province\|region/);
+  const { parsePlace } = require("../lib/apply/ashby.cjs");
+  const own = parsePlace("San Francisco, California");
+  assert.equal(own.state, "California");
+});

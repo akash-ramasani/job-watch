@@ -527,7 +527,19 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
         fills.push({ path: q.path, kind: "select", label: q.label, value: profile.country || "United States", source: "profile" });
         continue;
       }
-      const f = locationFill(q.path, job.locationName, profile, job.companyName || "");
+      // "Which state, province, or region do you currently live in?" (Crusoe,
+      // 2026-11-13): a list of states, where the person lives. The city search
+      // found "San Francisco, California, United States" and Ashby refused it
+      // as missing. The person's own state, picked as "California, United States".
+      const lq = `${q.label} ${q.description || ""}`;
+      const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
+      if (/\b(state|province|region)\b/i.test(lq) && !/\bcity\b/i.test(lq) && own?.state) {
+        fills.push({ path: q.path, kind: "location", label: q.label, value: own.state, match: `${own.state}, ${profile.country || "United States"}`, alternates: [own.abbr].filter(Boolean), source: "profile" });
+        continue;
+      }
+      // Where the person lives (not where the job is): their own city.
+      const livesQ = /\b(live|living|reside|residing|residence|currently (located|based))\b/i.test(lq);
+      const f = locationFill(q.path, job.locationName, livesQ ? { ...profile, locationStrategy: "profile" } : profile, job.companyName || "");
       if (f) fills.push({ ...f, label: q.label });
     }
   }
