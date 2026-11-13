@@ -220,7 +220,10 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const listed = new Map(lists.filter((j) => j?.id).map((j) => [String(j.id), j]));
     for (const d of appsSnap.docs) {
       const a = d.data() || {};
-      if (!a.retryRequested || a.status === "submitted" || !a.retryApplyUrl) continue;
+      // Only the retries the person chose (scripts/apply-top-matches.mjs, score
+      // 60+): the clean-up's wider marks had brought back Samsung's AMHS
+      // Engineer and Target's Executive Team Leader, 2026-11-13.
+      if (!a.retryRequested || !a.retryPriority || a.status === "submitted" || a.status === "dismissed" || !a.retryApplyUrl) continue;
       const src = String(a.source || d.id.split("|")[0]).toLowerCase();
       const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
       if (!board || (boardsOn.size && !boardsOn.has(board))) continue;

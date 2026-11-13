@@ -687,8 +687,19 @@
       // when a question follows it: skip it, or every pair after shifts.
       const asks = (t) => /[?:]\s*$/.test(t);
       if (!/\*$/.test(line) && !asks(line) && asks(next)) continue;
-      items.push({ question: line.replace(/\*$/, "").trim(), answer: next, required: /\*$/.test(line) });
+      // A select-all answer is one choice per line ("Evenings", "Weekends",
+      // "Overnight" at Target, read as a question "Weekends" -> "Overnight"):
+      // short lines that do not read as a question belong to the answer.
+      const parts = [next];
       i++;
+      if (/\*$/.test(line)) {
+        while (i + 1 < body.length) {
+          const t = body[i + 1];
+          if (/\*$/.test(t) || asks(t) || t.length > 40 || /^(if|please|do|did|are|have|has|will|would|what|which|how|when|why|where)\b/i.test(t)) break;
+          parts.push(t); i++;
+        }
+      }
+      items.push({ question: line.replace(/\*$/, "").trim(), answer: parts.join(", "), required: /\*$/.test(line) });
     }
     return items.slice(0, 120);
   }
@@ -989,7 +1000,12 @@
       // Ids come from labels, so a new wizard step can reuse one ("Resume/CV"
       // on My Information and on My Experience): forget the last step's.
       if (newStep && started) done.clear();
-      const fresh = fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id)));
+      // Workday keeps the answers of an earlier attempt at the same job: on its
+      // question steps those are filled again from today's answers (NCR's
+      // salary still read "75", the hourly rate, from a Nov 11 run, and the
+      // check held it, 2026-11-13). Each field once per step (done).
+      const stale = (f) => AUTO && isWorkday && f.filled && /questionnaire/i.test(`${f.domId || ""} ${f.fkit || ""}`) && f.type !== "file";
+      const fresh = fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id) || stale(f)));
       // (Auto-apply's first step goes on even when Workday filled all of it: the
       // application is computed and recorded once, then Save and Continue.)
       if (!fresh.length && !(AUTO && !started) && !(isWorkday && newStep && /experience/i.test(step))) {
@@ -1035,7 +1051,7 @@
       banner(`JobWatch is reading the form${step ? `: ${step}` : ""}…`);
       // Read options of the fresh pick lists (opens each dropdown once).
       fields = await gen("scan", { readOptions: true }).catch(() => fields);
-      const ids = new Set(fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id))).map((f) => f.id));
+      const ids = new Set(fields.filter((f) => !done.has(f.id) && (!f.filled || refill.has(f.id) || stale(f))).map((f) => f.id));
       ids.forEach((id) => done.add(id));
       const fills = (await fillPage(fields, { onlyIds: ids })) || [];
       ids.forEach((id) => refill.delete(id));

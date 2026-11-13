@@ -975,6 +975,16 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
       if (/describe|explain|elaborate|tell us|share|detail|provide/.test(norm(label))) key = null;
     }
   }
+  // "If Yes, please provide further details here" after the sponsorship
+  // question (NCR: left blank after Yes and held at Review, 2026-11-13): the
+  // person's status in one sentence. After No it stays blank.
+  if (key === "conditionalFollowup" && ["requiresSponsorship", "authorizedWithoutSponsorship", "currentVisaStatus"].includes(ctx.prev?.key) && /^if (yes|so)\b/.test(norm(label))) {
+    const prevAns = norm(ctx.prev.answers?.[0]?.value || "");
+    if (/^yes\b/.test(prevAns) && ctx.prev.key === "requiresSponsorship" && norm(profile.requiresSponsorship) === "yes") {
+      const now = profile.visaStatus?.student ? "I am on F-1 OPT (STEM OPT) and authorized to work now" : "I am authorized to work now";
+      return out([{ name, value: `${now}. I will need ${String(profile.visaType || "H-1B").trim()} sponsorship in the future.` }], SOURCE.PROFILE, 1, "sponsorship details");
+    }
+  }
   if (key === "conditionalFollowup" || key === "referral" || key === "password" || key === "workSample"
     || (key === "publications" && !profileMap.publications) || (key === "twitter" && !profileMap.twitter)) {
     const why = { conditionalFollowup: "follow-up to an answer we did not give", referral: "no referral to name", password: "no password to share", workSample: "needs a link only you can provide", publications: "no publications on file", twitter: "no Twitter/X link on file" }[key];
@@ -1879,12 +1889,17 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     if (key === "workAuthorized" && auth) return out([{ name, value: auth === "yes" ? "Yes. I am legally authorized to work in the United States." : "No." }], SOURCE.PROFILE, 1);
     if (key === "willingToWorkHybrid" && hyb) return out([{ name, value: hyb === "yes" ? "Yes. I can work on-site as the role requires." : "No." }], SOURCE.PROFILE, 1);
   }
-  if (key === "salaryExpectation" && kinds[0] === "number") {
+  // A number box, or a text box asking for the amount ("Please Enter Salary
+  // amount", NCR: the hourly rate "75" went in, 2026-11-11/13).
+  if (key === "salaryExpectation" && (kinds[0] === "number" || /\bamount\b|\bnumber\b|numeric|in usd|\(usd\)|\$/.test(norm(label)))) {
     const digits = String(profile.salaryExpectation || profile.desiredSalary || "").replace(/[^0-9]/g, "");
     if (digits) return out([{ name, value: digits }], SOURCE.PROFILE, 1);
     // No number saved: the posting's own range, at its upper quarter.
     const r = profile.jobSalaryRange;
     if (r && r.hi >= r.lo && r.lo > 20000) return out([{ name, value: String(Math.round((r.lo + 0.75 * (r.hi - r.lo)) / 1000) * 1000) }], SOURCE.RULE, 0.8, `from the posted range $${r.lo}–$${r.hi}`);
+    // Else the person's hourly rate as a year (2,080 hours): 75 -> 156000.
+    const hr = Number(String(profile.hourlyRate || "").replace(/[^0-9.]/g, ""));
+    if (hr >= 15 && hr <= 500) return out([{ name, value: String(Math.round((hr * 2080) / 1000) * 1000) }], SOURCE.PROFILE, 0.85, `hourly rate $${hr} as a year`);
     return unanswered("salary expectation as a number needs profile.salaryExpectation (and the posting shows no range)");
   }
   // "Do you want to work 100% remote long-term?" — yes, every profile here does remote.
