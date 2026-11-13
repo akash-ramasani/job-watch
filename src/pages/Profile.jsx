@@ -13,6 +13,7 @@ import { ADMIN_UID } from "../App.jsx";
 import { track } from "../lib/analytics.js";
 import ResumeProfileSection from "../components/Resume/ResumeProfileSection.jsx";
 import JobTypesCard from "../components/JobTypesCard.jsx";
+import SkipCompaniesCard from "../components/SkipCompaniesCard.jsx";
 import SavedAnswersCard from "../components/SavedAnswersCard.jsx";
 import { contactFromUser, downloadResumePdf, downloadResumeTex, profileToResume } from "../lib/resumeDownloads.js";
 
@@ -842,6 +843,8 @@ export default function Profile({ user, userMeta }) {
             </div>
 
             {(isAdmin || aiScoringEnabled) && <JobTypesCard user={user} />}
+
+            <SkipCompaniesCard user={user} />
 
             {/* User ID Card */}
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">

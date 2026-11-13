@@ -13,6 +13,7 @@ import { contactFromUser, downloadResumePdf, downloadResumeTex } from "../lib/re
 import TailoredResumeModal from "../components/Resume/TailoredResumeModal.jsx";
 import { isRelatedJob, useJobTypes, needsSponsorship } from "../lib/jobRelevance.js";
 import { titleCase } from "../lib/titleCase.js";
+import { companyExcluder } from "../lib/companyExclude.js";
 
 /** Same role at the same company (functions/lib/apply/ledger.cjs roleKeyOf). */
 const roleKey = (company, title) => {
@@ -350,7 +351,7 @@ export default function Jobs({ user, userMeta, preferences }) {
   };
   const filteredJobs = useMemo(() => {
     const titleTerm = titleSearch.trim().toLowerCase();
-    const hidden = new Set(hiddenCompanies.map((c) => String(c).trim().toLowerCase()));
+    const isHidden = companyExcluder(hiddenCompanies);
     const companyKeySet = selectedKeys.length > 0 ? new Set(selectedKeys) : null;
     const thresholdMs = (() => {
       if (timeframe === "all") return null;
@@ -360,7 +361,7 @@ export default function Jobs({ user, userMeta, preferences }) {
     })();
 
     const filtered = jobs.filter((j) => {
-      if (hidden.has(String(j.companyName || "").trim().toLowerCase())) return false;
+      if (isHidden(j.companyName)) return false;
       if (applied.ids.has(String(j.id)) || applied.roles.has(roleKey(j.companyName, j.title))) return false;
       if (titleTerm && !j.title?.toLowerCase().includes(titleTerm)) return false;
 

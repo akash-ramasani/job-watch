@@ -137,6 +137,7 @@ async function sweepApplications(deps) {
   const profile = resumeSnap.exists ? resumeSnap.data() : {};
   const mine = profileSkills(profile);
   const jobTypes = Array.isArray(prefs.jobTypes) && prefs.jobTypes.length ? prefs.jobTypes : null;
+  const isHidden = require("../companyExclude.cjs").companyExcluder(prefs.excludedCompanies);
 
   const submitted = apps.filter((a) => a.status === "submitted");
   const subForms = new Set(submitted.map((a) => a.formKey).filter(Boolean));
@@ -166,6 +167,7 @@ async function sweepApplications(deps) {
   for (const a of rows) {
     const rk = a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle);
     if ((a.formKey && subForms.has(a.formKey)) || (a.jobId && subJobs.has(a.jobId)) || subKeys.has(keyOf(a)) || (rk && subRoles.has(rk))) { dismiss(a, "submitted in another record", "submittedElsewhere"); continue; }
+    if (isHidden(a.companyName)) { dismiss(a, `${a.companyName}: a company you chose not to apply to`, "notAMatch"); continue; }
     const url = applyUrlOf(a, a.id);
     if (!url) { dismiss(a, `auto-apply does not take ${String(a.formKey || a.id).split("|")[0]} forms: apply by hand`, "closed"); continue; }
     const p = await postingStatus(a, a.id, fetchFn, cache);

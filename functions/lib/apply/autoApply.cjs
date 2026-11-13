@@ -121,7 +121,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   // Anything else stops at Review for the person.
   const submitAll = prefs?.autoApplySubmit === true;
   const submitJobs = new Set((Array.isArray(prefs?.autoApplySubmitJobs) ? prefs.autoApplySubmitJobs : []).map(String));
-  const hidden = new Set((Array.isArray(prefs?.excludedCompanies) ? prefs.excludedCompanies : []).map((c) => String(c).trim().toLowerCase()));
+  // By name as typed: "CVS" covers "CVS Health" (lib/companyExclude.cjs).
+  const isHidden = require("../companyExclude.cjs").companyExcluder(prefs?.excludedCompanies);
   const feedSlugs = new Map();
   const archivedFeeds = new Set(); // archived on the Feeds page: no applications to its jobs
   for (const d of feedsSnap.docs) { const s = feedSlug(d.data()?.url); if (s) feedSlugs.set(d.id, s); if (d.data()?.archivedAt) archivedFeeds.add(d.id); }
@@ -156,7 +157,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
     if (!board || (boardsOn.size && !boardsOn.has(board))) continue;
     if (test && board !== testBoard) continue;
-    if (hidden.has(String(j.companyName || "").trim().toLowerCase())) continue;
+    if (isHidden(j.companyName)) continue;
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     // The US filter again, as it reads today: jobs saved under an older one
     // ("-REMOTE, BULGARIA-" passed on its bare "REMOTE") are left out.
@@ -224,6 +225,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
       // 60+): the clean-up's wider marks had brought back Samsung's AMHS
       // Engineer and Target's Executive Team Leader, 2026-11-13.
       if (!a.retryRequested || !a.retryPriority || a.status === "submitted" || a.status === "dismissed" || !a.retryApplyUrl) continue;
+      if (isHidden(a.companyName)) continue;
       const src = String(a.source || d.id.split("|")[0]).toLowerCase();
       const board = ASHBY_SOURCES.has(src) ? "ashby" : LEVER_SOURCES.has(src) ? "lever" : WORKDAY_SOURCES.has(src) ? "workday" : GH_SOURCES.has(src) ? "greenhouse" : "";
       if (!board || (boardsOn.size && !boardsOn.has(board))) continue;
