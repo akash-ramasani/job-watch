@@ -218,7 +218,10 @@ const ID_SOURCE_SEEN_RETENTION_DAYS = 45; // prune feedState entries first seen 
 
 // Workday rate-limits bursty clients (HTTP 429 for a few minutes), so all
 // Workday HTTP goes through one limiter. 20 is a hard cap on the list page size.
-const WORKDAY_CONCURRENCY = 4;
+// 2026-11-12: 4 -> 12. All 469 tenants' first page took 95 s at 4 at once and
+// 33 s at 12, with no 429s; Workday was most of each run's fetch time.
+const WORKDAY_CONCURRENCY = 12;
+const FEED_FETCH_TIMEOUT_MS = 20 * 1000;
 const WORKDAY_PAGE_SIZE = 20;
 
 // Oracle Recruiting Cloud (Oracle, JPMorgan Chase, Goldman Sachs, Dell, Ford…):
@@ -1583,6 +1586,8 @@ async function fetchJsonCond(url, etag, maxRetries = 2) {
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const resp = await fetch(url, {
+        // One hung board must not hold up the whole run (default is ~5 minutes).
+        signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
       method: "GET",
       headers: {
         accept: "application/json,text/plain,*/*",
@@ -1667,6 +1672,8 @@ async function workdayFetchJson(url, { method = "GET", body = null, maxRetries =
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const resp = await fetch(url, {
+        // One hung board must not hold up the whole run (default is ~5 minutes).
+        signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
         method,
         headers: {
           accept: "application/json",
@@ -1711,8 +1718,10 @@ function workdayLocationLooksUS(locationsText) {
   const text = String(locationsText || "").trim();
   if (!text) return true;
   if (/^\d+\s+locations?$/i.test(text)) return true;
-  if (NON_US_LOCATION_RE.test(text)) return false;
+  // US wording first: "Remote - USA/Canada" and "Albuquerque, New Mexico" were
+  // dropped as foreign and their IDs marked seen for good (2026-11-12).
   if (/\b(united states|usa|u\.s\.a?\.?|us)\b/i.test(text)) return true;
+  if (NON_US_LOCATION_RE.test(text)) return jobMatchesLocationFilter({ locationTokens: extractLocationTokens(text) });
   if (/\bremote\b/i.test(text)) return true;
   return jobMatchesLocationFilter({ locationTokens: extractLocationTokens(text) });
 }
@@ -1849,7 +1858,10 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
         updatedAt: now,
         ...(isFirstRun ? { seededAt: now } : {}),
       },
-      { merge: true }
+      // mergeFields replaces seenIds whole: with { merge: true } the map was
+      // merged key by key, so pruned IDs were never removed and the doc grew
+      // until Firestore refused it (CVS Health, failing from Nov 7).
+      { mergeFields: ["source", "seenIds", "seenCount", "listedTotal", "updatedAt", ...(isFirstRun ? ["seededAt"] : [])] }
     );
   }
 
@@ -1955,6 +1967,8 @@ async function oracleFetchJson(url, maxRetries = 3) {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const resp = await fetch(url, {
+        // One hung board must not hold up the whole run (default is ~5 minutes).
+        signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
         headers: {
           accept: "application/json",
           "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -2117,6 +2131,8 @@ async function boardFetchJson(url, maxRetries = 3) {
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const resp = await fetch(url, {
+        // One hung board must not hold up the whole run (default is ~5 minutes).
+        signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
         redirect: "manual",
         headers: {
           accept: "application/json",
@@ -2651,8 +2667,10 @@ function normalizeJobMinimal(rawJob, ctx) {
       : [];
     const combinedLocation = [primaryLoc, ...secondary].filter(Boolean).join("; ");
 
-    // Skip non-US jobs
-    if (combinedLocation && NON_US_LOCATION_RE.test(combinedLocation)) return null;
+    // Non-US jobs are dropped by jobMatchesLocationFilter, which keeps a US
+    // place listed beside another country. A plain country match here dropped
+    // "United States; Canada", "Remote – US or Canada" and "Albuquerque, New
+    // Mexico": 821 open US jobs on Ashby boards, about 10 new a day (2026-11-12).
 
     const sourceUpdatedIso = rawJob.publishedAt ? String(rawJob.publishedAt) : null;
     const sourceUpdatedTs = toTimestampOrNull(sourceUpdatedIso) || now;
@@ -3518,7 +3536,9 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
       if (!j?.id || seen.has(j.id) || skipIds.has(j.id)) continue;
       seen.add(j.id);
       const s = scores[j.id];
-      if (missingOnly) { if (!s) stale.push(j); continue; }
+      // Also jobs holding only a rule score while their AI score is pending
+      // (a 529 or timeout): auto-apply waits on it, so it must not sit for hours.
+      if (missingOnly) { if (!s || (s.p && !skipAiPending)) stale.push(j); continue; }
       const skippedByType = s && s.t !== undefined;
       if (s && s.k === key && (!skippedByType || s.t === tk)) continue; // current
       if (s && s.k === ruleKey && s.rt === tk && (!s.p || skipAiPending)) continue; // final rule score, or waiting while the AI is down
