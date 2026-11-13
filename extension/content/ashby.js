@@ -1507,12 +1507,20 @@
     const domByPath = new Map(domFields.map((d) => [d.id, d]));
 
     showOverlay("🤖 JobWatch: Computing your answers…");
-    const res = await sendMsg({ type: "GET_ASHBY_FILL_DATA", org: ids.org, id: ids.id, domFields: domFields.filter((d) => !d.survey) }).catch((e) => ({ ok: false, error: e.message }));
+    const res = await sendMsg({ type: "GET_ASHBY_FILL_DATA", org: ids.org, id: ids.id, domFields: domFields.filter((d) => !d.survey), auto: !!AUTO }).catch((e) => ({ ok: false, error: e.message }));
     if (!res?.ok || !res.data) { console.warn("[JobWatch] computed application unavailable:", res?.error); return false; }
     const pkg = res.data;
     if (pkg.alreadyApplied && (AUTO || !/jwforce/.test(location.hash))) {
       showOverlay(`🛑 JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`, "warning");
       if (AUTO) autoReport("skipped", "already applied");
+      return true;
+    }
+    // The posting or its form requires US citizenship, a clearance, or says it
+    // won't sponsor: auto-apply leaves it, dismissed with the reason.
+    if (pkg.notEligible && AUTO) {
+      await ledger("dismiss", { reason: `not eligible: ${pkg.notEligible}` });
+      showOverlay(`JobWatch: not applying. ${pkg.notEligible}, and your profile says you need sponsorship.`, "warning");
+      autoReport("skipped", `not eligible: ${pkg.notEligible}`);
       return true;
     }
     const pendingJob = res.pendingJob || { title: pkg.jobTitle, companyName: pkg.companyName, locationName: pkg.locationName, externalId: ids.id };

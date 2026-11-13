@@ -1,6 +1,6 @@
 // coverPdf.cjs — render a short cover letter to a one-page PDF buffer with
 // pdfkit (real text, single column, standard fonts, so ATS parsers read it).
-// Mirrors worker/lib/pdf.mjs renderCoverLetter, but returns bytes instead of
+// (Was a copy of the old worker renderCoverLetter.) Returns bytes instead of
 // writing a file, for the extension to attach to an Ashby File field.
 
 const PDFDocument = require("pdfkit");

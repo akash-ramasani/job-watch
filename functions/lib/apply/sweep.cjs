@@ -37,6 +37,9 @@ const PERSON_ONLY = [
   [/work sample|writing sample|portfolio (link|upload)/i, "a work sample"],
   [/\bvideo\b|voice recording/i, "a video"],
   [/assessment|coding challenge|take.?home|captcha/i, "an assessment"],
+  // Workday sent the tab to the company's own careers site (PayPal:
+  // careers.pypl.com, 2026-11-13); auto-apply fills Workday forms only.
+  [/tab left workday for https?:\/\/(?![^\s]*(myworkday|workday\.com))/i, "the company's own careers site"],
 ];
 
 const ms = (v) => (v?.toDate ? v.toDate().getTime() : Date.parse(v || "") || 0);

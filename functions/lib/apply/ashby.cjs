@@ -346,6 +346,17 @@ function salaryRangeIn(text) {
 }
 
 const REMOTE_LOCATION_DEFAULT = "San Francisco, CA";
+/** A location box asking which state, province or region the person lives in
+ *  (Crusoe on Ashby, 2026-11-13): their own state, as the list writes it
+ *  ("California, United States"); null for any other location box. */
+function stateFill(path, label, description, profile) {
+  const lq = `${label || ""} ${description || ""}`;
+  if (!/\b(state|province|region)\b/i.test(lq) || /\bcity\b/i.test(lq)) return null;
+  const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
+  if (!own?.state) return null;
+  return { path, kind: "location", label, value: own.state, match: `${own.state}, ${profile.country || "United States"}`, alternates: [own.abbr].filter(Boolean), source: "profile" };
+}
+
 function locationFill(path, jobLocationName, profile, company = "") {
   const own = parsePlace([profile.city, profile.region].filter(Boolean).join(", "));
   // Remote postings (or no city on the posting): the person's chosen city for
@@ -516,6 +527,12 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
 
   // 3. Questions. System fields are filled directly; the engine gets the rest.
   const all = ashbyToQuestions(sections);
+  // Needs sponsorship and the posting or a required question of its form
+  // rules that out (US citizenship, a clearance, no sponsorship): auto-apply
+  // stops here, before any AI; a manual Autofill still fills (as Greenhouse).
+  const { eligibilityOf, formEligibility, blockedReason, needsSponsorship } = require("../eligibility.cjs");
+  const notEligible = blockedReason([...eligibilityOf(`${job.title || ""}. ${job.descriptionHtml || ""}`).flags, ...formEligibility(all)], needsSponsorship(user));
+  if (notEligible && opts.auto) return { notEligible, ready: false, reasons: [notEligible], review: [], fills: [], answered: 0, total: all.length, parked: [], jobTitle: job.title || "", companyName: job.companyName || "" };
   const SYSTEM = new Set(["_systemfield_name", "_systemfield_email", "_systemfield_resume", "_systemfield_location"]);
   const questions = all.filter((q) => !SYSTEM.has(q.path) && q.ashbyType !== "Location");
   const fills = [];
@@ -664,7 +681,8 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
     const entries = schools.map((e) => {
       const degree = String(e.degree || "").trim();
       const field = String(e.field || e.major || degree.split(/,\s*| in /i)[1] || "").trim();
-      return { school: e.institution || e.school, degree: degree.split(/,\s*| in /i)[0].trim(), field, start: when(e.startDate), end: when(e.endDate), current: /present|current|now/i.test(String(e.endDate || "")) };
+      return {
+    notEligible: notEligible || null, school: e.institution || e.school, degree: degree.split(/,\s*| in /i)[0].trim(), field, start: when(e.startDate), end: when(e.endDate), current: /present|current|now/i.test(String(e.endDate || "")) };
     });
     for (let i = fills.length - 1; i >= 0; i--) if (fills[i].path === eduQ.path) fills.splice(i, 1);
     fills.push({ path: eduQ.path, label: eduQ.label, kind: "education", entries, source: "resume" });
@@ -703,6 +721,7 @@ async function prepareAshbyApplication(uid, org, jobPostingId, deps, opts = {}) 
 }
 
 module.exports = {
+  stateFill,
   REMOTE_LOCATION_DEFAULT,
   prepareAshbyApplication,
   // exported for tests

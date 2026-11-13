@@ -12,7 +12,7 @@
 // surveysResponses[...][responses][field<n>], eeo[gender|race|veteran|disability],
 // consent[marketing]. Fills are keyed by that name (`path`).
 
-const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
+const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace, stateFill } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
 const { aiContext, answerFreeText, pickOption, pool } = require("./ai-text.cjs");
 
@@ -110,6 +110,7 @@ async function prepareLeverApplication(uid, site, postingId, deps, opts = {}) {
     else if (name === "phone") text(name, profile.phone);
     else if (name === "org") text(name, profile.currentCompany);
     else if (name === "resume") fills.push({ path: name, kind: "file", label: q.label, file: "resume", source: "profile" });
+    else if (name === "location" && stateFill(name, q.label, q.description, profile)) fills.push(stateFill(name, q.label, q.description, profile));
     else if (name === "location") {
       const f = locationFill(name, job.locationName, profile, job.companyName || "");
       // Lever's suggestions read "New York, NY, USA": match on the state code.

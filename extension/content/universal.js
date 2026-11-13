@@ -970,6 +970,17 @@
       // The posting page: "Continue Application" (started before) or the Apply button.
       if (!onApplyFlow() && !resetting && await gen("workdayPress", "continueButton", "^continue application$").catch(() => false)) { banner("Auto-apply: continuing the application started before."); return; }
     }
+    // Submitted by hand after auto-apply stopped on Review: Workday then shows
+    // Candidate Home ("Thank you for applying to State Street!"), off the
+    // application, and the submit was never recorded (State Street, 2026-11-13).
+    if (isWorkday && started && !submittedSeen && !onApplyFlow() && await gen("submitted").catch(() => false)) {
+      submittedSeen = true;
+      trace("result", { status: "submitted", note: "submitted by hand", page: location.href });
+      await ledger("submitted", { jobTitle: header.jobTitle, companyName: header.companyName, answersLog });
+      banner("JobWatch: application recorded as submitted.");
+      if (AUTO) autoReport("submitted", "submitted by hand");
+      return;
+    }
     if (!onApplyFlow() && !resetting) return;
     if (manual()) { window.__jwManualStart = false; forced = true; armNext = true; }
     if (!started && !forced && (!formish() || pageSig() === notAFormSig)) return;

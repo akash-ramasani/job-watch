@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JobWatch Auto Apply",
-  "version": "1.12.32",
+  "version": "1.12.33",
   "description": "Apply to jobs from JobWatch: auto-apply on Ashby, Greenhouse, Lever and Workday with a tailored resume, and Autofill on every other job board.",
   "permissions": [
     "storage",
@@ -57,8 +57,13 @@
     },
     {
       "matches": [
-        "https://jobs.ashbyhq.com/*"
+        "https://jobs.ashbyhq.com/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://jobs.eu.lever.co/*"
       ],
+      "all_frames": true,
       "js": [
         "content/ashby-net.js"
       ],

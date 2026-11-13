@@ -16,7 +16,7 @@
 // name", the self-identification date), and the resume's roles, schools and
 // links go back to the content script for Workday's My Experience page.
 
-const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace } = require("./ashby.cjs");
+const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace, stateFill } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
 const { nationalPhone } = require("./prepare.cjs");
 const { aiContext, answerFreeText, pickOption: aiPickOption, pool, chatWithRetry } = require("./ai-text.cjs");
@@ -493,6 +493,8 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
     const f = presetFill(q, dom, profile, startDateFor, { source });
     if (f) { presetPaths.add(q.path); if (f.kind !== "skip") fills.push(f); continue; }
     if (dom.type === "location") {
+      const sf = stateFill(q.path, q.label, q.description, profile);
+      if (sf) { presetPaths.add(q.path); fills.push(sf); continue; }
       const lf = locationFill(q.path, job.locationName, { ...profile, locationStrategy: profile.locationStrategy || "profile" });
       if (lf) { presetPaths.add(q.path); fills.push({ ...lf, label: q.label }); }
     }

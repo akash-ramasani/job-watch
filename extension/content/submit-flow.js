@@ -111,6 +111,9 @@
 
     let codeTries = 0;
     let extraPress = false;
+    let pressedAt = 0;
+    // What the page's network watcher saw (content/ashby-net.js, MAIN world).
+    const netState = () => { try { return { ok: [], pending: 0, ...JSON.parse(document.documentElement.getAttribute("data-jw-net") || "{}") }; } catch { return { ok: [], pending: 0 }; } };
     const rescueWhy = new Map(); // label -> why the AI rescue could not fill it
     let last = { errs: [], formSaid: "" };
     const press = async (btn) => { btn.scrollIntoView({ block: "center" }); await safe(() => b.beforeClick?.(), null); btn.click(); };
@@ -163,6 +166,7 @@
       // A person reads the form over before Submit; a shorter look on a retry.
       await sleep(round ? 1500 + Math.random() * 1500 : 3000 + Math.random() * 5000);
       await send({ type: "AUTO_SUBMITTING" }); // the runner watches for the thank-you page
+      if (!pressedAt) pressedAt = Date.now();
       await press(btn);
       const w = await watch();
       if (w.done || await safe(() => b.submitted(), false)) return recordDone();
@@ -198,7 +202,12 @@
       }
       if (fixed) { say(`fixed ${fixed} field${fixed === 1 ? "" : "s"}, submitting again…`); continue; }
       // Nothing to fix: one plain extra press (Applied Intuition took the same form on the second).
-      if (!extraPress && !targets.size) { extraPress = true; say(`${b.name} did not confirm; trying Submit once more…`); continue; }
+      // Never a second press after one the board accepted: the page's own
+      // network reply (content/ashby-net.js) says whether it went through.
+      const net = netState();
+      if (net.ok.some((t) => t >= pressedAt)) { say(`${b.name} accepted the application.`); return recordDone(); }
+      if (net.pending) { say(`${b.name} is still sending the application…`); await sleep(15000); if (await safe(() => b.submitted(), false) || netState().ok.some((t) => t >= pressedAt)) return recordDone(); }
+      if (!extraPress && !targets.size && !net.pending) { extraPress = true; say(`${b.name} did not confirm; trying Submit once more…`); continue; }
       break;
     }
     return finish();

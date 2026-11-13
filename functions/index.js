@@ -337,16 +337,20 @@ exports.exchangeExtensionCode = onRequest(
       }
 
       const ref = db.collection("extensionAuthCodes").doc(code);
-      const snap = await ref.get();
+      // Read and delete in one transaction: two requests racing with the same
+      // code can no longer both get a token (one-time use, 2026-11-13).
+      const data = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) return null;
+        tx.delete(ref);
+        return snap.data();
+      });
 
-      if (!snap.exists) {
+      if (!data) {
         return res.status(401).json({ ok: false, error: "Invalid or expired code." });
       }
 
-      const { uid, expiresAt } = snap.data();
-
-      // Delete immediately — one-time use
-      await ref.delete();
+      const { uid, expiresAt } = data;
 
       // Validate expiry
       if (expiresAt.toDate() < new Date()) {
@@ -2851,7 +2855,12 @@ function jobMatchesLocationFilter(job) {
   // "IN-Bangalore-MSO" are India, not Indiana. A real US city or state named
   // elsewhere in the string still counts ("Mountain View, California | Munich").
   const full = String(tokens[0] || "").replace(/[-–—_]+/g, " ");
-  const foreign = (NON_US_LOCATION_RE.test(full) || FOREIGN_CITY_RE.test(full)) && !US_SIGNAL_RE.test(full);
+  // A US town named after a country, written "Town, ST" ("Lebanon, NH",
+  // "Peru, IN", "Mexico, MO"): the state code makes it US. A foreign city
+  // ("Bengaluru, IN") or province ("Toronto, ON") still is not.
+  const townState = String(tokens[0] || "").match(/^\s*([A-Za-z .'-]+?)\s*,\s*([A-Z]{2})\s*$/);
+  const usNamesake = !!townState && ALL_STATE_CODES.has(townState[2]) && new RegExp(`^(?:${NON_US_LOCATION_RE.source})$`, "i").test(townState[1].trim()) && !FOREIGN_CITY_RE.test(townState[1]);
+  const foreign = (NON_US_LOCATION_RE.test(full) || FOREIGN_CITY_RE.test(full)) && !US_SIGNAL_RE.test(full) && !usNamesake;
   // "City, ST" with any state code, including ones left out of the loose
   // match because they're also words or other codes (OH, OR, ME, DE, HI…).
   const cityState = foreign ? null : String(tokens[0] || "").match(/,\s*([A-Z]{2})\s*(?:$|[,;|/(])/);
@@ -4962,7 +4971,7 @@ exports.prepareAshbyApplication = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const { org, id, domFields = [], jobTitle = "", companyName = "", jobLocationName = "" } = request.data || {};
+    const { org, id, domFields = [], jobTitle = "", companyName = "", jobLocationName = "", auto = false } = request.data || {};
     if (!org || !id) throw new HttpsError("invalid-argument", "org and id are required.");
     const formKey = ledger.formKeyOf("ashby", org, id);
     const dup = await ledger.alreadyApplied(db, uid, formKey);
@@ -4972,8 +4981,9 @@ exports.prepareAshbyApplication = onCall(
     if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
     const out = await prepareAshbyApplication(uid, String(org), String(id), { db, openai, model: OPENAI_FAST_MODEL }, {
-      domFields: Array.isArray(domFields) ? domFields.slice(0, 80) : [], jobTitle, companyName, jobLocationName,
+      domFields: Array.isArray(domFields) ? domFields.slice(0, 80) : [], jobTitle, companyName, jobLocationName, auto: !!auto,
     });
+    if (out.notEligible && auto) { logger.info(`prepareAshbyApplication: uid=${uid} ${formKey} not eligible: ${out.notEligible}`); return { ...out, formKey }; }
     logger.info(`prepareAshbyApplication: uid=${uid} org=${org} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} schema=${out.schemaSource} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareAshbyApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };

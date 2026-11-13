@@ -61,3 +61,6 @@ worker/selftest/reports/
 
 # Raw Workday page dumps and screenshots (personal data): local reference only
 research/
+
+# Tectonic (LaTeX) download cache: fetched by functions/scripts/setup-tectonic.cjs
+functions/.tectonic/

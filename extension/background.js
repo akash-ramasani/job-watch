@@ -1898,13 +1898,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
             body: JSON.stringify({ data: {
-              org: message.org, id: message.id, domFields: message.domFields || [],
+              org: message.org, id: message.id, domFields: message.domFields || [], auto: !!message.auto,
               jobTitle: job?.title || "", companyName: job?.companyName || "", jobLocationName: job?.locationName || "",
             } }),
           });
           const json = await res.json();
           if (!res.ok || json.error) throw new Error(json.error?.message || `prepareAshbyApplication ${res.status}`);
-          sendResponse({ ok: true, data: await withTailoredResume(json.result, tailoredP), pendingJob: job });
+          // Auto-apply on a job the person is not eligible for: nothing to fill.
+          sendResponse({ ok: true, data: json.result?.notEligible && message.auto ? json.result : await withTailoredResume(json.result, tailoredP), pendingJob: job });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }
