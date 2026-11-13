@@ -683,6 +683,9 @@ function notify(title, message) {
 }
 
 /** The tailored resume PDF for a job ({ jobId } or { source, externalId }), cached for the session. */
+/** What tailoredResumeFile needs for a queued job: its id, and its apply link,
+ *  title and company for a job JobWatch no longer holds (read from the board). */
+const trRef = (job) => ({ jobId: job.jobId, ...(job.applyUrl ? { applyUrl: job.applyUrl } : {}), ...(job.title ? { title: job.title } : {}), ...(job.companyName ? { companyName: job.companyName } : {}) });
 async function tailoredResumeFor(ref) {
   const key = `tr:${ref.jobId || `${ref.source}|${ref.externalId}`}`;
   const { [key]: hit } = await chrome.storage.session.get(key);
@@ -746,7 +749,7 @@ async function autoJobForTab(tabId) {
 /** Start making the job's tailored resume (runs alongside the answers). */
 async function startTailored(sender, ref) {
   const job = await autoJobForTab(sender?.tab?.id);
-  return tailoredResumeFor(job ? { jobId: job.jobId } : ref);
+  return tailoredResumeFor(job ? trRef(job) : ref);
 }
 /** Swap the saved resume for the job's tailored one in a computed application. */
 async function withTailoredResume(data, tailoredP) {
@@ -1082,7 +1085,7 @@ async function autoTick() {
       });
       if (!job) break;
       try {
-        const tailored = await tailoredResumeFor({ jobId: job.jobId }); // ready before the form asks for it
+        const tailored = await tailoredResumeFor(trRef(job)); // ready before the form asks for it
         if (tailored?.error && AI_DOWN.test(tailored.error)) {
           // Put the job back untouched (not a try) and look again in 15 minutes.
           await chrome.storage.session.remove(`tr:${job.jobId}`);
@@ -1118,7 +1121,7 @@ async function autoTick() {
         // Make the next job's tailored resume while these fill, so it starts at once.
         const stNow = await autoState();
         const upcoming = autoQueue.list.find((j) => !stNow.results[j.jobId] && !stNow.running.some((r) => r.jobId === j.jobId));
-        if (upcoming) tailoredResumeFor({ jobId: upcoming.jobId }).catch(() => {});
+        if (upcoming) tailoredResumeFor(trRef(upcoming)).catch(() => {});
       } catch (err) {
         console.warn("[JobWatch] auto-apply could not open a job:", err.message);
         await withAutoLock(async () => {
@@ -1942,7 +1945,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const job = pendingJob && message.externalId && jobMatchesExternalId(pendingJob, message.externalId) ? pendingJob : null;
           // An auto-apply tab (Workday) sends the job's tailored resume, like the other boards.
           const autoJob = await autoJobForTab(sender?.tab?.id);
-          const tailoredP = autoJob ? tailoredResumeFor({ jobId: autoJob.jobId }) : null;
+          const tailoredP = autoJob ? tailoredResumeFor(trRef(autoJob)) : null;
           const res = await fetch(`${FUNCTIONS_BASE}/prepareGenericApplication`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },

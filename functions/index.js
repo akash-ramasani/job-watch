@@ -139,6 +139,7 @@ const { applicationResume } = require("./lib/apply/applicationResume.cjs");
 const RESCUE_MODEL = process.env.RESCUE_MODEL || "claude-haiku-5-5";
 // The check of the whole form before Submit: accuracy over cost (about 1-2 cents a form).
 const REVIEW_MODEL = process.env.REVIEW_MODEL || "claude-haiku-5-5"; // the check before Submit: Haiku 5.5 (cost, 2026-11-10)
+const { postingFromUrl } = require("./lib/apply/postingFromUrl.cjs");
 const { buildQueue: buildAutoApplyQueue, resumeFileName: autoResumeFileName } = require("./lib/apply/autoApply.cjs");
 const savedAnswers = require("./lib/apply/savedAnswers.cjs");
 const { trackEmails } = require("./lib/apply/emailTracker.cjs");
@@ -4115,7 +4116,7 @@ exports.generateTailoredResume = onCall(
       }
     }
 
-    const { jobId, force } = request.data || {};
+    const { jobId, force, posting = null } = request.data || {};
     if (!jobId) throw new HttpsError("invalid-argument", "Missing jobId.");
 
     const settingsSnap = await db.collection("users").doc(uid).collection("settings").doc("preferences").get();
@@ -4135,8 +4136,12 @@ exports.generateTailoredResume = onCall(
     const profileStamp = profileStampOf(profile);
 
     const jobSnap = await db.collection("users").doc(ADMIN_UID).collection("jobs").doc(jobId).get();
-    if (!jobSnap.exists) throw new HttpsError("not-found", "Job not found in database.");
-    const job = jobSnap.data();
+    // A job no longer held: the posting tailoredResumeFile read from the board.
+    const fromPosting = !jobSnap.exists && posting && String(posting.description || "").length > 200
+      ? { title: String(posting.title || "").slice(0, 300), companyName: String(posting.companyName || "").slice(0, 200), locationName: String(posting.locationName || "").slice(0, 300), fullDescription: String(posting.description).slice(0, 20000) }
+      : null;
+    if (!jobSnap.exists && !fromPosting) throw new HttpsError("not-found", "Job not found in database.");
+    const job = jobSnap.exists ? jobSnap.data() : fromPosting;
     const location = chooseResumeLocation(job); // "City, ST" for the header, from the posting's location list
 
     const cacheRef = db.collection("users").doc(uid).collection("tailoredResumes").doc(jobId);
@@ -5063,7 +5068,7 @@ exports.tailoredResumeFile = onCall(
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
     await requireAiAccess(uid);
-    let { jobId = "", source = "", externalId = "" } = request.data || {};
+    let { jobId = "", source = "", externalId = "", applyUrl = "", title = "", companyName = "" } = request.data || {};
     const jobsCol = db.collection("users").doc(ADMIN_UID).collection("jobs");
     if (!jobId && externalId) {
       const want = source === "ashby" ? ["ashby", "ashbyhq"] : source ? [String(source).toLowerCase()] : null;
@@ -5071,19 +5076,31 @@ exports.tailoredResumeFile = onCall(
       const hit = snap.docs.find((d) => !want || want.includes(String(d.data()?.source || "").toLowerCase()));
       if (hit) jobId = hit.id;
     }
-    if (!jobId) throw new HttpsError("not-found", "This job is not in JobWatch, so it has no tailored resume.");
+    // A job JobWatch no longer holds (records expire after a few days; the
+    // Retrying jobs from Nov 2-4 stopped as "no tailored resume", 2026-11-13):
+    // its title and description straight from the board, by its apply link.
+    let posting = null;
+    const held = jobId ? (await jobsCol.doc(String(jobId)).get()).exists : false;
+    if (!held && applyUrl) {
+      posting = await postingFromUrl(String(applyUrl));
+      if (posting && !posting.companyName) posting.companyName = String(companyName || "");
+      if (posting && !posting.title) posting.title = String(title || "");
+      if (!posting?.description) posting = null;
+      if (posting) jobId = `posting|${(ledger.formKeyFromUrl(String(applyUrl))?.formKey || String(applyUrl)).replace(/\//g, "_").slice(0, 300)}`;
+    }
+    if (!jobId || (!held && !posting)) throw new HttpsError("not-found", "This job is not in JobWatch, so it has no tailored resume.");
     const projectId = admin.app().options.projectId || process.env.GCLOUD_PROJECT || "greenhouse-jobs-scrapper";
     const res = await fetch(`https://${REGION}-${projectId}.cloudfunctions.net/generateTailoredResume`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: request.rawRequest?.headers?.authorization || "" },
-      body: JSON.stringify({ data: { jobId: String(jobId) } }),
+      body: JSON.stringify({ data: { jobId: String(jobId), ...(posting ? { posting } : {}) } }),
     });
     const json = await res.json().catch(() => ({}));
     const resume = json?.result?.resume;
     if (!res.ok || json.error || !resume) throw new HttpsError("internal", `Tailored resume failed: ${json?.error?.message || res.status}`);
     const [userSnap, jobSnap] = await Promise.all([db.collection("users").doc(uid).get(), jobsCol.doc(String(jobId)).get()]);
     const u = userSnap.exists ? userSnap.data() : {};
-    const job = jobSnap.exists ? jobSnap.data() : {};
+    const job = jobSnap.exists ? jobSnap.data() : (posting || {});
     // Same contact block as the web app's downloads (src/lib/resumeDownloads.js contactFromUser).
     const contact = { name: u.fullName || `${u.firstName || ""} ${u.lastName || ""}`.trim(), location: u.city || "", phone: u.phone || "", email: u.email || "", github: u.github || "", linkedin: u.linkedin || "" };
     const { buildResumeLatex } = await import("./lib/resumeLatex.mjs");
