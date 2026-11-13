@@ -666,20 +666,33 @@
    *  resume and were checked as they were filled. */
   function reviewItems(text) {
     const lines = String(text).split("\n").map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
-    const HEAD = /^(application questions( \d+ of \d+)?|voluntary disclosures|self identify|disability|review|my information|my experience|terms and conditions|e\.?e\.?o\.?.{0,30})$/i;
+    const HEAD = /^(application questions( \d+ of \d+)?|voluntary disclosures|self identify|disability|review|my information|my experience|terms and conditions|personal information|e\.?e\.?o\.?.{0,30})$/i;
+    // The voluntary sections (gender, race, disability, veteran) are never
+    // judged, and their sub-headings ("Personal Information") shifted every
+    // question/answer pair after them (Target, 2026-11-13): stop there.
+    const END = /^(voluntary disclosures|self identify|self-identification|disability|veteran status|terms and conditions|back|submit)$/i;
     const start = lines.findIndex((l, i) => i > 0 && /^application questions/i.test(l) && !/^(completed|current) step/i.test(lines[i - 1] || ""));
     if (start < 0) return [];
+    let end = lines.findIndex((l, i) => i > start && END.test(l));
+    if (end < 0) end = lines.length;
+    const body = lines.slice(start, end).filter((l) => !HEAD.test(l) && !/^(completed|current) step/i.test(l));
+    // A required question ends with "*"; its answer is the line after it.
+    // An unmarked line is an optional question, its answer the next line.
     const items = [];
-    for (let i = start; i < lines.length - 1; i++) {
-      const q = lines[i];
-      if (HEAD.test(q) || /^(completed|current) step/i.test(q)) continue;
-      const a = lines[i + 1];
-      if (HEAD.test(a)) continue;
-      items.push({ question: q, answer: a, required: false });
+    for (let i = 0; i < body.length; i++) {
+      const line = body[i];
+      const next = body[i + 1];
+      if (next == null || /\*$/.test(next)) continue; // a question with no answer line, or a stray line
+      // Prose between questions ("Thank you for sharing your information!")
+      // when a question follows it: skip it, or every pair after shifts.
+      const asks = (t) => /[?:]\s*$/.test(t);
+      if (!/\*$/.test(line) && !asks(line) && asks(next)) continue;
+      items.push({ question: line.replace(/\*$/, "").trim(), answer: next, required: /\*$/.test(line) });
       i++;
     }
     return items.slice(0, 120);
   }
+
 
   /** Review with Submit allowed for this job: one AI look at every answer,
    *  then Submit, then Workday's confirmation. Anything off stops at Review

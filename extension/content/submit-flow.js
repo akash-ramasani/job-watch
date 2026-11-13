@@ -178,6 +178,14 @@
       const targets = new Map(); // label -> the form's words
       for (const e of errs) if (!e.form && e.label && !targets.has(e.label)) targets.set(e.label, e.text || "");
       for (const l of await safe(() => b.empty(), [])) if (l && !targets.has(l)) targets.set(l, "");
+      // Fields the form names only in its banner ("Your form needs corrections:
+      // Missing entry for required field: Which state, province, or region do
+      // you currently live in?", Crusoe on Ashby, 2026-11-13): the AI gets each
+      // with the form's own words, like a field's error.
+      for (const m of String(last.formSaid || "").matchAll(/(?:missing entry for required field|required field missing|please (?:fill out|complete|answer)(?: the)? (?:field|question)?|is required):?\s*([^;]+?)(?=\s*(?:missing entry for required field|required field missing|;|$))/gi)) {
+        const l = String(m[1] || "").replace(/^[\s:-]+|[\s.]+$/g, "").trim();
+        if (l && l.length > 3 && l.length < 300 && !targets.has(l) && !/^(field|question)s?$/i.test(l)) targets.set(l, `The form says: Missing entry for required field: ${l}`);
+      }
       for (const l of [...targets.keys()]) if (isFile(l)) targets.delete(l);
       if (window.__jwRescue) {
         for (const [label, text] of [...targets].slice(0, 10)) {
