@@ -231,10 +231,20 @@
     if (!started?.ok) warn("ledger(start) failed:", started?.error);
 
     banner("JobWatch is working out your answers…");
-    const pkg = await sendMsg({ type: "GET_GH_FILL_DATA", token: ids.token, id: ids.id });
+    const pkg = await sendMsg({ type: "GET_GH_FILL_DATA", token: ids.token, id: ids.id, auto: !!AUTO });
     if (!pkg || !pkg.ok) { warn("compute failed:", pkg && pkg.error); if (AUTO) autoReport("error", `could not compute: ${pkg?.error || "no answer"}`); banner(`JobWatch could not compute this application: ${pkg?.error || "no answer from the extension"}`, { action: { label: "Try again", onClick: () => run().catch(() => {}) } }); ledger("error", { error: String(pkg?.error || "compute failed") }); return; }
     const data = pkg.data;
     if (data.alreadyApplied && (AUTO || !/jwforce/.test(location.hash))) { if (AUTO) autoReport("skipped", "already applied"); banner(`JobWatch: you already applied to this job on ${fmtDay(data.submittedAt)}. Not filling it again. Add #jwforce to the URL and reload to fill anyway.`); return; }
+    // The posting or the form requires US citizenship, a clearance, or says it
+    // won't sponsor (General Matter, 2026-11-12): auto-apply leaves it, and
+    // the record is dismissed with the reason so it is not queued again.
+    if (data.notEligible && AUTO) {
+      await ledger("dismiss", { reason: `not eligible: ${data.notEligible}` });
+      banner(`JobWatch: not applying. ${data.notEligible}, and your profile says you need sponsorship.`);
+      autoReport("skipped", `not eligible: ${data.notEligible}`);
+      return;
+    }
+    if (data.notEligible) warn("not eligible:", data.notEligible);
     log(`computed: ready=${data.ready}, ${data.fills.length} fields, resume=${data.resumeB64 ? "yes" : "no"}`);
     banner(`JobWatch is filling ${data.fills.length} fields, top to bottom…`);
     if (!data.ready) warn("gate parked this job:", data.reasons);

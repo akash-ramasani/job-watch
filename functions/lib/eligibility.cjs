@@ -159,4 +159,28 @@ function blockedReason(flags, needsSponsorship) {
 /** Does this user need sponsorship? From the Profile form (users/{uid}.requiresSponsorship). */
 const needsSponsorship = (userDoc) => /^y(es)?$/i.test(String(userDoc?.requiresSponsorship || "").trim());
 
-module.exports = { eligibilityOf, blockedReason, needsSponsorship, sentencesOf, REASONS };
+// A form's own required question can say it when the posting does not:
+// "This job requires a US Q security clearance—a minimum requirement of which
+// is to be a US Citizen. Can you confirm…" (General Matter, applied to and
+// held, 2026-11-12), or a required pick of only US-person statuses ("US
+// Citizen", "Lawful Permanent Resident", "Qualifying Asylee") with no true
+// answer for a visa holder. "US Citizen / Non-US Citizen" is not such a list.
+const FORM_CITIZEN = /requires? (an? )?(us |u\.s\. )?(doe )?(q|l)[- ]?(security )?clearance|minimum requirement of which is to be a (us|u\.s\.) citizen|(must|required to) be an? (us|u\.s\.|united states) citizen/i;
+const US_PERSON_STATUS = /citizen|permanent resident|green card|asylee|asylum|refugee/i;
+const NOT_US_PERSON = /\b(non|not|no|none|other|visa|foreign|neither)\b|n\/a/i;
+
+/** Greenhouse form questions ({ label, required, fields: [{ values: [{ label }] }] }) -> ["citizen"] or []. */
+function formEligibility(questions) {
+  for (const q of Array.isArray(questions) ? questions : []) {
+    if (!q || !q.required) continue;
+    if (FORM_CITIZEN.test(String(q.label || ""))) return ["citizen"];
+    const usPersonOnly = (q.fields || []).some((f) => {
+      const vals = (f.values || []).map((v) => String(v.label || ""));
+      return vals.length >= 2 && vals.every((v) => US_PERSON_STATUS.test(v) && !NOT_US_PERSON.test(v));
+    });
+    if (usPersonOnly) return ["citizen"];
+  }
+  return [];
+}
+
+module.exports = { eligibilityOf, formEligibility, blockedReason, needsSponsorship, sentencesOf, REASONS };

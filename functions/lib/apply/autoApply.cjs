@@ -212,6 +212,9 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
   // its mark as retryToken so the runner starts it fresh.
   if (!test) {
     const queued = new Set(out.map((j) => j.jobId));
+    // A retry whose job is still listed passes the same check as a new job
+    // (eligibility: a job needing US citizenship was retried, 2026-11-13).
+    const listed = new Map(lists.filter((j) => j?.id).map((j) => [String(j.id), j]));
     for (const d of appsSnap.docs) {
       const a = d.data() || {};
       if (!a.retryRequested || a.status === "submitted" || !a.retryApplyUrl) continue;
@@ -220,6 +223,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
       if (!board || (boardsOn.size && !boardsOn.has(board))) continue;
       const jobId = a.jobId || `retry|${d.id}`;
       if (a.formKey && applied.forms.has(String(a.formKey))) continue;
+      const lj = a.jobId ? listed.get(String(a.jobId)) : null;
+      if (lj && !isRelatedJob({ ...lj, fam: Array.isArray(lj.fam) ? lj.fam : classifyTitle(lj.title) }, scores[lj.id], jobTypes, { needsSponsorship: sponsorship })) continue;
       if (queued.has(jobId) || applied.ids.has(jobId)) continue;
       const rk = a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle);
       if (rk && applied.roles.has(rk)) continue;

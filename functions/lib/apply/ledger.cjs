@@ -155,7 +155,7 @@ function applyEvent(existing, ev, nowISO) {
     return { duplicate: false, patch: { ...meta, status: cur.status === SUBMITTED ? SUBMITTED : "error", lastError: str(ev.error, 500), erroredAt: nowISO } };
   }
   if (event === "dismiss") {
-    return { duplicate: false, patch: { ...meta, status: cur.status === SUBMITTED ? SUBMITTED : "dismissed", dismissedAt: nowISO } };
+    return { duplicate: false, patch: { ...meta, status: cur.status === SUBMITTED ? SUBMITTED : "dismissed", dismissedAt: nowISO, ...(ev.reason ? { dismissReason: str(ev.reason, 200) } : {}) } };
   }
   throw new Error(`unknown application event: ${event}`);
 }

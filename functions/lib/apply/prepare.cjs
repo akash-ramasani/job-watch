@@ -5,6 +5,7 @@
 // form (option LABELS for comboboxes so the script can pick them by text).
 
 const { buildProfileForJob, parsePlace, REMOTE_LOCATION_DEFAULT } = require("./ashby.cjs");
+const { eligibilityOf, formEligibility, blockedReason, needsSponsorship } = require("../eligibility.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
 const { aiContext, answerFreeText, pickOption, coverLetter, coverLetterWords, pool, stripHtml } = require("./ai-text.cjs");
 
@@ -59,6 +60,12 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
     }
   } catch (_) { /* unknown -> the question parks */ }
   const profileForJob = buildProfileForJob(profile, resume, job, { appliedBefore });
+  // Needs sponsorship and the posting or the form requires US citizenship, a
+  // clearance, or says it won't sponsor: auto-apply stops here, before any AI
+  // (General Matter's "Currently a US Citizen…" was filled and held, 2026-11-12).
+  // A manual Autofill still fills, with the reason shown.
+  const notEligible = blockedReason([...eligibilityOf(`${job.title}. ${job.descriptionHtml}`).flags, ...formEligibility(questions)], needsSponsorship(profile));
+  if (notEligible && deps.auto) return { notEligible, ready: false, reasons: [notEligible], review: [], fills: [], answered: 0, total: questions.length, parked: [] };
 
   // 3. AI free text (two-pass so the engine stays sync), one question per call,
   //    four in flight. Optional boxes too: an empty "anything else" reads as
@@ -189,6 +196,7 @@ async function prepareGreenhouseApplication(uid, token, id, deps) {
   }
 
   return {
+    notEligible: notEligible || null,
     jobTitle: form.title,
     companyName: job.companyName,
     locationName: job.locationName,

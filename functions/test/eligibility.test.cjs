@@ -154,3 +154,15 @@ test("clearance: 'Security Clearance: Active U.S. TS/SCI' and a '(TS/SCI)' title
   assert.deepEqual(eligibilityOf("Senior Software Engineer (TS/SCI). We build identity products.").flags, ["clearance"]);
   assert.deepEqual(eligibilityOf("Software Engineer (Remote). TS/SCI clearance is a plus.").flags, []);
 });
+
+test("form questions: a required US-citizen confirmation or a US-person-only pick rules a visa holder out (General Matter)", () => {
+  const { formEligibility } = require("../lib/eligibility.cjs");
+  const sel = (label, opts, required = true) => ({ label, required, fields: [{ type: "multi_value_single_select", values: opts.map((label) => ({ label })) }] });
+  assert.deepStrictEqual(formEligibility([sel("This job requires a US Q security clearance—a minimum requirement of which is to be a US Citizen. Can you confirm that you are currently a US Citizen? ", ["Yes, I am currently a US Citizen", "No, I am not a US Citizen"])]), ["citizen"]);
+  assert.deepStrictEqual(formEligibility([sel("This job requires access to export-controlled information… Please confirm whether you are a (1) US Citizen, (2) Lawful Permanent Resident, or (3) Qualifying Asylee.", ["US Citizen", "Lawful Permanent Resident", "Qualifying Asylee"])]), ["citizen"]);
+  // A list with a true answer for a visa holder, or an optional question, does not.
+  assert.deepStrictEqual(formEligibility([sel("What is your citizenship status?", ["US Citizen", "Non-US Citizen"])]), []);
+  assert.deepStrictEqual(formEligibility([sel("Citizenship", ["U.S. Citizen", "Permanent Resident", "Other (please explain)"])]), []);
+  assert.deepStrictEqual(formEligibility([sel("Please confirm", ["US Citizen", "Lawful Permanent Resident", "Qualifying Asylee"], false)]), []);
+  assert.deepStrictEqual(formEligibility([sel("Are you legally authorized to work in the United States?", ["Yes", "No"])]), []);
+});

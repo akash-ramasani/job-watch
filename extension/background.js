@@ -192,7 +192,7 @@ async function recordApplicationEvent(message, sender) {
     companyName: message.companyName || job?.companyName || "",
     extensionVersion: chrome.runtime.getManifest().version,
   };
-  for (const k of ["answersLog", "needsAttention", "filledCount", "totalFields", "requiredTotal", "flow", "schemaSource", "reasons", "error", "force"]) {
+  for (const k of ["answersLog", "needsAttention", "filledCount", "totalFields", "requiredTotal", "flow", "schemaSource", "reasons", "error", "force", "reason"]) {
     if (message[k] !== undefined) payload[k] = message[k];
   }
   const res = await fetch(`${FUNCTIONS_BASE}/recordApplication`, {
@@ -221,11 +221,11 @@ async function callMapFormFields(fields, jobTitle, companyName, jobLocationName,
 }
 
 // Compute a full Greenhouse application (answers + resume + cover letter).
-async function callPrepareGreenhouse(token, id, idToken) {
+async function callPrepareGreenhouse(token, id, idToken, auto = false) {
   const res = await fetch(`${FUNCTIONS_BASE}/prepareGreenhouseApplication`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-    body: JSON.stringify({ data: { token, id } }),
+    body: JSON.stringify({ data: { token, id, auto } }),
   });
   const json = await res.json();
   if (!res.ok || json.error) throw new Error(json.error?.message || "prepareGreenhouseApplication failed");
@@ -2082,8 +2082,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         try {
           const tailoredP = startTailored(sender, { source: "greenhouse", externalId: message.id });
           const { idToken } = await getFreshToken();
-          const data = await callPrepareGreenhouse(message.token, message.id, idToken);
-          sendResponse({ ok: true, data: await withTailoredResume(data, tailoredP) });
+          const data = await callPrepareGreenhouse(message.token, message.id, idToken, !!message.auto);
+          // Auto-apply on a job the person is not eligible for: nothing to fill.
+          sendResponse({ ok: true, data: data?.notEligible && message.auto ? data : await withTailoredResume(data, tailoredP) });
         } catch (err) {
           sendResponse({ ok: false, error: err.message });
         }

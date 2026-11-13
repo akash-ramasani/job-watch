@@ -4930,7 +4930,7 @@ exports.prepareGreenhouseApplication = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const { token, id } = request.data || {};
+    const { token, id, auto = false } = request.data || {};
     if (!token || !id) throw new HttpsError("invalid-argument", "token and id are required.");
     // Never compute (or spend AI) for a form this person already submitted.
     const formKey = ledger.formKeyOf("greenhouse", token, id);
@@ -4940,7 +4940,8 @@ exports.prepareGreenhouseApplication = onCall(
     try { openai = requireOpenAI(); } catch (e) { logger.warn("prepareGreenhouseApplication: no OpenAI client, free text will park:", e.message); }
     if (openai && !(await hasAiAccess(uid))) openai = null; // rules only: AI is off for this account
     const t0 = Date.now();
-    const out = await prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL });
+    const out = await prepareGreenhouseApplication(uid, String(token), String(id), { db, openai, model: OPENAI_FAST_MODEL, auto: !!auto });
+    if (out.notEligible && auto) { logger.info(`prepareGreenhouseApplication: uid=${uid} ${formKey} not eligible: ${out.notEligible}`); return { ...out, formKey }; }
     logger.info(`prepareGreenhouseApplication: uid=${uid} token=${token} fields=${out.total} answered=${out.answered} ready=${out.ready} review=${out.review.length} ms=${Date.now() - t0}`);
     if (out.parked?.length) logger.info(`prepareGreenhouseApplication parked: ${out.parked.slice(0, 20).join(" | ")}`);
     return { ...out, formKey };
