@@ -350,6 +350,38 @@
     }
   }
 
+  /** Saved work-history dates that are not the resume's: Workday once kept
+   *  Oracle's start as 05/1900 though 05/2022 was typed and shown (State
+   *  Street, submitted that way, 2026-11-13). Every My Experience step reads
+   *  each entry's From / To as Workday holds it and types again any that differ. */
+  async function fixWorkDates(roles) {
+    const fields = await gen("scan", { readOptions: false }).catch(() => []);
+    const blocks = [...new Set(fields.filter((f) => /^work experience \d+/i.test(f.section || "")).map((f) => f.section))];
+    const ids = fields.filter((f) => blocks.includes(f.section) && (f.type === "date" || /company|employer/i.test(f.label))).map((f) => f.id);
+    const vals = ids.length ? await gen("fieldValues", ids).catch(() => ({})) : {};
+    const norm = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const mmYY = (d) => (d?.year ? `${Number(d.month || 1)}/${d.year}` : "");
+    const asNum = (t) => { const m = String(t || "").match(/(\d{1,2})\/(\d{4})/); return m ? `${Number(m[1])}/${m[2]}` : ""; };
+    let fixed = 0;
+    for (const b of blocks) {
+      const mine = fields.filter((f) => f.section === b);
+      const co = mine.find((f) => /company|employer/i.test(f.label));
+      const role = roles.find((r) => co && norm(r.company) && norm(vals[co.id]) === norm(r.company));
+      if (!role) continue;
+      for (const f of mine.filter((x) => x.type === "date")) {
+        const isTo = /^to\b|end date/i.test(f.label);
+        const want = isTo ? (role.current ? "" : mmYY(role.to)) : mmYY(role.from);
+        const have = asNum(vals[f.id]);
+        if (!want || !have || have === want) continue;
+        const [m, y] = want.split("/");
+        await gen("apply", f.id, { kind: "date", value: `${MONTH(Number(m))}/${y}`, path: f.id, label: f.label }).catch(() => {});
+        fixed++;
+        log(`workday: ${b} ${f.label} was ${vals[f.id]}, typed ${want}`);
+      }
+    }
+    return fixed;
+  }
+
   async function workdayExperience(pkg) {
     const hist = pkg.history || {};
     const plan = [
@@ -397,6 +429,7 @@
       }
     }
     await fixWorkTo((hist.roles || []).slice(0, 5));
+    await fixWorkDates((hist.roles || []).slice(0, 8));
   }
 
   // ── Verify ────────────────────────────────────────────────────────────────
@@ -738,6 +771,15 @@
     if (!onOwnJob()) {
       trace("submit", { refused: "not this job", page: location.href, want: AUTO?.applyUrl || "" });
       return autoReport("needs_attention", `not submitted: this tab is on another posting (${location.href.slice(0, 120)}), not the job it was given`);
+    }
+    // A date Workday saved wrong (Oracle's start as 05/1900 though 05/2022 was
+    // typed, State Street, submitted that way, 2026-11-13): never Submit it.
+    // The retry's My Experience step types it again (fixWorkDates).
+    const badDate = String(reviewText).match(/\b(0?[1-9]|1[0-2])\/(1[0-8]\d\d|19[0-4]\d)\b/);
+    if (badDate) {
+      trace("submit", { refused: "bad date", date: badDate[0] });
+      banner(`Auto-apply did not submit: Workday saved a date as ${badDate[0]}. It will fix the date and try again.`);
+      return autoReport("needs_attention", `not submitted: Workday saved a date as ${badDate[0]}; the next try types it again`);
     }
     // What JobWatch filled on every step of this application (exact labels and
     // answers); the Review page's text only when that record is gone (a reload).

@@ -1267,5 +1267,20 @@
     }
     return { removed, kept: seen.size };
   }
-  window.__jwGeneric = { workdayDedupeFiles, scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdaySubmit, workdayClosed };
+  /** What each field holds now (text boxes, and dates as "MM/YYYY" from the
+   *  value Workday keeps, not what was typed), for checking saved entries. */
+  function fieldValues(ids) {
+    const out = {};
+    for (const id of ids || []) {
+      const r = record(id);
+      if (!r) continue;
+      if (r.type === "date" && r.inputs?.length) {
+        const part = (re) => { const p = r.inputs.find((x) => re.test(x.getAttribute("data-automation-id") || "")); if (!p) return ""; return clean(document.getElementById(p.id?.replace(/-input$/, "-display"))?.textContent || p.getAttribute("aria-valuetext") || p.value); };
+        const mm = part(/Month/), yyyy = part(/Year/);
+        out[id] = mm || yyyy ? `${mm}/${yyyy}` : "";
+      } else out[id] = clean(r.el?.value ?? textOf(r.el));
+    }
+    return out;
+  }
+  window.__jwGeneric = { fieldValues, workdayDedupeFiles, scan, apply, scrollTo, rectOf, errors, stepName, hasPassword, workdayStartModal, onReviewStep, submitted, descriptionText, pageJob, workdaySectionNames, workdayAdd, workdayAuthState, workdayInApp, workdayEmailForm, workdayAuth, workdayForgot, workdayResendVerify, fieldHtml, workdaySetPassword, workdayPress, workdayNext, workdaySubmit, workdayClosed };
 })();
