@@ -165,7 +165,7 @@
         await sleep(220);
         hl.mark(!!r.ok);
         if (r.ok) {
-          answersLog[f.path] = { label: f.label, answer: String(answerOf(f, r, pkg) ?? ""), type: f.kind, source: f.source || "" };
+          answersLog[f.path] = { label: f.label, answer: String(answerOf(f, r, pkg) ?? ""), type: f.kind, source: f.source || "", step: lastStep };
           attention.delete(f.label);
         } else {
           still.push(f);
@@ -444,7 +444,7 @@
       banner(`JobWatch is asking AI how to finish: ${question}`);
       const r = await window.__jwRescue(question, { jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
       log("rescue:", question, r);
-      if (r?.ok) { attention.delete(label); answersLog[`rescue:${question}`] = { label: question, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai" }; }
+      if (r?.ok) { attention.delete(label); answersLog[`rescue:${question}`] = { label: question, answer: r.answer || "(AI rescue)", type: "ai-rescue", source: "ai", step: lastStep }; }
       else if (r?.why === "optional (no *)") attention.delete(label);
       else if (r?.why) attention.set(label, { ...v, note: `${v.note}. AI: ${r.why}` });
     }
@@ -755,6 +755,41 @@
     return autoReport("needs_attention", "pressed Submit, but no confirmation showed within 40 seconds: check the application in Workday");
   }
 
+  /** Workday: one AI look at this step's answers (with the steps before it
+   *  for context) before Save and Continue, while they can still be changed.
+   *  Each answer it calls wrong goes to the AI rescue with the problem as the
+   *  field's error. Workday's Review page cannot be edited, so a wrong answer
+   *  found only there stopped the application: 21 of 53 unsubmitted Workday
+   *  applications, 2026-11-10 to 11-13 (HPE three times on the same answer). */
+  const checkedSteps = new Set();
+  async function stepCheck(step) {
+    if (!step || checkedSteps.has(step) || !window.__jwRescue) return;
+    checkedSteps.add(step);
+    if (/voluntary|self.?identif|disclosure|disabilit|veteran|review/i.test(step)) return;
+    const norm = (t) => String(t || "").replace(/\s+/g, " ").trim();
+    const all = Object.values(answersLog).filter((x) => x && x.label && x.type !== "file");
+    const mine = all.filter((x) => x.step === step);
+    if (!mine.length) return;
+    const count = new Map();
+    for (const x of mine) count.set(norm(x.label), (count.get(norm(x.label)) || 0) + 1);
+    const items = all.slice(-120).map((x) => ({ question: norm(x.label), answer: String(x.answer ?? ""), required: false }));
+    banner(`Auto-apply: checking the answers on ${step} before Save and Continue…`);
+    const chk = await sendMsg({ type: "REVIEW_FORM", items, jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
+    // Only this step's questions can still be changed; a label the step holds
+    // twice ("School or University" for each school) cannot be told apart by
+    // the rescue, so it is left for the check at Review.
+    const issues = (chk?.ok ? chk.issues || [] : []).filter((i) => count.get(norm(i.question)) === 1);
+    const out = [];
+    for (const i of issues.slice(0, 5)) {
+      banner(`Auto-apply: fixing before Save and Continue: ${String(i.question).slice(0, 90)}`);
+      const r = await window.__jwRescue(i.question, { jobTitle: header.jobTitle || "", companyName: header.companyName || "", force: true, error: `${i.problem}${i.fix ? ` The right answer: ${i.fix}` : ""}` });
+      const entry = mine.find((x) => norm(x.label) === norm(i.question));
+      if (r?.ok && entry) { entry.answer = String(r.answer || i.fix || entry.answer); entry.source = "ai-review"; }
+      out.push({ question: i.question, problem: i.problem, fix: i.fix, fixed: !!r?.ok, answer: r?.answer || "", why: r?.why || "" });
+    }
+    trace("stepcheck", { step, items: items.length, ok: !!chk?.ok, error: chk?.error || "", issues: chk?.issues || [], fixes: out });
+  }
+
   async function autoAdvance(step) {
     // A page still loading has no step name: wait for it, never press Save and
     // Continue there (Micron used up its three presses on a blank page).
@@ -767,6 +802,8 @@
       banner("Auto-apply filled every step. This is the Review page: check each answer, then press Submit yourself.");
       return autoReport("review", "filled to Review: check it and press Submit");
     }
+    await stepCheck(step);
+    if (!AUTO) return; // the person took over while it ran
     const n = (stepPresses.get(step) || 0) + 1;
     stepPresses.set(step, n);
     if (n > 3) {

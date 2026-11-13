@@ -425,7 +425,9 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
     // Start dates default to the next Monday after the application date, so
     // the notice-period text must agree with that: "1 week" unless the person
     // set one.
-    noticePeriod: user.noticePeriod || "1 week",
+    // Available immediately with no notice period saved: "None", not "1 week"
+    // (ResMed and State Street were held at Review for the clash, 2026-11-12).
+    noticePeriod: user.noticePeriod || (/immediate|asap|right away|now\b/i.test(user.availability || "Immediately") ? "None, available immediately" : "1 week"),
     noticePeriodExplicit: !!user.noticePeriod,
     // Non-compete / non-solicitation questions: No unless the person saved
     // otherwise (profile.employmentAgreements), so the form is never left half done.

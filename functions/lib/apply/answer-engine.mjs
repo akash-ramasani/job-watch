@@ -179,6 +179,10 @@ function classify(label, kind = "") {
   if (choice && /(willing|able|capable|comfortable).{0,25}\btravel\b|\btravel\b.{0,30}(\d+ ?%|percent) of the time/.test(l)) return "willingToTravel";
   // Fired or asked to resign (Travelers, Ohio State, Micron, LSU, U.S. Bank).
   if (choice && /\b(terminated|discharged|dismissed|fired|asked to resign|allowed to resign)\b/.test(l) && /^(have|were|has) you\b|^(have|were) you ever/.test(l)) return "terminatedBefore";
+  // "To proceed, please acknowledge receipt and confirm your understanding" of
+  // a policy that names outside activities (Capital One's Code of Conduct got
+  // "No" from the outside-activities fact, 2026-11-12): an acknowledgement.
+  if (choice && /please acknowledge|acknowledge receipt|confirm (your|that you) understand/.test(l) && /outside (business|activit)|secondary employment|conflict of interest|code of (business )?conduct/.test(l)) return "acknowledgement";
   // Board seats, an outside business, a second job, an elected office (Micron, Cigna, U.S. Bank, University of Miami).
   if (choice && /board of directors|board positions?|outside (business|activities|employment)|secondary employment|other business or employment|ownership interest in a business|own (or have )?.{0,30}business|publicly elected|run for .{0,20}office/.test(l)) return "outsideActivities";
   // Other names: maiden name, earlier legal names (Cadence, Truist).
@@ -240,7 +244,7 @@ function classify(label, kind = "") {
   // question and answered No (Superhuman, 2026-11-12); "If offered employment
   // by Amazon, would you be legally eligible to begin employment immediately?"
   // went to the AI, which said No (Twitch). Sponsorship wording goes on below.
-  if (!/sponsor|visa|without (any )?restriction|veteran/.test(l) && /authori[sz]ed to (be )?(employed|work)\b|(legally )?eligible to (be employed|begin (employment|work)|start (employment|work)|commence (employment|work))/.test(l)) return "workAuthorized";
+  if (!/sponsor|visa|without (any )?restriction|veteran|indefinite|unrestricted|permanent basis/.test(l) && /authori[sz]ed to (be )?(employed|work)\b|(legally )?eligible to (be employed|begin (employment|work)|start (employment|work)|commence (employment|work))/.test(l)) return "workAuthorized";
   // One box for both ("What is your gross annual salary expectation for this
   // role, and do you have a specific notice period?"): both answers (Rain, 2026-11-10).
   if (text && /salary|compensation/.test(l) && /notice period/.test(l)) return "salaryAndNotice";
@@ -277,7 +281,7 @@ function classify(label, kind = "") {
   if (choice && /which (best|of the following best) describes your (primary |main )?(day.to.day )?(engineering |technical )?(focus|expertise|background|specialty|specialization|discipline|role)|which .{0,30}(competenc|skills?|areas?) .{0,30}(do you have|have you)|primary (engineering |technical )?(focus|discipline)/.test(l)) return "bestByResume";
   if (choice && /did (an?|any|a current) (employee|someone|team member) refer you|referred by an? (current |former )?(employee|team member)/.test(l)) return "referredYesNo";
   if (/where did you (first )?(see|find|hear|learn)/.test(l)) return "heardAboutUs";
-  if (choice && /which (onsite |on-site |office )?locations? (would you|do you|are you) .{0,20}(apply|prefer|like|interested)|preferred work location|which office/.test(l)) return "preferredOffice";
+  if (choice && /which (onsite |on-site |office )?locations? (would you|do you|are you) .{0,20}(apply|prefer|like|interested)|preferred work location|which office|((^|\b(select|indicate|choose|state|give|enter) )your (work )?location preference|^what is your (work )?location preference|^location preference)(?!.{0,30}(in relation|requirement))/.test(l)) return "preferredOffice";
   if (choice && /which (metro|metropolitan|city|area|region|location|state) .{0,30}(reside|live|based|located)|based in a location where|(support|able to) hir(e|ing) in the following|only (support|able to) hir/.test(l)) return "whereLocated";
   if (/country (do|are) you (currently )?(reside|residing|living|located)|which country (do you|are you) .{0,15}(reside|live|based|located)/.test(l)) return "country";
   if (choice && /(offered|posted|listed) (compensation|salary|pay|range) (meet|align|match|work)|compensation meet your expectations/.test(l)) return "salaryRangeOk";
@@ -342,15 +346,17 @@ function classify(label, kind = "") {
   if (/^are you (familiar with|open to|comfortable).{0,40}\bai\b/.test(l)) return "openToAiTools";
   if (/current location or preference|hiring in our hubs/.test(l)) return "citiesAvailable";
 
+  // "Authorized … without any restrictions to the length of employment? (Answer
+  // No if you are in a non-immigrant status such as H, L, F, including OPT)"
+  // (U.S. Bank): a status question; OPT is authorized but time-limited. Also
+  // "the unrestricted right to work" (Salesforce) and "on a fulltime and
+  // indefinite basis" (Analog Devices), both answered Yes, 2026-11-11/12.
+  if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under|hold(ing)?) (a |any )?(non.?immigrant|visa)|you must answer .{0,3}no.{0,3} if you (are|hold|have)|unrestricted (right to work|work|employment)|permanent(ly)? authori[sz]ed to work|(authori[sz]ed|eligible|right) to work .{0,60}\b(indefinite(ly)?|on a permanent basis|permanently)\b/.test(l) && !/veteran|^(in )?(what|which) countr/.test(l)) return "unrestrictedAuth";
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
   // "Are you eligible / able / legally permitted to work … without sponsorship?"
   // answered Yes from workAuthorized alone (4 forms, 2026-11-12 audit).
   if (/(authori[sz]ed|eligible|able|permitted|entitled|right)\b.{0,60}\b(work|employ)|\b(work|employment) authori[sz]ation/.test(l) && /without|not requir|no need/.test(l) && /sponsor|visa|work permit|immigration/.test(l) && !/veteran/.test(l)) return "authorizedWithoutSponsorship";
-  // "Authorized … without any restrictions to the length of employment? (Answer
-  // No if you are in a non-immigrant status such as H, L, F, including OPT)"
-  // (U.S. Bank): a status question; OPT is authorized but time-limited.
-  if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under) a non.?immigrant|unrestricted (work|employment) authori|permanent(ly)? authori[sz]ed to work/.test(l)) return "unrestrictedAuth";
   // "Will you require/need sponsorship" -> requiresSponsorship. Deliberately does
   // NOT match "currently in a sponsored status" (a different, status question).
   if (/(require|need).{0,20}sponsor/.test(l) || /sponsorship.{0,20}(visa|now|future|employment)/.test(l) || has("will you", "sponsorship") || /(commence|sponsor|file) (or sponsor )?an immigration (case|petition)|immigration case|(require|need) (a |an )?(visa|work permit|work visa) (to|in order to)/.test(l)) return "requiresSponsorship";
@@ -411,6 +417,10 @@ function classify(label, kind = "") {
   if (choice && /level of experience with ai|experience with ai tools|ai (tools?|fluency|proficiency|maturity) level|how (would you )?(describe|rate) your .{0,30}\bai\b/.test(l)) return "aiToolsLevel";
   // "Are you comfortable working from the location listed on this job description?"
   if (choice && /(comfortable|able|willing) (to work|working|with working) (from|in|at) the location (listed|on|in|of)/.test(l)) return "locationComfortable";
+  // "Do you meet all of the Basic Qualifications for this role?" (Capital One
+  // got the AI's "No", 2026-11-12): auto-apply only applies to jobs whose
+  // requirements the resume was scored against.
+  if (choice && /\b(meet|possess|have|satisfy)\b.{0,25}\b(basic|minimum|required|stated|listed) (qualifications|requirements)\b/.test(l) && !/preferred/.test(l)) return "meetsQualifications";
   // Office, onsite, hybrid and travel arrangements are willingness questions,
   // not skills ("Are you comfortable with our in-office policy?" got No).
   if (choice && !/\b(office|onsite|on-site|in.?person|hybrid|remote|relocat|commut|travel|days? (a|per) week|schedule|shift|weekends?)\b/.test(l) && (/do you have (a )?(minimum|at least|more than|over)\b/.test(l) || /\b\d+\+? (or more )?(years?|yrs) (of )?.{0,40}experience/.test(l)
@@ -546,6 +556,15 @@ export function degreeFieldMatches(label, eduText) {
 export function experienceEvidence(label, resumeText) {
   const rt = norm(resumeText);
   if (!rt) return null;
+  // "...the specific language or tech stack for this role (e.g., Python, Java,
+  // React)" (PayPal got No, 2026-11-11): the examples are the checkable part;
+  // any one of them on the resume is experience with the role's stack.
+  const ll = norm(label);
+  const ex = ll.match(/\((?:e\.?g\.?|such as|for example|like|including)[,:]?\s*([^)]+)\)/);
+  if (ex && /\b(this|the) (role|position|job|team)\b/.test(ll)) {
+    const eg = ex[1].split(/\s*(?:,|\/|\bor\b|\band\b|\betc\.?)\s*/).map((t) => t.trim()).filter((t) => t.length > 0 && t.length < 30);
+    if (eg.length && eg.some((t) => inResume(rt, t))) return true;
+  }
   // "Python or Scala", "Java, Go, or C++": one alternative on the resume is enough.
   const l = norm(label);
   if (/\b(or|\/)\b/.test(l.replace(/\(.*?\)/g, " ")) && !/\b(and|&)\b/.test(l)) {
@@ -577,7 +596,7 @@ function experienceEvidenceOne(label, rt) {
  *  "experience working as an Infrastructure Engineer" → ["infrastructure"]).
  *  null when the question names nothing checkable. Generic role words
  *  (engineer, developer) are dropped so the specific part has to match. */
-const EXPERIENCE_STOP = new Set(["a", "an", "the", "and", "or", "of", "in", "at", "to", "for", "with", "using", "on", "your", "any", "building", "deploying", "working", "production", "professional", "setting", "environment", "software", "solutions", "customers", "experience", "years", "year", "not", "including", "internships", "tools", "such", "as", "etc", "e", "g", "i", "that", "this", "is", "are", "you", "have", "do", "does", "role", "roles", "company", "companies", "technology", "tech", "house", "team", "teams", "large", "scale", "models", "model", "applications", "application", "work", "new", "current", "past", "relevant", "minimum", "least", "full-time", "fulltime", "industry", "related", "directly", "hands-on", "hands", "practical", "prior", "previous", "paid", "including", "excluding", "outside", "academia", "internship", "internships", "developing", "designing", "writing", "managing", "leading", "sales", "closing", "delivering", "engineer", "engineers", "engineering", "developer", "developers", "specialist", "position", "job", "development", "programming", "language", "languages", "maintaining", "services", "service", "systems", "system", "environment", "environments", "code", "coding", "their", "its", "our", "all", "various", "multiple", "modern", "platforms", "platform", "within", "across", "scale", "scalable", "complex", "strong", "deep", "solid", "proven", "demonstrated", "extensive", "significant", "hands", "on"]);
+const EXPERIENCE_STOP = new Set(["enterprise", "corporate", "commercial", "specific", "stack", "before", "ever", "previously", "currently", "a", "an", "the", "and", "or", "of", "in", "at", "to", "for", "with", "using", "on", "your", "any", "building", "deploying", "working", "production", "professional", "setting", "environment", "software", "solutions", "customers", "experience", "years", "year", "not", "including", "internships", "tools", "such", "as", "etc", "e", "g", "i", "that", "this", "is", "are", "you", "have", "do", "does", "role", "roles", "company", "companies", "technology", "tech", "house", "team", "teams", "large", "scale", "models", "model", "applications", "application", "work", "new", "current", "past", "relevant", "minimum", "least", "full-time", "fulltime", "industry", "related", "directly", "hands-on", "hands", "practical", "prior", "previous", "paid", "including", "excluding", "outside", "academia", "internship", "internships", "developing", "designing", "writing", "managing", "leading", "sales", "closing", "delivering", "engineer", "engineers", "engineering", "developer", "developers", "specialist", "position", "job", "development", "programming", "language", "languages", "maintaining", "services", "service", "systems", "system", "environment", "environments", "code", "coding", "their", "its", "our", "all", "various", "multiple", "modern", "platforms", "platform", "within", "across", "scale", "scalable", "complex", "strong", "deep", "solid", "proven", "demonstrated", "extensive", "significant", "hands", "on"]);
 export function experienceTerms(label) {
   // Parentheses and trailing "including …", "such as …", "e.g. …" clauses
   // list extras, not the skill itself.
@@ -1075,8 +1094,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     });
     // No bucket holds a one-week notice: the shortest offered ("Immediately",
     // "Less than 2 weeks", "1 month") is the honest nearest.
+    // Shorter than every bucket ("None" with "1-2 weeks" first): the shortest offered.
+    const shortest = weeks == null ? null : opts.map((o) => ({ o, r: weeksRange(o.label) })).filter((x) => x.r && x.r[0] >= weeks).sort((a, b) => a.r[0] - b.r[0])[0]?.o;
     const m = hit ? { value: hit.value } : matchOption(primary, np)
-      || findOnly(primary, [/immediate|none|no notice|right away|asap/, /less than|under|up to|within|0\s*-|^1 month|^one month|^2 weeks|^two weeks/]);
+      || findOnly(primary, [/immediate|none|no notice|right away|asap/])
+      || (shortest ? { value: shortest.value } : null)
+      || findOnly(primary, [/less than|under|up to|within|0\s*-|^1 month|^one month|^2 weeks|^two weeks/]);
     return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, `${np}`) : unanswered("no notice-period bucket matches");
   }
   // Interview recording / on-call / AI tooling: low-stakes yeses, overridable
@@ -1137,6 +1160,11 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
 
   // Pure acknowledgements (privacy policy, truthfulness certification): the only
   // valid answer is agreement — declining is just not submitting.
+  if (key === "meetsQualifications") {
+    if (!isSelect) return out([{ name, value: "Yes" }], SOURCE.RULE, 0.85, "meets the basic qualifications");
+    const m = matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/, /^i (do|meet)\b/]);
+    return m ? out([{ name, value: m.value }], SOURCE.RULE, 0.85, "meets the basic qualifications") : unanswered('no "Yes" option');
+  }
   if (key === "acknowledgement") {
     if (isSelect) {
       const opts = primary.values || primary.options || [];
@@ -1339,11 +1367,16 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     // No office near home but willing to relocate: "any/flexible/remote" when
     // offered; on a multi-select, every office ("interested in"); else park.
     if (/^y/i.test(String(profile.willingToRelocate || ""))) {
-      const any = findOnly(primary, [/\bany\b|flexible|no preference|open to|remote|either|all of the above/]);
+      // The job's own city first (Dimensional got "Remote only", 2026-11-12;
+      // the person works hybrid or in office).
+      const jl = norm(profile.jobLocationName || "");
+      const jobCity = jl ? (primary.values || []).find((v) => { const ol = norm(v.label); return ol && !/remote|not open/.test(ol) && (jl.includes(ol) || ol.includes(jl.split(",")[0].trim())); }) : null;
+      if (jobCity) return out([{ name, value: jobCity.value }], SOURCE.RULE, 0.85, `job city ${jobCity.label}, willing to relocate`);
+      const any = findOnly(primary, [/\bany\b|flexible|no preference|(?<!not )open to(?! remote)|either|all of the above/]);
       if (any) return out([{ name, value: any.value }], SOURCE.RULE, 0.8, "willing to relocate: any office");
       if (kinds[0] === "multiselect" && (primary.values || []).length) return out((primary.values || []).slice(0, 8).map((o) => ({ name, value: o.value })), SOURCE.RULE, 0.75, "willing to relocate: all offices");
       // Single pick with no office near home: the first listed, as a relocation choice.
-      const first = (primary.values || [])[0];
+      const first = (primary.values || []).find((v) => !/remote only|not open|not willing|none of|do not|don't|^no\b/.test(norm(v.label)));
       if (first) return out([{ name, value: first.value }], SOURCE.RULE, 0.7, `willing to relocate: first listed office (${first.label})`);
     }
     return unanswered("no single office matches the profile location");
@@ -1823,6 +1856,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   // Sponsorship / authorization / in-office asked as a text box: one plain sentence.
   if ((key === "requiresSponsorship" || key === "workAuthorized" || key === "willingToWorkHybrid") && !isSelect) {
     const req = norm(profile.requiresSponsorship), auth = norm(profile.workAuthorized), hyb = norm(profile.willingToWorkHybrid);
+    // "Indicate all locations or countries for which you will require
+    // sponsorship" (HPE got a sentence three times, 2026-11-12): the country.
+    if (key === "requiresSponsorship" && req && /(indicate|list|specify|name|which|enter)\b.{0,60}\b(locations?|countr(y|ies))\b/.test(norm(label))) return out([{ name, value: req === "yes" ? (profile.country || "United States") : "None" }], SOURCE.PROFILE, 1, "countries needing sponsorship");
     if (key === "requiresSponsorship" && req) return out([{ name, value: req === "yes" ? `Yes. I am authorized to work now${profile.visaStatus?.student ? " on F-1 OPT" : ""} and will need sponsorship in the future.` : "No. I do not need sponsorship." }], SOURCE.PROFILE, 1);
     if (key === "workAuthorized" && auth) return out([{ name, value: auth === "yes" ? "Yes. I am legally authorized to work in the United States." : "No." }], SOURCE.PROFILE, 1);
     if (key === "willingToWorkHybrid" && hyb) return out([{ name, value: hyb === "yes" ? "Yes. I can work on-site as the role requires." : "No." }], SOURCE.PROFILE, 1);
@@ -1845,6 +1881,13 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   if (key === "livesIn") {
     const body = norm(label);
     const mine = cityTerms(profile);
+    // "...within commutable distance to the office or intend to relocate?"
+    // (PayPal got No, 2026-11-11): willing to relocate makes it Yes.
+    if (/(intend|plan|planning|willing|open|able) to relocate|\bor relocate\b/.test(body) && norm(profile.willingToRelocate) === "yes") {
+      if (!isSelect) return out([{ name, value: "Yes" }], SOURCE.PROFILE, 0.9, "willing to relocate");
+      const m = findOnly(primary, [/(plan(ning)?|intend|willing|open) to relocate|relocat/]) || matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/]);
+      if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 0.9, "willing to relocate");
+    }
     // An option naming the person's city ("Yes, San Francisco") is the answer.
     if (isSelect) {
       const city = findOnly(primary, mine.map((t) => new RegExp(`\\b${escapeRe(t)}\\b`)));

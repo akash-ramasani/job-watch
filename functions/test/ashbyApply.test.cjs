@@ -75,7 +75,7 @@ test("profile: years from resume dates, defaults for low-stakes, none for compli
   assert.equal(p.currentCompany, "Runn Technologies");
   assert.equal(p.university, "California State University, East Bay");
   assert.equal(p.heardAboutUs, "LinkedIn");
-  assert.equal(p.noticePeriod, "1 week");
+  assert.equal(p.noticePeriod, "None, available immediately");
   assert.equal(p.noticePeriodExplicit, false);
   assert.equal(p.todayISO, "2026-10-08"); // 2026-10-09T00:00Z is still Oct 8 on the US west coast
   assert.equal(p.requiresSponsorship, undefined);

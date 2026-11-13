@@ -620,7 +620,10 @@
     const fits = (term, got) => {
       const g = ` ${nrm(got).replace(/[^a-z0-9]+/g, " ")} `;
       const words = nrm(term).replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length >= 2 && !STOP.test(w));
-      return words.length ? words.every((w) => g.includes(` ${w}`)) : nrm(got) === nrm(term);
+      // A short word must be whole: "KL" is not "KLE" (CrowdStrike got "KLE
+      // Technological University" for KL University, 2026-11-12); a longer one
+      // may start a word ("Tech" in "Technology").
+      return words.length ? words.every((w) => g.includes(w.length <= 3 ? ` ${w} ` : ` ${w}`)) : nrm(got) === nrm(term);
     };
     const unpick = async () => {
       const del = el.closest("[data-automation-id^=formField-]")?.querySelector("[data-automation-id=selectedItem] [data-automation-id=DELETE_charm], [data-automation-id=DELETE_charm]");
