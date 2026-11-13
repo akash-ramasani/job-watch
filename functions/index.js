@@ -3555,7 +3555,10 @@ async function staleJobsFor(userId, profileStamp, { skipIds = new Set(), tk = ""
       if (s && s.k === ruleKey && s.rt === tk && (!s.p || skipAiPending)) continue; // final rule score, or waiting while the AI is down
       // A full assessment that found a different field survives resume edits.
       // Type-filter skips are redone (free) whenever the resume or job types change.
-      if (s && !skippedByType && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue;
+      // Not a rule score made for other job types: those are redone (free) when
+      // the types change (Riti's Pharmacist kept 11 after healthcare was dropped, 2026-11-13).
+      const ruleForOtherTypes = s && s.m === "r" && s.rt !== tk;
+      if (s && !skippedByType && !ruleForOtherTypes && typeof s.score === "number" && s.score >= 0 && s.score < SKIP_RESCORE_BELOW) continue;
       stale.push(j);
     }
   }
