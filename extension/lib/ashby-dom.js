@@ -381,19 +381,53 @@
     // still showing for an earlier prefix ("Co" -> "Corsica, France" while
     // "Colorado" was being typed, LG Ad Solutions 2026-11-11) never count.
     const firstWord = (q) => nrm(q).split(/[ ,]+/)[0] || "";
-    const click = async (o) => {
+    // Picked means the box reads the suggestion itself ("San Francisco,
+    // California, United States"), not just what was typed: a click that missed
+    // left "San Francisco" in the box, which passed as filled while Ashby saved
+    // nothing and cleared it ("Missing entry for required field: Location" on
+    // every Submit, Lambda 2026-11-14, a minimized window).
+    const committed = (text) => nrm(box.value) === nrm(text);
+    // The list refreshes as each letter's search comes back (slowly in a
+    // minimized window): wait until it holds still, then click the row as it is now.
+    const settle = async () => {
+      let prev = "";
+      for (let i = 0; i < 12; i++) {
+        const cur = options().map((x) => x.textContent.trim()).join("|");
+        if (cur && cur === prev) return;
+        prev = cur;
+        await sleep(250);
+      }
+    };
+    const clickOnce = async (o) => {
       o.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
       o.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
       o.click();
       await sleep(300);
-      if (!box.value?.trim()) {
+    };
+    const click = async (o) => {
+      const text = o.textContent.trim();
+      for (let k = 0; k < 3 && !committed(text); k++) {
+        if (k) {
+          // Open the list again on what was typed, then find the row afresh.
+          box.focus();
+          box.click();
+          setNativeValue(box, typed);
+          await sleep(400);
+        }
+        await settle();
+        const fresh = options().find((x) => nrm(x.textContent) === nrm(text));
+        if (!fresh) continue;
+        await clickOnce(fresh);
+        if (committed(text)) return true;
         // Keyboard fallback: highlight the option and confirm.
-        const i = options().indexOf(o);
+        const i = options().findIndex((x) => nrm(x.textContent) === nrm(text));
+        if (i < 0) continue;
         box.focus();
-        for (let k = 0; k <= Math.max(i, 0); k++) box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        for (let n = 0; n <= i; n++) box.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
         box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
         await sleep(300);
       }
+      return committed(text);
     };
     let typed = "";
     const seen = [];
@@ -435,8 +469,9 @@
       }
       if (idx < 0) continue;
       const o = opts[idx];
-      await click(o);
-      return { ok: !!box.value?.trim(), picked: o.textContent.trim(), actual: box.value, via: q };
+      const picked = o.textContent.trim();
+      if (await click(o)) return { ok: true, picked, actual: box.value, via: q };
+      seen.push(`clicked "${picked}" but the box reads "${box.value}"`);
     }
     // Nothing that is the place asked for: leave it for the person, never a stranger's first row.
     setNativeValue(box, "");
