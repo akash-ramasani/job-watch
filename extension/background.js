@@ -973,6 +973,17 @@ function openJobTab(url) {
   jobWindowLock = run.catch(() => {});
   return run;
 }
+/** A job tab in the job window without bringing that window forward. A tab
+ *  made with active: true raised the minimized window on macOS and took the
+ *  person off what they were working on (2026-11-14). It is made in the
+ *  background, then selected inside its own window, which does not raise it;
+ *  not while the person is looking at that window. */
+async function addJobTab(windowId, url) {
+  const tab = await chrome.tabs.create({ windowId, url, active: false });
+  const win = await chrome.windows.get(windowId).catch(() => null);
+  if (win && !win.focused) await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  return tab;
+}
 async function openJobTabNow(url) {
   try {
     // Session storage, not local: window ids restart at 1 when the browser
@@ -1002,7 +1013,7 @@ async function openJobTabNow(url) {
       win = await chrome.windows.create({ url: JOB_WINDOW_PAGE, state: "minimized", focused: false });
       await chrome.storage.session.set({ jwJobWindow: win.id, jwKeeperTab: win.tabs?.[0]?.id ?? null });
       if (win.tabs?.[0]?.id != null) chrome.tabs.update(win.tabs[0].id, { pinned: true }).catch(() => {});
-      return await chrome.tabs.create({ windowId: win.id, url, active: true });
+      return await addJobTab(win.id, url);
     }
     // The person is looking at the job window (finishing a "needs you"): the
     // new job opens as a background tab there, so their tab does not switch.
@@ -1012,7 +1023,7 @@ async function openJobTabNow(url) {
     // or maximized is theirs to leave as it is (minimizing a full-screen
     // window flashed Edge's "To exit full screen" banner).
     if (win.state === "normal") await chrome.windows.update(win.id, { state: "minimized" }).catch(() => {});
-    return await chrome.tabs.create({ windowId: win.id, url, active: true });
+    return await addJobTab(win.id, url);
   } catch (err) {
     console.warn("[JobWatch] job window unavailable, using a tab:", err.message);
     return chrome.tabs.create({ url, active: false });
