@@ -224,6 +224,18 @@ const ID_SOURCE_SEEN_RETENTION_DAYS = 45; // prune feedState entries first seen 
 // 33 s at 12, with no 429s; Workday was most of each run's fetch time.
 const WORKDAY_CONCURRENCY = 12;
 const FEED_FETCH_TIMEOUT_MS = 20 * 1000;
+// 2026-11-16: Workday answered most tenants with 429 from Nov 15 ~2 PM PT. Each
+// 429 slept in a Workday slot (5 s, 10 s, 15 s) and nothing ended the fetch, so
+// every run outlived its 9 minutes and was killed before it wrote a job ("Jobs
+// added 0"), while the killed run kept calling Workday. Now the fetch has its
+// own time budget, and a 429 stops every Workday call for a few minutes; the
+// boards not read are read from where they left off on the next run.
+const FETCH_BUDGET_MS = 300 * 1000;
+const WORKDAY_COOLDOWN_MS = 4 * 60 * 1000;
+const fetchGate = { deadline: Infinity, workdayCoolUntil: 0 };
+/** A board left for the next run (time is up, or Workday is rate-limiting): not a feed error. */
+function deferErr(msg) { const e = new Error(msg); e.code = "JW_DEFER"; return e; }
+function gateCheck() { if (Date.now() > fetchGate.deadline) throw deferErr("this run's fetch time is up"); }
 const WORKDAY_PAGE_SIZE = 20;
 
 // Oracle Recruiting Cloud (Oracle, JPMorgan Chase, Goldman Sachs, Dell, Ford…):
@@ -723,6 +735,7 @@ async function syncAllUsersNow() {
             fetchMs: summary.fetchMs ?? null,
             jobsFetched: summary.jobsFetched,
             jobsKeptRecent: summary.jobsKeptRecent,
+            deferredFeeds: summary.deferredFeeds ?? 0,
           },
           { merge: true }
         );
@@ -1039,6 +1052,11 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     };
   }
 
+  // The boards auto-apply works from first, so a slow run never leaves them unread.
+  const FIRST = new Set(["greenhouse", "ashby", "ashbyhq", "lever"]);
+  const ordered = [...feeds].sort((a, b) => (FIRST.has(String(b.source || "").toLowerCase()) ? 1 : 0) - (FIRST.has(String(a.source || "").toLowerCase()) ? 1 : 0));
+  fetchGate.deadline = Date.now() + Math.min(FETCH_BUDGET_MS, Math.max(30 * 1000, deadlineMs - Date.now() - 120 * 1000));
+  let deferredFeeds = 0;
   const limiter = pLimit(FEED_CONCURRENCY);
   const idSourceRunBudget = { remaining: ID_SOURCE_MAX_NEW_PER_RUN };
   // ETag + last-good-read per feed (lib/feedCache.cjs). A targeted catch-up
@@ -1066,11 +1084,12 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   const newJobsForScoring = [];
   const writtenJobs = []; // for the incremental job-list update
 
-  const tasks = feeds.map((feed) =>
+  const tasks = ordered.map((feed) =>
     limiter(async () => {
       const feedId = feed.id;
       const feedRef = db.collection("users").doc(userId).collection("feeds").doc(feedId);
 
+      if (Date.now() > fetchGate.deadline) { deferredFeeds += 1; return; }
       try {
         let url = String(feed.url || "").trim();
         if (!url) throw new Error("Feed missing url");
@@ -1187,6 +1206,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         // cache trigger picks that up), not on every run.
         if (feed.lastError) await feedRef.set({ lastError: null, lastRecoveredAt: now }, { merge: true });
       } catch (e) {
+        if (e?.code === "JW_DEFER") { deferredFeeds += 1; return; }
         failedFeeds += 1;
         const msg = e instanceof Error ? e.message : String(e);
         logger.error(`Feed failed userId=${userId} feedId=${feed.id}: ${msg}`);
@@ -1198,8 +1218,10 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   );
 
   await Promise.all(tasks);
+  fetchGate.deadline = Infinity; // scoring's description fetches are not board reads
   await bw.close();
   const fetchMs = Date.now() - fetchStartMs;
+  if (deferredFeeds) logger.info(`sync ${userId}: ${deferredFeeds} board(s) left for the next run (fetch time or Workday rate limit)`);
 
   // Saved after the jobs are written: a crash before this re-reads those boards in full.
   try {
@@ -1278,6 +1300,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     fetchMs,
     jobsFetched,
     jobsKeptRecent,
+    deferredFeeds,
     jobsWritten,
   };
 }
@@ -1591,6 +1614,7 @@ async function fetchJsonCond(url, etag, maxRetries = 2) {
   let attempts = 0;
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    gateCheck();
     const resp = await fetch(url, {
         // One hung board must not hold up the whole run (default is ~5 minutes).
         signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
@@ -1677,6 +1701,8 @@ async function workdayFetchJson(url, { method = "GET", body = null, maxRetries =
     let attempts = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      gateCheck();
+      if (Date.now() < fetchGate.workdayCoolUntil) throw deferErr("Workday is rate-limiting; read on a later run");
       const resp = await fetch(url, {
         // One hung board must not hold up the whole run (default is ~5 minutes).
         signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
@@ -1691,8 +1717,15 @@ async function workdayFetchJson(url, { method = "GET", body = null, maxRetries =
         body: body ? JSON.stringify(body) : undefined,
       });
       if (resp.ok) return await resp.json();
+      if (resp.status === 429) {
+        // Waiting in the slot made it worse: every tenant sits behind the same throttle.
+        await resp.arrayBuffer().catch(() => {});
+        fetchGate.workdayCoolUntil = Date.now() + WORKDAY_COOLDOWN_MS;
+        logger.warn(`Workday 429 on ${url}; no Workday calls for ${WORKDAY_COOLDOWN_MS / 60000} minutes`);
+        throw deferErr("Workday is rate-limiting; read on a later run");
+      }
 
-      const retryable = resp.status === 429 || resp.status >= 500;
+      const retryable = resp.status >= 500;
       if (retryable && attempts < maxRetries) {
         attempts++;
         // 429 is Workday's edge throttling — back off harder than fetchJson does.
@@ -1835,6 +1868,7 @@ async function fetchNewJobsById({ userId, feedId, now, runBudget, source, label,
       try {
         detail = await fetchDetail(row);
       } catch (e) {
+        if (e?.code === "JW_DEFER") return; // left unseen: the next run fetches it
         // Written without a description; scoring retries via fetchJobDescription.
         logger.warn(`${label} detail failed feedId=${feedId} id=${row.id}: ${e.message}`);
       }
@@ -1972,6 +2006,7 @@ async function oracleFetchJson(url, maxRetries = 3) {
     let attempts = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      gateCheck();
       const resp = await fetch(url, {
         // One hung board must not hold up the whole run (default is ~5 minutes).
         signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
@@ -2136,6 +2171,7 @@ async function boardFetchJson(url, maxRetries = 3) {
     let attempts = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      gateCheck();
       const resp = await fetch(url, {
         // One hung board must not hold up the whole run (default is ~5 minutes).
         signal: AbortSignal.timeout(FEED_FETCH_TIMEOUT_MS),
