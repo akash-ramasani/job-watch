@@ -222,7 +222,12 @@ const ID_SOURCE_SEEN_RETENTION_DAYS = 45; // prune feedState entries first seen 
 // Workday HTTP goes through one limiter. 20 is a hard cap on the list page size.
 // 2026-11-12: 4 -> 12. All 469 tenants' first page took 95 s at 4 at once and
 // 33 s at 12, with no 429s; Workday was most of each run's fetch time.
-const WORKDAY_CONCURRENCY = 12;
+// 2026-11-18: 12 -> 2, and a slice per run (WORKDAY_PER_RUN): from Nov 15 Workday
+// answered the sync's bursts with 429 and read 21 of 470 tenants in 48 hours.
+const WORKDAY_CONCURRENCY = 2;
+// Tenants read per scheduled run, the longest unread first (syncState/workday):
+// ~470 tenants at 40 a run, a run every ~2 minutes, is each one about every 25 minutes.
+const WORKDAY_PER_RUN = 40;
 const FEED_FETCH_TIMEOUT_MS = 20 * 1000;
 // 2026-11-16: Workday answered most tenants with 429 from Nov 15 ~2 PM PT. Each
 // 429 slept in a Workday slot (5 s, 10 s, 15 s) and nothing ended the fetch, so
@@ -736,6 +741,7 @@ async function syncAllUsersNow() {
             jobsFetched: summary.jobsFetched,
             jobsKeptRecent: summary.jobsKeptRecent,
             deferredFeeds: summary.deferredFeeds ?? 0,
+            workdayRead: summary.workdayRead ?? 0,
           },
           { merge: true }
         );
@@ -1055,6 +1061,14 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   // The boards auto-apply works from first, so a slow run never leaves them unread.
   const FIRST = new Set(["greenhouse", "ashby", "ashbyhq", "lever"]);
   const ordered = [...feeds].sort((a, b) => (FIRST.has(String(b.source || "").toLowerCase()) ? 1 : 0) - (FIRST.has(String(a.source || "").toLowerCase()) ? 1 : 0));
+  // Workday: this run's slice, the tenants read longest ago first; a targeted sync reads all it was given.
+  const wdRef = db.collection("users").doc(userId).collection("syncState").doc("workday");
+  let wdLast = {};
+  try { wdLast = JSON.parse((await wdRef.get()).data()?.json || "{}") || {}; } catch (_) { wdLast = {}; }
+  const wdAll = feeds.filter((f) => String(f.source || "").toLowerCase() === "workday");
+  const wdPick = new Set((onlyFeedIds ? wdAll : [...wdAll].sort((a, b) => (wdLast[a.id] || 0) - (wdLast[b.id] || 0)).slice(0, WORKDAY_PER_RUN)).map((f) => f.id));
+  const wdRead = {};
+  let workdayWaiting = 0;
   fetchGate.deadline = Date.now() + Math.min(FETCH_BUDGET_MS, Math.max(30 * 1000, deadlineMs - Date.now() - 120 * 1000));
   let deferredFeeds = 0;
   const limiter = pLimit(FEED_CONCURRENCY);
@@ -1089,6 +1103,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
       const feedId = feed.id;
       const feedRef = db.collection("users").doc(userId).collection("feeds").doc(feedId);
 
+      if (String(feed.source || "").toLowerCase() === "workday" && !wdPick.has(feedId)) { workdayWaiting += 1; return; }
       if (Date.now() > fetchGate.deadline) { deferredFeeds += 1; return; }
       try {
         let url = String(feed.url || "").trim();
@@ -1200,6 +1215,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         }
 
         // Read and queued: remember the list's ETag and when it was read.
+        if (source === "workday") wdRead[feedId] = now.toMillis();
         if (!isIdSource) cacheUpdates[feedId] = { ...(cond?.etag ? { e: cond.etag } : {}), ok: now.toMillis() };
 
         // Feed docs are written only when their health changes (the feed-list
@@ -1222,6 +1238,16 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   await bw.close();
   const fetchMs = Date.now() - fetchStartMs;
   if (deferredFeeds) logger.info(`sync ${userId}: ${deferredFeeds} board(s) left for the next run (fetch time or Workday rate limit)`);
+
+  // Workday tenants read this run go to the back of the line; a 429'd one stays in front.
+  if (Object.keys(wdRead).length) {
+    try {
+      const keep = {};
+      for (const f of wdAll) if (wdRead[f.id] || wdLast[f.id]) keep[f.id] = wdRead[f.id] || wdLast[f.id];
+      await wdRef.set({ json: JSON.stringify(keep), read: Object.keys(wdRead).length, updatedAt: now });
+    } catch (err) { logger.warn(`workday rotation save failed for ${userId}: ${err?.message || err}`); }
+  }
+  logger.info(`sync ${userId}: Workday read ${Object.keys(wdRead).length}/${wdPick.size} this run (${wdAll.length} tenants)${Date.now() < fetchGate.workdayCoolUntil ? ", paused after a 429" : ""}`);
 
   // Saved after the jobs are written: a crash before this re-reads those boards in full.
   try {
@@ -1301,6 +1327,8 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
     jobsFetched,
     jobsKeptRecent,
     deferredFeeds,
+    workdayRead: Object.keys(wdRead).length,
+    workdayWaiting,
     jobsWritten,
   };
 }
