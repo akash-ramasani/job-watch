@@ -1556,6 +1556,67 @@ async function dailySummary() {
   await chrome.storage.local.set({ jwDailyReport: { at: Date.now(), parts, reasons } });
 }
 
+// ─── Workday reader ───────────────────────────────────────────────────────────
+// Workday refuses JobWatch's server (429 on nearly every call from 2026-11-15)
+// but serves Chrome, the way its own careers pages load their lists. Every 5
+// minutes this reads the first list page of the Workday companies read longest
+// ago (the server's plan, admin only), two at a time with a pause between, and
+// hands each to the server, which keeps only new US postings, asks for their
+// details, and leaves them for the sync (scored and queued like any board).
+// A 429 here stops the reader for 15 minutes.
+const WD_PAUSE_KEY = "jwWdPauseUntil";
+let wdReading = false;
+const wdSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function wdFetch(url, body) {
+  const res = await fetch(url, {
+    method: body ? "POST" : "GET",
+    credentials: "omit",
+    headers: { accept: "application/json", ...(body ? { "content-type": "application/json" } : {}), "accept-language": "en-US" },
+    body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+  return res.json();
+}
+async function wdReadTenant(t) {
+  const page = await wdFetch(`${t.apiBase}/jobs`, { appliedFacets: {}, limit: 20, offset: 0, searchText: "" });
+  const send = { action: "ingest", feedId: t.feedId, page: { total: page?.total || 0, jobPostings: Array.isArray(page?.jobPostings) ? page.jobPostings : [] } };
+  const r = await callFunction("workdayReader", send);
+  if (!r?.need?.length) return 0;
+  const details = {};
+  for (const p of r.need.slice(0, 15)) {
+    try { details[p] = (await wdFetch(`${t.apiBase}${p}`))?.jobPostingInfo || null; } catch (e) { if (e.status === 429) throw e; details[p] = null; }
+    await wdSleep(400);
+  }
+  return (await callFunction("workdayReader", { ...send, details }))?.found || 0;
+}
+async function readWorkday() {
+  if (wdReading) return;
+  wdReading = true;
+  try {
+    const { [WD_PAUSE_KEY]: pauseUntil = 0 } = await chrome.storage.local.get(WD_PAUSE_KEY);
+    if (Date.now() < pauseUntil) return;
+    const plan = await callFunction("workdayReader", { action: "plan" });
+    const list = Array.isArray(plan?.tenants) ? plan.tenants : [];
+    let i = 0, stop = false, read = 0, found = 0, failed = 0;
+    const worker = async () => {
+      while (!stop && i < list.length) {
+        const t = list[i++];
+        try { found += await wdReadTenant(t); read++; } catch (e) {
+          if (e.status === 429) { stop = true; await chrome.storage.local.set({ [WD_PAUSE_KEY]: Date.now() + 15 * 60e3 }); } else failed++;
+        }
+        await wdSleep(1000);
+      }
+    };
+    await Promise.all([worker(), worker()]);
+    if (list.length) console.log(`[JobWatch] Workday: ${read}/${list.length} companies read, ${found} new, ${failed} failed${stop ? ", paused 15 min after a 429" : ""}`);
+  } finally { wdReading = false; }
+}
+chrome.alarms.get("jwWorkday", (a) => { if (!a) chrome.alarms.create("jwWorkday", { delayInMinutes: 1, periodInMinutes: 5 }); });
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === "jwWorkday") readWorkday().catch((e) => console.warn("[JobWatch] Workday reader:", e.message));
+});
+
 chrome.alarms.get("jwMailScan", (a) => { if (!a) chrome.alarms.create("jwMailScan", { delayInMinutes: 2, periodInMinutes: 30 }); });
 chrome.alarms.get("jwDaily", (a) => { if (!a) chrome.alarms.create("jwDaily", { when: next8pm(), periodInMinutes: 24 * 60 }); });
 chrome.alarms.onAlarm.addListener((a) => {

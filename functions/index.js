@@ -1069,6 +1069,21 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   const wdPick = new Set((onlyFeedIds ? wdAll : [...wdAll].sort((a, b) => (wdLast[a.id] || 0) - (wdLast[b.id] || 0)).slice(0, WORKDAY_PER_RUN)).map((f) => f.id));
   const wdRead = {};
   let workdayWaiting = 0;
+  // 2026-11-18: Workday refuses the sync's server-side client (429 on nearly
+  // every call), so the person's Chrome reads it (exports.workdayReader) and new
+  // postings wait in users/{uid}/workdayInbox. While Chrome has read in the last
+  // 30 minutes the sync takes Workday jobs from the inbox and calls Workday not at all.
+  const readerAt = (await db.collection("system").doc("workdayReader").get().catch(() => null))?.data?.()?.lastRunAt?.toMillis?.() || 0;
+  const wdLocal = !onlyFeedIds && readerAt > Date.now() - 30 * 60 * 1000;
+  const wdInbox = new Map();
+  let inboxDocs = [];
+  if (wdLocal) {
+    inboxDocs = (await db.collection("users").doc(userId).collection("workdayInbox").orderBy("at").limit(300).get()).docs;
+    for (const d of inboxDocs) {
+      const x = d.data();
+      wdInbox.set(x.feedId, [...(wdInbox.get(x.feedId) || []), ...(Array.isArray(x.jobs) ? x.jobs : [])]);
+    }
+  }
   fetchGate.deadline = Date.now() + Math.min(FETCH_BUDGET_MS, Math.max(30 * 1000, deadlineMs - Date.now() - 120 * 1000));
   let deferredFeeds = 0;
   const limiter = pLimit(FEED_CONCURRENCY);
@@ -1103,7 +1118,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
       const feedId = feed.id;
       const feedRef = db.collection("users").doc(userId).collection("feeds").doc(feedId);
 
-      if (String(feed.source || "").toLowerCase() === "workday" && !wdPick.has(feedId)) { workdayWaiting += 1; return; }
+      if (String(feed.source || "").toLowerCase() === "workday" && (wdLocal ? !wdInbox.has(feedId) : !wdPick.has(feedId))) { workdayWaiting += 1; return; }
       if (Date.now() > fetchGate.deadline) { deferredFeeds += 1; return; }
       try {
         let url = String(feed.url || "").trim();
@@ -1136,7 +1151,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
         // cutoff below does not apply to them.
         const idSourceArgs = { userId, feedId, url, now, runBudget: idSourceRunBudget };
         const rawJobs = source === "workday"
-          ? await fetchWorkdayNewJobs(idSourceArgs)
+          ? (wdLocal ? wdInbox.get(feedId) || [] : await fetchWorkdayNewJobs(idSourceArgs))
           : source === "oracle"
             ? await fetchOracleNewJobs(idSourceArgs)
             : BOARD_SOURCES.has(source)
@@ -1237,6 +1252,12 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
   fetchGate.deadline = Infinity; // scoring's description fetches are not board reads
   await bw.close();
   const fetchMs = Date.now() - fetchStartMs;
+  // Inbox postings are written now (bw.close above): drop them.
+  if (inboxDocs.length) {
+    const del = db.batch();
+    for (const d of inboxDocs) del.delete(d.ref);
+    await del.commit().catch((err) => logger.warn(`workday inbox cleanup failed for ${userId}: ${err?.message || err}`));
+  }
   if (deferredFeeds) logger.info(`sync ${userId}: ${deferredFeeds} board(s) left for the next run (fetch time or Workday rate limit)`);
 
   // Workday tenants read this run go to the back of the line; a 429'd one stays in front.
@@ -1247,7 +1268,7 @@ async function syncUserRecentJobs({ userId, now, recentCutoff, onlyFeedIds = nul
       await wdRef.set({ json: JSON.stringify(keep), read: Object.keys(wdRead).length, updatedAt: now });
     } catch (err) { logger.warn(`workday rotation save failed for ${userId}: ${err?.message || err}`); }
   }
-  logger.info(`sync ${userId}: Workday read ${Object.keys(wdRead).length}/${wdPick.size} this run (${wdAll.length} tenants)${Date.now() < fetchGate.workdayCoolUntil ? ", paused after a 429" : ""}`);
+  logger.info(`sync ${userId}: Workday ${wdLocal ? `from the Mac reader: ${inboxDocs.length} inbox doc(s)` : `read ${Object.keys(wdRead).length}/${wdPick.size}`} this run (${wdAll.length} tenants)${Date.now() < fetchGate.workdayCoolUntil ? ", paused after a 429" : ""}`);
 
   // Saved after the jobs are written: a crash before this re-reads those boards in full.
   try {
@@ -1953,7 +1974,10 @@ function ageDaysFromIsoDate(isoDate, now) {
  * Workday adapter. Returns [{ reqId, list, detail, careerUrl }] for
  * normalizeJobMinimal.
  */
-async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget, harvest = null }) {
+// provided = { page, details, need }: the person's Chrome read Workday (workdayReader):
+// page is the first list page ({ total, jobPostings }), details maps externalPath to
+// jobPostingInfo; a detail not given is left unseen and its path added to need.
+async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget, harvest = null, provided = null }) {
   const maxAge = harvest ? harvest.maxAgeDays : ID_SOURCE_MAX_AGE_DAYS;
   const parsed = parseWorkdayFeedUrl(url);
   if (!parsed) throw new Error(`Not a Workday career site URL: ${url}`);
@@ -1964,10 +1988,12 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget, harves
     label: `Workday ${parsed.tenant}/${parsed.site}`,
     pageSize: WORKDAY_PAGE_SIZE,
     fetchPage: async (offset) => {
-      const page = await workdayFetchJson(`${parsed.apiBase}/jobs`, {
-        method: "POST",
-        body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: "" },
-      });
+      const page = provided
+        ? (offset === 0 ? provided.page : { jobPostings: [], total: provided.page?.total })
+        : await workdayFetchJson(`${parsed.apiBase}/jobs`, {
+          method: "POST",
+          body: { appliedFacets: {}, limit: WORKDAY_PAGE_SIZE, offset, searchText: "" },
+        });
       const rows = (Array.isArray(page?.jobPostings) ? page.jobPostings : []).map((raw) => ({
         id: workdayReqIdFromRow(raw),
         ageDays: parseWorkdayPostedAgeDays(raw.postedOn),
@@ -1977,6 +2003,11 @@ async function fetchWorkdayNewJobs({ userId, feedId, url, now, runBudget, harves
       return { rows, total: page?.total };
     },
     fetchDetail: async (row) => {
+      if (provided) {
+        const p = row.raw.externalPath;
+        if (!Object.prototype.hasOwnProperty.call(provided.details || {}, p)) { provided.need.push(p); throw deferErr("detail not read yet"); }
+        return provided.details[p] || null;
+      }
       const d = await workdayFetchJson(`${parsed.apiBase}${row.raw.externalPath}`);
       return d?.jobPostingInfo || null;
     },
@@ -5445,6 +5476,58 @@ exports.sweepApplications = onSchedule(
 
 // The Applications page's tab counts for the extension's popup, so the two
 // always agree (the popup kept its own counts: "120 ready" with none on the page).
+/**
+ * Workday from the person's Chrome (extension background.js readWorkday). Workday
+ * refuses the sync's server-side client (429 on nearly every call from 2026-11-15)
+ * but serves a real browser, the way its own careers pages load. Admin only (the
+ * feeds are the admin's; other users get the jobs through scoring).
+ *   { action: "plan" } -> { tenants: [{ feedId, apiBase }] }, the longest unread first
+ *   { action: "ingest", feedId, page, details? } -> { need: [externalPath] } while details
+ *     are missing, else { found }; new postings go to users/{uid}/workdayInbox for the sync.
+ */
+const WORKDAY_BROWSER_PER_ROUND = 80;
+exports.workdayReader = onCall({ region: REGION, maxInstances: 10, memory: "512MiB", timeoutSeconds: 60 }, async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Login required.");
+  if (uid !== ADMIN_UID) return { tenants: [] };
+  const data = request.data || {};
+  const wdRef = db.collection("users").doc(uid).collection("syncState").doc("workday");
+  if (data.action === "plan") {
+    const [feeds, st] = await Promise.all([loadActiveFeeds(uid), wdRef.get()]);
+    let last = {};
+    try { last = JSON.parse(st.data()?.json || "{}") || {}; } catch (_) { last = {}; }
+    const tenants = feeds
+      .filter((f) => String(f.source || "").toLowerCase() === "workday")
+      .map((f) => ({ feedId: f.id, parsed: parseWorkdayFeedUrl(f.url) }))
+      .filter((t) => t.parsed)
+      .sort((a, b) => (last[a.feedId] || 0) - (last[b.feedId] || 0))
+      .slice(0, WORKDAY_BROWSER_PER_ROUND)
+      .map((t) => ({ feedId: t.feedId, apiBase: t.parsed.apiBase }));
+    return { tenants };
+  }
+  if (data.action !== "ingest") throw new HttpsError("invalid-argument", "Unknown action.");
+  const feedId = String(data.feedId || "");
+  const feedSnap = await db.collection("users").doc(uid).collection("feeds").doc(feedId).get();
+  if (!feedSnap.exists || String(feedSnap.data().source || "").toLowerCase() !== "workday") throw new HttpsError("not-found", "No such Workday feed.");
+  const page = data.page && typeof data.page === "object" ? { total: Number(data.page.total) || 0, jobPostings: (Array.isArray(data.page.jobPostings) ? data.page.jobPostings : []).slice(0, WORKDAY_PAGE_SIZE) } : { total: 0, jobPostings: [] };
+  const details = data.details && typeof data.details === "object" ? data.details : null;
+  const provided = { page, details: details || {}, need: [] };
+  const now = admin.firestore.Timestamp.now();
+  const jobs = await fetchWorkdayNewJobs({ userId: uid, feedId, url: String(feedSnap.data().url || "").trim(), now, runBudget: { remaining: ID_SOURCE_MAX_NEW_PER_FEED }, provided });
+  if (jobs.length) await db.collection("users").doc(uid).collection("workdayInbox").add({ feedId, jobs, at: admin.firestore.FieldValue.serverTimestamp() });
+  if (provided.need.length && !details) return { need: provided.need };
+  // Read: to the back of the line, and the sync takes Workday from the inbox.
+  await db.runTransaction(async (tx) => {
+    const st = await tx.get(wdRef);
+    let last = {};
+    try { last = JSON.parse(st.data()?.json || "{}") || {}; } catch (_) { last = {}; }
+    last[feedId] = now.toMillis();
+    tx.set(wdRef, { json: JSON.stringify(last), updatedAt: now }, { merge: true });
+  });
+  await db.collection("system").doc("workdayReader").set({ lastRunAt: now, via: "chrome" }, { merge: true });
+  return { found: jobs.length };
+});
+
 exports.applicationCounts = onCall({ region: REGION, maxInstances: 10 }, async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Login required.");
@@ -5494,5 +5577,5 @@ exports.dailyAggregationReconciliation = onSchedule(
 // so Firebase's function discovery never sees it and nothing is deployed for it.
 Object.defineProperty(module.exports, "__internals", {
   enumerable: false,
-  value: { harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens, parseBoardFeedUrl, fetchBoardNewJobs, fetchJobDescription },
+  value: { fetchWorkdayNewJobs, harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens, parseBoardFeedUrl, fetchBoardNewJobs, fetchJobDescription },
 });
