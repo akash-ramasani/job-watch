@@ -618,6 +618,8 @@
     // stray pick is removed and the next name is tried.
     const STOP = /^(university|college|institute|school|of|the|and|at|for|in|de)$/;
     const fits = (term, got) => {
+      // "Other" is not "Other - Afghanistan": a country's "Other" fits only when searched by name.
+      if (/^other$/i.test(String(term).trim()) && /^other\s*[-–]\s*\S/i.test(String(got).trim())) return false;
       const g = ` ${nrm(got).replace(/[^a-z0-9]+/g, " ")} `;
       const words = nrm(term).replace(/[^a-z0-9]+/g, " ").split(" ").filter((w) => w.length >= 2 && !STOP.test(w));
       // A short word must be whole: "KL" is not "KLE" (CrowdStrike got "KLE

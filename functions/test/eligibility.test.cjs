@@ -166,3 +166,7 @@ test("form questions: a required US-citizen confirmation or a US-person-only pic
   assert.deepStrictEqual(formEligibility([sel("Please confirm", ["US Citizen", "Lawful Permanent Resident", "Qualifying Asylee"], false)]), []);
   assert.deepStrictEqual(formEligibility([sel("Are you legally authorized to work in the United States?", ["Yes", "No"])]), []);
 });
+
+test("a badge required in the title is a clearance (Element 84, 2026-11-19)", () => {
+  assert.deepEqual(require("../lib/eligibility.cjs").eligibilityOf("Senior DevOps Engineer, Cloud & HPC (NOAA badge required). Build things.").flags, ["clearance"]);
+});

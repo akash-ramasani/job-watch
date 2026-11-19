@@ -141,6 +141,7 @@
   const fillResults = {}; // path -> { ok, error, picked, value, kind, source, label }
   const stepFills = [];   // the computed fills of this step
   const stepReview = [];  // what the server left for the person on this step
+  let stalledReported = false;
   let lastProgress = Date.now(); // the last trace: the watchdog acts on a tab that went quiet
   let currentWork = "";          // what the fill is doing now (for a fill that runs too long)
   let busySince = 0;
@@ -244,7 +245,10 @@
       // Two other names at most, then "Other" (the school's name then goes in
       // the box Workday opens for it): trying every spelling, pass after pass,
       // kept Cisco on KL University for minutes (2026-11-11).
-      const alts = [...[...(ed.aliases || []), ed.school.replace(/[,.]/g, " ").replace(/\s+/g, " ").trim()].filter((x, i, a) => x && a.indexOf(x) === i && nrm(x) !== nrm(ed.school)).slice(0, 2), "Other"];
+      // Workday's "Other" is one per country ("Other - Afghanistan" came first
+      // for KL University, Trimble, 2026-11-19): the school's own country first.
+      const country = ed.country || (/b\.?\s?tech|bachelor of technology|\bb\.?e\.?\b|bachelor of engineering|m\.?\s?tech|\b(iit|nit|iiit|bits)\b|kl university|koneru|jntu|anna university|vit\b|osmania|andhra|telangana/i.test(`${ed.school} ${ed.degree}`) ? "India" : "");
+      const alts = [...[...(ed.aliases || []), ed.school.replace(/[,.]/g, " ").replace(/\s+/g, " ").trim()].filter((x, i, a) => x && a.indexOf(x) === i && nrm(x) !== nrm(ed.school)).slice(0, 2), ...(country ? [`Other - ${country}`] : []), "Other"];
       return mk(field.type === "typeahead" || field.widget === "typeahead" ? "typeahead" : "text", ed.school, { match: ed.school, alternates: alts });
     }
     if (/^degree$|degree type|degree/.test(l)) {
@@ -750,7 +754,7 @@
       const u = new URL(url);
       const m = u.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/i);
       if (m) return m[1].toLowerCase();
-      const p = u.pathname.split("/").filter(Boolean);
+      const p = u.pathname.split("/").filter(Boolean).filter((x, i) => !(i === 0 && /^[a-z]{2}-[A-Z]{2}$/.test(x)));
       return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
     } catch { return ""; }
   }
@@ -820,6 +824,11 @@
       if (i > 5 && await gen("onReviewStep").catch(() => false)) {
         const errs = await gen("errors").catch(() => []);
         const said = (await gen("workdayAuthState").catch(() => ({ errors: [] }))).errors;
+        // Workday's "Errors Found … Answer all required questions" banner on
+        // Review (Equinix waited out the 40 seconds, 2026-11-19).
+        const page = (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText || "";
+        const banner2 = page.match(/errors? found[\s\S]{0,40}?(answer all required questions[^\n]*|[^\n]*required[^\n]*)/i);
+        if (banner2) said.push(banner2[1].trim());
         if (errs.length || said.length) {
           trace("submit", { refused: true, errors: errs, banner: said });
           return autoReport("needs_attention", `pressed Submit; Workday refused: ${[...said, ...errs.map((e) => e.text)].join(" ").slice(0, 200)}`);
@@ -1179,7 +1188,16 @@
         text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.replace(/\s+/g, " ").slice(-1500) });
     }
     if (!AUTO || !isWorkday || busy || stopped || Date.now() - lastProgress < 60000) return;
-    if (onApplyFlow() && await gen("workdayInApp").catch(() => false)) return;
+    if (onApplyFlow() && await gen("workdayInApp").catch(() => false)) {
+      // On the application but nothing recorded for 6 minutes: end it now so it
+      // is tried again, not left for the 25-minute timeout.
+      if (Date.now() - lastProgress > 6 * 60000 && !stalledReported) {
+        stalledReported = true; stopped = true;
+        trace("idle", { stalled: true, step: lastStep, url: location.href.slice(0, 300), text: (document.querySelector("[data-automation-id=applyFlowPage]") || document.body).innerText.replace(/\s+/g, " ").slice(0, 1500) });
+        return autoReport("error", `no progress for 6 minutes on ${lastStep || "the application"}; will try again`);
+      }
+      return;
+    }
     const mem = authMem();
     mem.nudges = (mem.nudges || 0) + 1;
     authSave(mem);
@@ -1218,6 +1236,7 @@
     await tick();
     let lastUrl = location.href;
     let quietUntil = 0;
+    let waitSince = 0;
     const obs = new MutationObserver(() => { quietUntil = Date.now() + 1200; });
     obs.observe(document.documentElement, { childList: true, subtree: true });
     const t0 = Date.now();
@@ -1225,7 +1244,12 @@
       if (stopped || Date.now() - t0 > 90 * 60 * 1000) { clearInterval(timer); obs.disconnect(); return; }
       if (location.href !== lastUrl) { lastUrl = location.href; quietUntil = Date.now() + 1500; }
       watchdog().catch(() => {}); // also while a fill runs: it reports a fill that runs too long
-      if (Date.now() < quietUntil || busy) return;
+      if (busy) return;
+      // A page that never stops changing (a spinner or a ticking banner) held
+      // every tick back until the 25-minute timeout (Truist, WGU, 2026-11-19):
+      // after 10 seconds of waiting for quiet, go on anyway.
+      if (Date.now() < quietUntil) { waitSince = waitSince || Date.now(); if (Date.now() - waitSince < 10000) return; }
+      waitSince = 0;
       tick();
     }, 1500);
   })();

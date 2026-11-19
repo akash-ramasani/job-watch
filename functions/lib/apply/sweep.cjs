@@ -37,6 +37,9 @@ const PERSON_ONLY = [
   [/work sample|writing sample|portfolio (link|upload)/i, "a work sample"],
   [/\bvideo\b|voice recording/i, "a video"],
   [/assessment|coding challenge|take.?home|captcha/i, "an assessment"],
+  // A badge or clearance the profile does not hold (Element 84's NOAA CAC
+  // badge, retried six times, 2026-11-19).
+  [/\b(cac|badge|security clearance|polygraph)\b[^|]{0,80}\b(expir|active|number|level|date)|\b(expir|active)\w*[^|]{0,40}\b(cac|badge|clearance)\b/i, "a badge or clearance"],
   // Workday sent the tab to the company's own careers site (PayPal:
   // careers.pypl.com, 2026-11-13); auto-apply fills Workday forms only.
   [/tab left workday for https?:\/\/(?![^\s]*(myworkday|workday\.com))/i, "the company's own careers site"],

@@ -112,7 +112,11 @@ test("undergraduate and graduate GPA come from the matching school", () => {
 test("minimum age and basic job requirements are Yes (Equinix, KLA, 2026-11-19)", () => {
   assert.equal(ae.classifyQuestion(sel("Do you meet the minimum age requirement for unrestricted employment in the country for which you are applying?", ["Yes", "No"])), "age18");
   assert.equal(val(sel("Do you meet the minimum age requirement for unrestricted employment in the country for which you are applying?", ["Yes", "No"])), "Yes");
-  assert.notEqual(ae.classifyQuestion(sel("If you do not meet the minimum age requirement for unrestricted employment in the country for which you are applying, do you have the relevant work authorization?", ["Yes", "No"])), "age18");
   assert.equal(ae.classifyQuestion(sel("Do you have at least the basic job requirements listed for this position on the posted job description?", ["Yes", "No"])), "meetsQualifications");
   assert.equal(val(sel("Do you have at least the basic job requirements listed for this position on the posted job description?", ["Yes", "No"])), "Yes");
+});
+
+test("the minimum-age follow-up is Yes for an adult (Equinix, 2026-11-19)", () => {
+  assert.equal(val(sel("If you do not meet the minimum age requirement for unrestricted employment in the country for which you are applying, do you have the relevant work authorization?", ["Yes", "No"])), "Yes");
+  assert.equal(ae.classifyQuestion(sel("Are you currently authorized for employment in the U.S. without any restrictions to the length of employment period?", ["Yes", "No"])), "unrestrictedAuth");
 });

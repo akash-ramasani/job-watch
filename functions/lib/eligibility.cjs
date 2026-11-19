@@ -72,7 +72,7 @@ const PHRASES = {
     // "Security Clearance: Active U.S. TS/SCI clearance with Full Scope Poly" (Okta, 2026-11-10).
     re(`\\b(?:security )?clearance(?: level| requirement| required)?:\\s*(?:an? )?(?:active |current )?(?:us |u\\.s\\. )?(?:ts\\/sci|top secret|secret)\\b`),
     // The title's tag: "Senior Software Engineer (TS/SCI)", "(Top Secret w/ Poly)", "(Secret Clearance)".
-    re(`\\((?:[^)]{0,20}\\b)?(?:ts\\/sci|top secret|secret clearance|clearance required)\\b[^)]{0,40}\\)`),
+    re(`\\((?:[^)]{0,20}\\b)?(?:ts\\/sci|top secret|secret clearance|clearance required|(?:noaa |cac |dod |government |federal )?badge required)\\b[^)]{0,40}\\)`),
   ],
   no_sponsorship: [
     re(`\\b(?:unable|not able|cannot|can ?not|can't|won't|will not|do not|does not|don't|doesn't|is not|are not|aren't|isn't|must not|should not)\\b[^.;]{0,70}\\bsponsor(?:ship|ing)?\\b`),

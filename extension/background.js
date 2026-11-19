@@ -613,7 +613,7 @@ async function autoLeverThanks(tabId, url) {
 
 const AUTO_KEY = "jwAuto";
 const AUTO_JOB_TIMEOUT_MS = 15 * 60 * 1000;
-const PERSON_ONLY = /assessment|reference #|references|transcript|refuses the saved workday password|cover letter|portfolio upload|writing sample/i;
+const PERSON_ONLY = /assessment|reference #|references|transcript|refuses the saved workday password|cover letter|portfolio upload|writing sample|\b(cac|badge|security clearance)\b/i;
 const WORKDAY_DOWN = /workday is currently unavailable|workday[-_ ]maintenance|application system maintenance|down for (scheduled )?maintenance/i;
 const WORKDAY_JOB_TIMEOUT_MS = 25 * 60 * 1000; // account, verification email and five or six steps
 const WORKDAY_MAX_REVIEW = 5; // Workday applications waiting on Review before more start
@@ -1089,6 +1089,13 @@ async function autoTick() {
       else if (j.source === "workday" && j.tabId && Date.now() - j.startedAt > 60000 && await chrome.tabs.get(j.tabId).then((t) => /^https?:/.test(t.url || "") && !/myworkday(jobs|site)?\.com|myworkday\.com/i.test(t.url || "") && !/mail\.google\.com/.test(t.url || "")).catch(() => false)) {
         const tab = await chrome.tabs.get(j.tabId).catch(() => ({}));
         const gone = /\b404\b|not found|no longer (available|accepting)|page (you|cannot)|doesn.t exist|expired|closed/i.test(`${tab.title || ""} ${tab.url || ""}`);
+        // Sent to the company's careers home after signing in (PayPal went to
+        // careers.pypl.com three times, 2026-11-19): back to the application once.
+        if (!gone && !j.leftRetried && j.applyUrl) {
+          await withAutoLock(async () => { const st = await autoState(); const r = st.running.find((x) => x.jobId === j.jobId); if (r) { r.leftRetried = true; r.startedAt = Date.now(); } await saveAuto(st); });
+          await chrome.tabs.update(j.tabId, { url: j.applyUrl }).catch(() => {});
+          continue;
+        }
         const note = gone ? `job closed: Workday sent the tab to ${String(tab.url || "").slice(0, 100)}` : `the tab left Workday for ${String(tab.url || "").slice(0, 100)} (${String(tab.title || "").slice(0, 60)})`;
         try {
           const { idToken, uid } = await getFreshToken();
@@ -1409,7 +1416,8 @@ const workdayTenantOf = (url) => {
     const u = new URL(url);
     const m = u.hostname.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/i);
     if (m) return m[1].toLowerCase();
-    const p = u.pathname.split("/").filter(Boolean);
+    // "/en-US/recruiting/paypal/..." after Workday's sign-in (PayPal, 2026-11-19).
+    const p = u.pathname.split("/").filter(Boolean).filter((x, i) => !(i === 0 && /^[a-z]{2}-[A-Z]{2}$/.test(x)));
     return /myworkdaysite\.com$/i.test(u.hostname) && p[0] === "recruiting" ? String(p[1] || "").toLowerCase() : "";
   } catch { return ""; }
 };
