@@ -788,11 +788,17 @@
     banner("Auto-apply: checking every answer once more before Submit…");
     const chk = await sendMsg({ type: "REVIEW_FORM", items, jobTitle: header.jobTitle || "", companyName: header.companyName || "" });
     trace("precheck", { items: items.length, ok: !!chk?.ok, error: chk?.error || "", issues: chk?.issues || [] });
-    if (!chk?.ok) return autoReport("review", `filled to Review; not submitted: the answer check failed (${String(chk?.error || "no reply").slice(0, 120)})`);
-    if ((chk.issues || []).length) {
-      const say = chk.issues.slice(0, 3).map((i) => `${String(i.question).slice(0, 80)}: ${String(i.problem).slice(0, 120)}`).join("; ");
-      banner(`Auto-apply did not submit: ${say}`);
-      return autoReport("review", `filled to Review; not submitted, check: ${say}`);
+    // Not submitted: tried again later (30 min, then 2 h) in a fresh tab, so
+    // the tab does not stay open and Workday keeps going (15 tabs were left
+    // open on Review, 2026-11-19).
+    if (!chk?.ok) return autoReport("needs_attention", `filled to Review; not submitted: the answer check failed (${String(chk?.error || "no reply").slice(0, 120)})`);
+    // Only a clearly wrong answer holds Submit; a "check" (a start date of
+    // "1 Week", a past job's "Remote") is noted, not a reason to stop.
+    const wrong = (chk.issues || []).filter((i) => i.severity !== "check");
+    if (wrong.length) {
+      const say = wrong.slice(0, 3).map((i) => `${String(i.question).slice(0, 80)}: ${String(i.problem).slice(0, 120)}`).join("; ");
+      banner(`Auto-apply did not submit: ${say}. It will try again later.`);
+      return autoReport("needs_attention", `filled to Review; not submitted, wrong answer: ${say}`);
     }
     if (await gen("submitted").catch(() => false)) return autoReport("review", "filled to Review; not submitted: the page already reads as submitted, check it");
     await sendMsg({ type: "WORKDAY_FOCUS" });

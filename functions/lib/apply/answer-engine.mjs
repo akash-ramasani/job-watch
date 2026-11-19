@@ -353,6 +353,9 @@ function classify(label, kind = "") {
   // (U.S. Bank): a status question; OPT is authorized but time-limited. Also
   // "the unrestricted right to work" (Salesforce) and "on a fulltime and
   // indefinite basis" (Analog Devices), both answered Yes, 2026-11-11/12.
+  // "Do you meet the minimum age requirement for unrestricted employment...?"
+  // (Equinix got "No", 2026-11-19; read before the unrestricted-work rule); not its follow-up "If you do not meet...".
+  if (choice && /\b(meet|satisfy|are you of)\b.{0,20}\b(minimum|legal) (working )?age\b/.test(l) && !/\bif (you )?(do )?not\b|\bif no\b/.test(l)) return "age18";
   if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under|hold(ing)?) (a |any )?(non.?immigrant|visa)|you must answer .{0,3}no.{0,3} if you (are|hold|have)|unrestricted (right to work|work|employment)|permanent(ly)? authori[sz]ed to work|(authori[sz]ed|eligible|right) to work .{0,60}\b(indefinite(ly)?|on a permanent basis|permanently)\b/.test(l) && !/veteran|^(in )?(what|which) countr/.test(l)) return "unrestrictedAuth";
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
@@ -422,7 +425,9 @@ function classify(label, kind = "") {
   // "Do you meet all of the Basic Qualifications for this role?" (Capital One
   // got the AI's "No", 2026-11-12): auto-apply only applies to jobs whose
   // requirements the resume was scored against.
-  if (choice && /\b(meet|possess|have|satisfy)\b.{0,25}\b(basic|minimum|required|stated|listed) (qualifications|requirements)\b/.test(l) && !/preferred/.test(l)) return "meetsQualifications";
+  // "Do you have at least the basic job requirements listed..." (KLA got the
+  // AI's "No", 2026-11-19): a word may sit between the kind and "requirements".
+  if (choice && /\b(meet|possess|have|satisfy)\b.{0,25}\b(basic|minimum|required|stated|listed)( (job|position|role))? (qualifications|requirements)\b/.test(l) && !/preferred|\bage\b/.test(l)) return "meetsQualifications";
   // Office, onsite, hybrid and travel arrangements are willingness questions,
   // not skills ("Are you comfortable with our in-office policy?" got No).
   if (choice && !/\b(office|onsite|on-site|in.?person|hybrid|remote|relocat|commut|travel|days? (a|per) week|schedule|shift|weekends?)\b/.test(l) && (/do you have (a )?(minimum|at least|more than|over)\b/.test(l) || /\b\d+\+? (or more )?(years?|yrs) (of )?.{0,40}experience/.test(l)

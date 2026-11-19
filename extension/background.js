@@ -692,6 +692,14 @@ async function autoState() {
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
   // A form left on Review a day ago is the server's record now (the popup's
   // count comes from it); kept here it held 120 "ready" with none on the page.
+  // Held on Review by the answer check before 1.12.39 (KLA, Equinix, Booz
+  // Allen, 2026-11-19; their tabs stayed open and stopped new Workday jobs):
+  // tried once more now, with the fixed answers, in a fresh tab.
+  for (const r of Object.values(out.results)) {
+    if (r.status !== "review" || !/not submitted(, check|: the answer check failed)/.test(r.note || "")) continue;
+    if (r.tabId) chrome.tabs.remove(r.tabId).catch(() => {});
+    Object.assign(r, { status: "needs_attention", tabId: null, dueNow: true });
+  }
   for (const [id, r] of Object.entries(out.results)) if ((["submitted", "skipped"].includes(r.status) || (r.status === "review" && !r.tabId)) && (r.at || 0) < dayAgo) delete out.results[id];
   return out;
 }
