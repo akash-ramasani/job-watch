@@ -120,3 +120,7 @@ test("the minimum-age follow-up is Yes for an adult (Equinix, 2026-11-19)", () =
   assert.equal(val(sel("If you do not meet the minimum age requirement for unrestricted employment in the country for which you are applying, do you have the relevant work authorization?", ["Yes", "No"])), "Yes");
   assert.equal(ae.classifyQuestion(sel("Are you currently authorized for employment in the U.S. without any restrictions to the length of employment period?", ["Yes", "No"])), "unrestrictedAuth");
 });
+
+test("unrestricted legal authorization is No on OPT (Equinix, 2026-11-19)", () => {
+  assert.equal(val(sel("Do you have the unrestricted legal authorization to work in the country for which you are applying?", ["Yes", "No"])), "No");
+});

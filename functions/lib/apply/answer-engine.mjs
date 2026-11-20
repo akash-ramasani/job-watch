@@ -358,7 +358,7 @@ function classify(label, kind = "") {
   if (choice && /\b(meet|satisfy|are you of)\b.{0,20}\b(minimum|legal) (working )?age\b/.test(l) && !/\bif (you )?(do )?not\b|\bif no\b/.test(l)) return "age18";
   // Its follow-up, for minors with a work permit: an adult answers Yes (No read as not authorized).
   if (choice && /\bif (you )?(do )?not meet the (minimum|legal) (working )?age\b/.test(l)) return "age18";
-  if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under|hold(ing)?) (a |any )?(non.?immigrant|visa)|you must answer .{0,3}no.{0,3} if you (are|hold|have)|unrestricted (right to work|work|employment)|permanent(ly)? authori[sz]ed to work|(authori[sz]ed|eligible|right) to work .{0,60}\b(indefinite(ly)?|on a permanent basis|permanently)\b/.test(l) && !/veteran|^(in )?(what|which) countr/.test(l)) return "unrestrictedAuth";
+  if (/without (any )?restrictions? (to|on|as to) the length|answer .{0,3}no.{0,3} if you are (in|on|under|hold(ing)?) (a |any )?(non.?immigrant|visa)|you must answer .{0,3}no.{0,3} if you (are|hold|have)|unrestricted (legal )?(right to work|work|employment|authori[sz]ation to work|work authori[sz]ation)|permanent(ly)? authori[sz]ed to work|(authori[sz]ed|eligible|right) to work .{0,60}\b(indefinite(ly)?|on a permanent basis|permanently)\b/.test(l) && !/veteran|^(in )?(what|which) countr/.test(l)) return "unrestrictedAuth";
   // "Authorized to work WITHOUT sponsorship" combines work auth AND sponsorship
   // need. Must be resolved from both fields, never from workAuthorized alone.
   // "Are you eligible / able / legally permitted to work … without sponsorship?"

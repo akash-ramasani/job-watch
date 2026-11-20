@@ -716,31 +716,47 @@
     let end = lines.findIndex((l, i) => i > start && END.test(l));
     if (end < 0) end = lines.length;
     const body = lines.slice(start, end).filter((l) => !HEAD.test(l) && !/^(completed|current) step/i.test(l));
-    // A required question ends with "*"; its answer is the line after it.
-    // An unmarked line is an optional question, its answer the next line.
+    // A required question ends with "*"; its answer is the line(s) after it.
+    // A question may run over several lines before its "*" (Nike's "close
+    // personal relationship" question lists i., ii., iii.; read one line at a
+    // time, "i. Immediate family…" was judged with "ii. Person in a romantic
+    // relationship" as its answer and Submit was held, 2026-11-19).
+    const asks = (t) => /[?:]\s*$/.test(t);
+    const listItem = (t) => /^\(?([0-9]{1,2}|[ivx]{1,4}|[a-h])[.)]\s/i.test(t);
+    const qWord = /^(if|please|do|did|are|have|has|will|would|what|which|how|when|why|where|under|in the past)\b/i;
     const items = [];
+    let pending = [];
+    // Lines before a "*" that hold an optional question and its answer ("Please
+    // explain …?" then "No Response"): their own item, not part of the next question.
+    const flushOptional = () => {
+      const keep = [];
+      for (let k = 0; k < pending.length; k++) {
+        const q = pending[k], a = pending[k + 1];
+        if (a != null && /^no response$/i.test(a) && !/^no response$/i.test(q)) { items.push({ question: q, answer: "", required: false }); k++; keep.length = 0; continue; }
+        if (a != null && asks(q) && !asks(a) && a.length <= 40 && !listItem(a) && !qWord.test(a)) { items.push({ question: q, answer: a, required: false }); k++; keep.length = 0; continue; }
+        keep.push(q);
+      }
+      pending = keep;
+    };
     for (let i = 0; i < body.length; i++) {
       const line = body[i];
-      const next = body[i + 1];
-      if (next == null || /\*$/.test(next)) continue; // a question with no answer line, or a stray line
-      // Prose between questions ("Thank you for sharing your information!")
-      // when a question follows it: skip it, or every pair after shifts.
-      const asks = (t) => /[?:]\s*$/.test(t);
-      if (!/\*$/.test(line) && !asks(line) && asks(next)) continue;
-      // A select-all answer is one choice per line ("Evenings", "Weekends",
-      // "Overnight" at Target, read as a question "Weekends" -> "Overnight"):
-      // short lines that do not read as a question belong to the answer.
-      const parts = [next];
-      i++;
-      if (/\*$/.test(line)) {
-        while (i + 1 < body.length) {
-          const t = body[i + 1];
-          if (/\*$/.test(t) || asks(t) || t.length > 40 || /^(if|please|do|did|are|have|has|will|would|what|which|how|when|why|where)\b/i.test(t)) break;
-          parts.push(t); i++;
-        }
+      if (!/\*$/.test(line)) { pending.push(line); continue; }
+      flushOptional();
+      const question = [...pending, line.replace(/\*$/, "")].join(" ").replace(/\s+/g, " ").trim();
+      pending = [];
+      // The answer: the next line, plus short lines after it that are choices
+      // of a select-all ("Evenings", "Weekends", Target).
+      const parts = [];
+      while (i + 1 < body.length) {
+        const t = body[i + 1];
+        if (/\*$/.test(t)) break;
+        if (parts.length && (asks(t) || t.length > 40 || qWord.test(t) || listItem(t))) break;
+        parts.push(t); i++;
+        if (asks(t)) break;
       }
-      items.push({ question: line.replace(/\*$/, "").trim(), answer: parts.join(", "), required: /\*$/.test(line) });
+      items.push({ question, answer: parts.join(", "), required: true });
     }
+    flushOptional();
     return items.slice(0, 120);
   }
 
