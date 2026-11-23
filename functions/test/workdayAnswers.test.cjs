@@ -124,3 +124,12 @@ test("the minimum-age follow-up is Yes for an adult (Equinix, 2026-11-19)", () =
 test("unrestricted legal authorization is No on OPT (Equinix, 2026-11-19)", () => {
   assert.equal(val(sel("Do you have the unrestricted legal authorization to work in the country for which you are applying?", ["Yes", "No"])), "No");
 });
+
+test("salary as ranges with currency boxes picks USD and the range for the hourly rate as a year (Storyblok, 2026-11-23)", () => {
+  const labels = ["EUR", "GBP", "USD", "20,000 to 30,000", "50,000 to 70,000", "100,000 to 120,000", "120,000 to 150,000", "More than 150,000"];
+  const q = { label: "Could you please share your salary expectations for this role? Kindly provide the amount in one of the following currencies: EUR, USD, or GBP.", required: true,
+    fields: [{ name: "q[]", type: "multi_value_multi_select", values: labels.map((l) => ({ label: l, value: l })) }] };
+  assert.deepEqual(ae.answerQuestion(q, { hourlyRate: "75" }, null).answers.map((a) => a.value), ["USD", "More than 150,000"]);
+  assert.deepEqual(ae.answerQuestion(q, { salaryExpectation: "$110,000" }, null).answers.map((a) => a.value), ["USD", "100,000 to 120,000"]);
+  assert.equal(val(sel("What is your expected annual salary?", ["$80k - $100k", "$100k - $130k", "$130k - $160k", "$160k+"]), { hourlyRate: "75" }), "$130k - $160k");
+});

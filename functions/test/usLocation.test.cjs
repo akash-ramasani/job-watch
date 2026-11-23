@@ -43,3 +43,10 @@ test("remote in another country is not US remote (Smartsheet Bulgaria)", () => {
   assert.equal(keeps("Remote"), true);
   assert.equal(keeps("Remote US or Bulgaria"), true);
 });
+
+test("a remote job whose title names a non-US region is dropped (Storyblok '- Europe', 2026-11-23)", () => {
+  const job = (title, loc) => jobMatchesLocationFilter({ title, locationTokens: extractLocationTokens(loc) });
+  for (const t of ["Senior QA Engineer - Europe", "Backend Engineer (LATAM)", "Account Executive - Germany", "Software Engineer (Dublin)"]) assert.equal(job(t, "Remote"), false, t);
+  for (const t of ["Senior Engineer - Remote", "Engineer, Payments", "Senior Engineer - US", "Engineer - Americas", "Senior Engineer - Austin"]) assert.equal(job(t, "Remote"), true, t);
+  assert.equal(job("Senior QA Engineer - Europe", "New York, NY"), true);
+});

@@ -161,7 +161,7 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
     if (j.companyKey && archivedFeeds.has(j.companyKey)) continue;
     // The US filter again, as it reads today: jobs saved under an older one
     // ("-REMOTE, BULGARIA-" passed on its bare "REMOTE") are left out.
-    if (typeof locationOk === "function" && j.locationName && !locationOk(j.locationName)) continue;
+    if (typeof locationOk === "function" && j.locationName && !locationOk(j.locationName, j.title)) continue;
     const fam = Array.isArray(j.fam) ? j.fam : classifyTitle(j.title);
     if (!test && !isRelatedJob({ ...j, fam }, scores[j.id], jobTypes, { needsSponsorship: sponsorship })) continue;
     // Not scored yet (the AI is behind or down): only titles wholly in the
@@ -232,6 +232,8 @@ async function buildQueue(db, uid, { adminUid, limit = 2000, locationOk = null }
       const jobId = a.jobId || `retry|${d.id}`;
       if (a.formKey && applied.forms.has(String(a.formKey))) continue;
       const lj = a.jobId ? listed.get(String(a.jobId)) : null;
+      // The US filter on a retry too ("Senior QA Engineer - Europe", 2026-11-23).
+      if (typeof locationOk === "function" && !locationOk((lj && lj.locationName) || "Remote", a.jobTitle || (lj && lj.title) || "")) continue;
       if (lj && !isRelatedJob({ ...lj, fam: Array.isArray(lj.fam) ? lj.fam : classifyTitle(lj.title) }, scores[lj.id], jobTypes, { needsSponsorship: sponsorship })) continue;
       if (queued.has(jobId) || applied.ids.has(jobId)) continue;
       const rk = a.roleKey || ledger.roleKeyOf(a.companyName, a.jobTitle);

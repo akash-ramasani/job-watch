@@ -1896,6 +1896,35 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     if (key === "workAuthorized" && auth) return out([{ name, value: auth === "yes" ? "Yes. I am legally authorized to work in the United States." : "No." }], SOURCE.PROFILE, 1);
     if (key === "willingToWorkHybrid" && hyb) return out([{ name, value: hyb === "yes" ? "Yes. I can work on-site as the role requires." : "No." }], SOURCE.PROFILE, 1);
   }
+  // Salary as ranges to pick ("20,000 to 30,000" ... "More than 150,000"),
+  // with currency boxes in the same list (Storyblok: EUR / GBP / USD and the
+  // ranges as one checkbox group; the AI said it needed the person, 2026-11-23).
+  if (key === "salaryExpectation" && isSelect) {
+    const opts = primary.values || primary.options || [];
+    const digits = Number(String(profile.salaryExpectation || profile.desiredSalary || "").replace(/[^0-9]/g, "")) || 0;
+    const r = profile.jobSalaryRange;
+    const hr = Number(String(profile.hourlyRate || "").replace(/[^0-9.]/g, ""));
+    const yearly = digits >= 20000 ? digits : (r && r.hi >= r.lo && r.lo > 20000) ? Math.round((r.lo + 0.75 * (r.hi - r.lo)) / 1000) * 1000 : (hr >= 15 && hr <= 500) ? Math.round((hr * 2080) / 1000) * 1000 : 0;
+    const nums = (o) => (String(o.label).replace(/(\d)[,.](\d{3})\b/g, "$1$2").replace(/(\d+(?:\.\d+)?)\s*k\b/gi, (_, n) => String(Number(n) * 1000)).match(/\d+(?:\.\d+)?/g) || []).map(Number).filter((n) => n >= 1000);
+    const span = (o) => {
+      const xs = nums(o); const l = norm(o.label);
+      if (!xs.length) return null;
+      if (/more than|over|above|\+|or more|and up|greater/.test(l)) return [xs[0], Infinity];
+      if (/less than|under|below|up to/.test(l)) return [0, xs[0]];
+      return [xs[0], xs.length > 1 ? xs[1] : xs[0]];
+    };
+    const ranges = opts.filter((o) => span(o));
+    if (yearly && ranges.length >= 2) {
+      const hit = ranges.find((o) => { const [a, b] = span(o); return yearly >= a && yearly <= b; })
+        || (yearly > Math.max(...ranges.map((o) => span(o)[1])) ? ranges[ranges.length - 1] : null);
+      if (hit) {
+        const picks = [hit];
+        const usd = opts.find((o) => /^(usd|us ?\$|\$ ?usd|us dollars?)$/.test(norm(o.label)));
+        if (usd && kinds[0] === "multiselect") picks.unshift(usd);
+        return out(picks.map((o) => ({ name, value: o.value })), digits ? SOURCE.PROFILE : SOURCE.RULE, 0.85, `${yearly} a year${usd && picks.length > 1 ? " in USD" : ""}`);
+      }
+    }
+  }
   // A number box, or a text box asking for the amount ("Please Enter Salary
   // amount", NCR: the hourly rate "75" went in, 2026-11-11/13).
   if (key === "salaryExpectation" && (kinds[0] === "number" || /\bamount\b|\bnumber\b|numeric|in usd|\(usd\)|\$/.test(norm(label)))) {

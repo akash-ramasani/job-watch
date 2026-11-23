@@ -2942,9 +2942,21 @@ function extractStateCodes(tokens) {
   return Array.from(found);
 }
 
+// A region tag in the title of a remote job: "Senior QA Engineer - Europe",
+// "Backend Engineer (LATAM)", "Data Engineer | UK". Location just "Remote"
+// passed as US; Storyblok's Europe role was applied to 6 times (2026-11-23).
+function titleNamesNonUS(title) {
+  const parts = String(title || "").split(/\s[-–—|:]\s|[()\[\],\/]/).slice(1).map((s) => s.trim()).filter(Boolean);
+  return parts.some((p) => !US_SIGNAL_RE.test(p) && (NON_US_LOCATION_RE.test(p) || NON_US_REMOTE_RE.test(p) || FOREIGN_CITY_RE.test(p)));
+}
+
 function jobMatchesLocationFilter(job) {
   const tokens = Array.isArray(job.locationTokens) ? job.locationTokens : [];
   if (tokens.length === 0) return false;
+  if (job.title && titleNamesNonUS(job.title)) {
+    const loc = String(tokens[0] || "").replace(/[-–—_]+/g, " ");
+    if (!US_SIGNAL_RE.test(loc) && (ANYWHERE_RE.test(loc) || !loc.trim())) return false;
+  }
   // When the location names a foreign country or city (and no US wording), a
   // two-letter code in it can't make it US: "Bengaluru, IN" and
   // "IN-Bangalore-MSO" are India, not Indiana. A real US city or state named
@@ -5155,7 +5167,7 @@ exports.getAutoApplyQueue = onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new HttpsError("unauthenticated", "Login required.");
-    const [queue, userSnap] = await Promise.all([buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID, locationOk: (name) => jobMatchesLocationFilter({ locationTokens: extractLocationTokens(name) }) }), db.collection("users").doc(uid).get()]);
+    const [queue, userSnap] = await Promise.all([buildAutoApplyQueue(db, uid, { adminUid: ADMIN_UID, locationOk: (name, title) => jobMatchesLocationFilter({ title, locationTokens: extractLocationTokens(name) }) }), db.collection("users").doc(uid).get()]);
     // When the person last added a saved answer: jobs that waited on them are retried after it.
     const at = userSnap.exists ? userSnap.data()?.answersUpdatedAt : null;
     const answersUpdatedAt = at?.toMillis ? at.toMillis() : (Date.parse(at) || 0);
@@ -5577,5 +5589,5 @@ exports.dailyAggregationReconciliation = onSchedule(
 // so Firebase's function discovery never sees it and nothing is deployed for it.
 Object.defineProperty(module.exports, "__internals", {
   enumerable: false,
-  value: { fetchWorkdayNewJobs, harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, extractLocationTokens, parseBoardFeedUrl, fetchBoardNewJobs, fetchJobDescription },
+  value: { fetchWorkdayNewJobs, harvestFeedJobs, loadActiveFeeds, jobTypesFor, ADMIN_UID, fetchJobsFromFeed, normalizeJobMinimal, jobMatchesLocationFilter, titleNamesNonUS, extractLocationTokens, parseBoardFeedUrl, fetchBoardNewJobs, fetchJobDescription },
 });
