@@ -673,6 +673,23 @@
       if (found && !isCategory(found)) { found.scrollIntoView({ block: "nearest" }); realClick(optTarget(found)); await sleep(500); return finish(optText(found)); }
       if (found && !laterCategory) laterCategory = optText(found);
     }
+    // Still nothing: shorter searches, the distinctive words of each name
+    // ("East Bay", "Hayward", "Koneru"). Some lists find no long name at all
+    // (Cisco: "No Items." for every full name, 2026-11-24). A result counts
+    // only when it holds every word of one of the person's names.
+    if (!heardList && keyWords(value).length >= 2) {
+      const names = [value, ...alternates].filter((n) => n && !/^other\b/i.test(n));
+      const shorts = [...new Set(names.flatMap((n) => { const w = keyWords(n).filter((x) => !/^(state|california|national|technology|science|sciences|engineering|technical|deemed|education|foundation|to|be)$/.test(x)); const one = w.filter((x) => !/^(east|west|north|south|central)$/.test(x)); return [w.slice(-2).join(" "), w.slice(0, 2).join(" "), one[0], one.slice(-1)[0]]; })
+        .filter((t) => t && t.length >= 4 && !names.some((n) => nrm(n) === t)))].slice(0, 4);
+      for (const term of shorts) {
+        setNative(el, "");
+        await search(term);
+        if (chosen() && names.some((n) => fits(n, chosen()))) { await closeList(el); return { ok: true, picked: chosen() }; }
+        if (chosen()) { await unpick(); continue; }
+        const shown = (await results()).filter((o) => !isCategory(o) && names.some((n) => fits(n, optText(o))));
+        if (shown.length) { const best = shown.sort((a, b) => optText(a).length - optText(b).length)[0]; best.scrollIntoView({ block: "nearest" }); realClick(optTarget(best)); await sleep(500); return finish(optText(best)); }
+      }
+    }
     let picked = null;
     // Nothing matched the search: clear it and walk the list the widget offers.
     setNative(el, "");
