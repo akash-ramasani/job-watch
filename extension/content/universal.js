@@ -125,13 +125,15 @@
   const attention = new Map(); // label -> { path, note }
   let started = false;
 
-  const answerOf = (f, r, pkg) => f.kind === "file" ? pkg.resumeName : (f.values ? f.values.join("; ") : (r?.picked || f.value));
+  const answerOf = (f, r, pkg) => f.kind === "file" ? (f.file === "cover" ? pkg.coverName : pkg.resumeName) : (f.values ? f.values.join("; ") : (r?.picked || f.value));
 
   async function applyWithRetry(f, pkg) {
-    let r = await gen("apply", f.path, f, { resumeB64: pkg.resumeB64, resumeName: pkg.resumeName }).catch((e) => ({ ok: false, error: e.message }));
+    // A cover-letter upload gets the letter written for this job, not the resume.
+    const file = f.kind === "file" && f.file === "cover" ? { resumeB64: pkg.coverB64, resumeName: pkg.coverName } : { resumeB64: pkg.resumeB64, resumeName: pkg.resumeName };
+    let r = await gen("apply", f.path, f, file).catch((e) => ({ ok: false, error: e.message }));
     if (!r?.ok && r?.error === "field not on page") {
       await gen("scan", { readOptions: false }).catch(() => []);
-      r = await gen("apply", f.path, f, { resumeB64: pkg.resumeB64, resumeName: pkg.resumeName }).catch((e) => ({ ok: false, error: e.message }));
+      r = await gen("apply", f.path, f, file).catch((e) => ({ ok: false, error: e.message }));
     }
     return r || { ok: false, error: "no result" };
   }
@@ -202,7 +204,7 @@
     if (!res?.ok || !res.data) { banner(`JobWatch could not compute this application: ${res?.error || "unknown error"}`); ledger("error", { error: String(res?.error || "compute failed") }); autoReport("error", `could not compute the application: ${res?.error || "unknown error"}`); return null; }
     const pkg = res.data;
     if (pkg.alreadyApplied) { banner(`JobWatch: you already applied to this job on ${fmtDay(pkg.submittedAt)}. Not filling it again.`); stopped = true; autoReport("skipped", "already applied"); return null; }
-    pkgCache = { ...(pkgCache || {}), ...pkg, resumeB64: pkg.resumeB64 || pkgCache?.resumeB64 };
+    pkgCache = { ...(pkgCache || {}), ...pkg, resumeB64: pkg.resumeB64 || pkgCache?.resumeB64, coverB64: pkg.coverB64 || pkgCache?.coverB64, coverName: pkg.coverName || pkgCache?.coverName };
     // The posting's own title and company (Workday's API, or the job JobWatch holds) beat the page header.
     if (pkg.jobTitle) header.jobTitle = pkg.jobTitle;
     if (pkg.companyName) header.companyName = pkg.companyName;

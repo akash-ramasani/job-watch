@@ -19,7 +19,8 @@
 const { buildProfileForJob, ashbyToQuestions, domFieldsToSections, fillsFrom, locationFill, parsePlace, stateFill } = require("./ashby.cjs");
 const { applicationResume } = require("./applicationResume.cjs");
 const { nationalPhone } = require("./prepare.cjs");
-const { aiContext, answerFreeText, pickOption: aiPickOption, pool, chatWithRetry } = require("./ai-text.cjs");
+const { aiContext, answerFreeText, pickOption: aiPickOption, pool, chatWithRetry, coverLetter, coverLetterWords } = require("./ai-text.cjs");
+const { renderCoverLetterPdf, contactLine } = require("./coverPdf.cjs");
 
 /** Other official names of a school, as school lists on job sites name it:
  *  "KL University" is "Koneru Lakshmaiah Education Foundation" on Citi and
@@ -598,12 +599,29 @@ async function prepareGenericApplication(uid, deps, opts = {}) {
       }
     }
   }
+  // A required cover-letter upload ("Please attach your Cover Letter as a
+  // PDF.", Northeastern, stuck 2026-11-24): a letter written for the job,
+  // rendered as a PDF, as on Ashby.
+  let coverB64 = null;
+  const coverQ = all.find((q) => q.required && /cover letter/i.test(q.label) && (domById.get(q.path) || {}).type === "file" && !fills.some((f) => f.path === q.path));
+  if (coverQ && openai) {
+    try {
+      const coverMustInclude = coverLetterWords([...all.map((q) => `${q.label} ${q.description || ""}`), ctx.jobDescription]);
+      const text = await coverLetter({ ...ctx, coverMustInclude }, aiDeps);
+      if (text) {
+        const pdf = await renderCoverLetterPdf(text, { name: profile.fullName, contact: contactLine(profile), companyName: job.companyName, jobTitle: job.title });
+        coverB64 = pdf.toString("base64");
+        fills.push({ path: coverQ.path, kind: "file", label: coverQ.label, file: "cover", source: "ai", note: "cover letter written for this job" });
+      }
+    } catch (e) { aiNotes.set(coverQ.label, `cover letter failed: ${String(e?.message || e).slice(0, 80)}`); }
+  }
   const filledPaths = new Set(fills.map((f) => f.path));
   const review = mapped.review
     .map((r) => ({ label: r.label, note: aiNotes.get(r.label) || r.note, path: questions[mapped.answers.indexOf(r)]?.path || "" }))
     .filter((r) => !filledPaths.has(r.path) && !aiPicked.has(r.label));
   return {
     ...base,
+    ...(coverB64 ? { coverB64, coverName: `${String(profile.fullName || "Cover").replace(/\s+/g, "_")}_Cover_Letter.pdf` } : {}),
     ready: verdict.ok && review.length === 0,
     reasons: verdict.failures,
     review,

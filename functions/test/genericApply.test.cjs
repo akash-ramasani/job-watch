@@ -171,3 +171,13 @@ test("generic: a careers-site form uses the page header and the JobWatch job whe
   assert.equal(out.fills.length, 5);
   assert.equal(out.ready, true, JSON.stringify(out.reasons));
 });
+
+test("workday: a required cover-letter upload gets a letter written for the job as a PDF (Northeastern, 2026-11-24)", async () => {
+  const fields = [...FIELDS, { id: "please-attach-your-cover-letter-as-a-pdf:file#1", label: "Please attach your Cover Letter as a PDF.", type: "file", required: true, options: [] }];
+  const out = await prepareGenericApplication("uid1", { db: fakeDb(), openai, model: "test", fetch: fakeFetch([]) }, { source: "workday", applyUrl: WD_URL, domFields: fields, jobTitle: "x", companyName: "x" });
+  const f = out.fills.find((x) => x.path === "please-attach-your-cover-letter-as-a-pdf:file#1");
+  assert.equal(f?.file, "cover");
+  assert.ok(Buffer.from(out.coverB64, "base64").toString().startsWith("%PDF"));
+  assert.match(out.coverName, /Cover_Letter\.pdf$/);
+  assert.ok(!out.review.some((r) => /cover letter/i.test(r.label)));
+});
