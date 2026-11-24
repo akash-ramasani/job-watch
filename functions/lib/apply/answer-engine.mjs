@@ -1950,9 +1950,17 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     const mine = cityTerms(profile);
     // "...within commutable distance to the office or intend to relocate?"
     // (PayPal got No, 2026-11-11): willing to relocate makes it Yes.
-    if (/(intend|plan|planning|willing|open|able) to relocate|\bor relocate\b/.test(body) && norm(profile.willingToRelocate) === "yes") {
+    if (/\b(intend|plan|planning|willing|open|able)\b.{0,20}\brelocat|\bor relocat/.test(body) && norm(profile.willingToRelocate) === "yes") {
       if (!isSelect) return out([{ name, value: "Yes" }], SOURCE.PROFILE, 0.9, "willing to relocate");
-      const m = findOnly(primary, [/(plan(ning)?|intend|willing|open) to relocate|relocat/]) || matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/]);
+      // Options that say yes to relocating, never one that says no ("Yes, I am
+      // already in the city" / "Yes, I am willing to relocate" / "No, I am not
+      // able to relocate": two matched /relocat/, so No went in, Artefact 2026-11-24).
+      const opts = primary.values || primary.options || [];
+      const neg = (o) => /^no\b|\bnot\b|\bunable\b|\bcannot\b|can't|\bunwilling\b/.test(norm(o.label));
+      const reloc = opts.filter((o) => !neg(o) && /(plan(ning)?|intend|willing|open|able|happy) to relocate|\brelocat/.test(norm(o.label)));
+      const m = (reloc.length ? reloc.find((o) => /own expense|without (assistance|support)/.test(norm(o.label))) || reloc[0] : null)
+        || findOnly(primary, [/(plan(ning)?|intend|willing|open) to relocate|relocat/]) || matchOption(primary, "Yes") || findOnly(primary, [/^yes\b/]);
+      if (m && neg(m)) return unanswered("only a no-relocation option matched");
       if (m) return out([{ name, value: m.value }], SOURCE.PROFILE, 0.9, "willing to relocate");
     }
     // An option naming the person's city ("Yes, San Francisco") is the answer.
@@ -2098,11 +2106,13 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
         m = (nearJob(label) || nearJob(profile.jobLocationName) ? findOnly(primary, [/already reside|currently (live|reside)/]) : null)
           || findOnly(primary, [/^i am willing to relocate/, /^yes\b/]);
       if (!m && key === "willingToWorkHybrid" && norm(desired) === "yes") {
-        if (nearJob(profile.jobLocationName)) m = findOnly(primary, [/^yes\b/]);
+        // Two yes options ("Yes. I live locally" / "Yes. I plan to relocate",
+        // Nooks): the local one when near, else neither matched and No went in.
+        if (nearJob(profile.jobLocationName)) m = findOnly(primary, [/^yes\b/]) || findOnly(primary, [/^yes\b.{0,30}\b(live|based|reside|located|local)/]);
         // Not near this office but willing to relocate: the single option that
         // says so ("...not based in this location but willing to relocate").
         else if (norm(profile.willingToRelocate) === "yes")
-          m = findOnly(primary, [/(?<!\bnot )(?<!\bun)(willing|able|open) to relocat/, /open to relo|will relocate|plan(ning)? to relocate/]);
+          m = findOnly(primary, [/(?<!\bnot )(?<!\bun)(willing|able|open) to relocat/, /open to relo|will relocate|(?<!\bnor do i )(?<!\bnot )plan(ning)? to relocate/]);
       }
       // "Which best describes your situation?" for a relocation question: the
       // nearby option when the applicant is near, else the willing-to-relocate one.

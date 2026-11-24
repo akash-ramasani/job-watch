@@ -133,3 +133,16 @@ test("salary as ranges with currency boxes picks USD and the range for the hourl
   assert.deepEqual(ae.answerQuestion(q, { salaryExpectation: "$110,000" }, null).answers.map((a) => a.value), ["USD", "100,000 to 120,000"]);
   assert.equal(val(sel("What is your expected annual salary?", ["$80k - $100k", "$100k - $130k", "$130k - $160k", "$160k+"]), { hourlyRate: "75" }), "$130k - $160k");
 });
+
+test("located near the role or willing to relocate: the yes-relocate option, never 'No, I am not able to relocate' (Artefact, 2026-11-24)", () => {
+  const q = sel("Are you located in or near to the city of the advertised role? If not, are you willing to relocate at your own expense and what would be the timeframe to start remotely and relocate fully?",
+    ["Yes, I am already in the city where the role is located", "Yes, I am willing to relocate at my own expense", "No, I am not able to relocate"]);
+  assert.equal(val(q, { ...P, willingToRelocate: "Yes", city: "San Francisco", region: "California", jobLocationName: "135 W 26th Street, New York, NY 10001" }), "Yes, I am willing to relocate at my own expense");
+});
+
+test("'able to independently relocate' is Yes when willing; two yes options pick the local one near the office (Spring Health, Nooks)", () => {
+  const p = { ...P, willingToRelocate: "Yes", willingToWorkHybrid: "Yes", city: "San Francisco", region: "California" };
+  assert.equal(val(sel("Are you currently based in the New York City metro area, or able to independently relocate within 90 days of your start date?", ["Yes", "No"]), { ...p, jobLocationName: "New York, NY" }), "Yes");
+  const nooks = sel("Are you able to come in to the San Francisco office 3 days per week (Monday, Tuesday, Thursday)?", ["Yes. I live locally", "Yes. I plan to relocate", "No. I do not live locally nor do I plan to relocate"]);
+  assert.equal(val(nooks, { ...p, jobLocationName: "San Francisco, CA" }), "Yes. I live locally");
+});
