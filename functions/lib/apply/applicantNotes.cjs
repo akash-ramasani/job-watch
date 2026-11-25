@@ -11,7 +11,7 @@
 // src/components/SavedAnswersCard.jsx shows the same list.
 
 const APPLICANT_QUESTIONS = [
-  { key: "status", title: "Visa timeline", hint: "What the Yes/No answers can't say: your visa and its dates, for example F-1 OPT from 2026, STEM OPT eligible through August 2029." },
+  { key: "status", title: "Visa timeline", hint: "What the Yes/No answers can't say: your visa and its dates, for example on initial F-1 OPT since 2026, not yet on STEM OPT, eligible for the STEM extension through August 2029." },
   { key: "logistics", title: "Where and when you can work", hint: "Cities you would move to, office days a week, travel, evenings, weekends, early or late hours." },
   { key: "career", title: "Your career story", hint: "Why you are looking now, and the honest reason for any short job, gap or layoff." },
   { key: "ties", title: "Connections and past history", hint: "Relatives or friends at companies you apply to (or \"none\"), companies you applied to before, side work, non-compete or other agreements." },

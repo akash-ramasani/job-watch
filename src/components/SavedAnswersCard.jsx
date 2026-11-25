@@ -16,13 +16,13 @@ import { db } from "../firebase";
 
 // Prefilled once; what you write here is saved with your account.
 const DEFAULT_FACTS = {
-  status: "F-1 OPT from 2026, STEM OPT eligible, so authorized to work in the U.S. through August 2029. I will need H-1B sponsorship to keep working after that.",
+  status: "On initial F-1 OPT since 2026 (not yet on STEM OPT); eligible for the STEM OPT extension, so authorized to work in the U.S. through August 2029. I will need H-1B sponsorship to keep working after that.",
 };
 
 // Same list as functions/lib/apply/applicantNotes.cjs. Only what Personal
 // Information, Application Defaults and the resume have no box for.
 const APPLICANT_QUESTIONS = [
-  { key: "status", title: "Visa timeline", hint: "What the Yes/No answers can't say: your visa and its dates, for example F-1 OPT from 2026, STEM OPT eligible through August 2029." },
+  { key: "status", title: "Visa timeline", hint: "What the Yes/No answers can't say: your visa and its dates, for example on initial F-1 OPT since 2026, not yet on STEM OPT, eligible for the STEM extension through August 2029." },
   { key: "logistics", title: "Where and when you can work", hint: "Cities you would move to, office days a week, travel, evenings, weekends, early or late hours." },
   { key: "career", title: "Your career story", hint: "Why you are looking now, and the honest reason for any short job, gap or layoff." },
   { key: "ties", title: "Connections and past history", hint: "Relatives or friends at companies you apply to (or \"none\"), companies you applied to before, side work, non-compete or other agreements." },

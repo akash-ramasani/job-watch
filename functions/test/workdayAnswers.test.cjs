@@ -146,3 +146,39 @@ test("'able to independently relocate' is Yes when willing; two yes options pick
   const nooks = sel("Are you able to come in to the San Francisco office 3 days per week (Monday, Tuesday, Thursday)?", ["Yes. I live locally", "Yes. I plan to relocate", "No. I do not live locally nor do I plan to relocate"]);
   assert.equal(val(nooks, { ...p, jobLocationName: "San Francisco, CA" }), "Yes. I live locally");
 });
+
+test("OPT vs STEM OPT: the option for the Profile's OPT stage (Base Power, 2026-11-24)", () => {
+  const q = sel("Are you legally authorized to work in the U.S.?", [
+    "I am a U.S. citizen or permanent resident (Green Card holder)",
+    "I currently hold an H-1B visa and would need a transfer to Base",
+    "I hold a TN visa and can work for Base with a new employer petition, or I am a Canadian Citizen eligible for a TN1A visa under the USCMA",
+    "I am an Australian citizen and eligible for an E-3 visa",
+    "I currently hold OPT and will require H-1B sponsorship in the future",
+    "I currently hold STEM OPT and will require H-1B sponsorship in the future",
+    "I am authorized to work in the U.S. under CPT (Curricular Practical Training) for the duration of my academic program",
+    "I require initial H-1B sponsorship to work for Base now",
+    "I require another type of visa sponsorship to work for Base now",
+    "I am not currently authorized to work in the U.S.",
+  ]);
+  assert.equal(val(q, { ...P, visaStatus: { student: true, stemOpt: false } }), "I currently hold OPT and will require H-1B sponsorship in the future");
+  assert.equal(val(q, { ...P, visaStatus: { student: true, stemOpt: true } }), "I currently hold STEM OPT and will require H-1B sponsorship in the future");
+  // No stage saved: never a guess between the two from the rules.
+  assert.equal(val(q, P), undefined);
+});
+
+test("buildProfileForJob carries the OPT stage into visaStatus", async () => {
+  const { buildProfileForJob } = require("../lib/apply/ashby.cjs");
+  const resume = { roles: [], education: [] };
+  assert.equal(buildProfileForJob({ visaStatus: { student: true, sponsored: false }, optStage: "Initial OPT" }, resume, {}).visaStatus.stemOpt, false);
+  assert.equal(buildProfileForJob({ onStudentVisa: "Yes", optStage: "STEM OPT" }, resume, {}).visaStatus.stemOpt, true);
+  assert.equal(buildProfileForJob({ visaStatus: { student: true } }, resume, {}).visaStatus.stemOpt, undefined);
+});
+
+test("sponsorship 'If yes, details' names the OPT stage, plain OPT when none is saved", () => {
+  const q = txt("If yes, please provide further details here");
+  const ctx = { prev: { key: "requiresSponsorship", label: "Will you require sponsorship?", answers: [{ value: "Yes" }] } };
+  const details = (vs) => ae.answerQuestion(q, { ...P, visaType: "H-1B", visaStatus: vs }, null, ctx).answers.map((a) => a.value)[0];
+  assert.equal(details({ student: true, stemOpt: false }), "I am on F-1 OPT and authorized to work now. I will need H-1B sponsorship in the future.");
+  assert.equal(details({ student: true }), "I am on F-1 OPT and authorized to work now. I will need H-1B sponsorship in the future.");
+  assert.equal(details({ student: true, stemOpt: true }), "I am on F-1 STEM OPT and authorized to work now. I will need H-1B sponsorship in the future.");
+});

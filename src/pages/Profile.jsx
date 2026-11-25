@@ -100,7 +100,7 @@ export default function Profile({ user, userMeta }) {
     availability: "", hourlyRate: "", salaryExpectation: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", driversLicense: "", pronouns: "", namePronunciation: "",
-    employmentAgreements: "", priorGovernmentEmployment: "", everTerminated: "", criminalHistory: "", aiUsageDisclosure: "", currentlyH1B: "", onStudentVisa: "", outsideActivities: "", willingToTravel: "", aiConsent: "", futureRolesConsent: "", otherNames: "",
+    employmentAgreements: "", priorGovernmentEmployment: "", everTerminated: "", criminalHistory: "", aiUsageDisclosure: "", currentlyH1B: "", onStudentVisa: "", optStage: "", outsideActivities: "", willingToTravel: "", aiConsent: "", futureRolesConsent: "", otherNames: "",
     clearanceStatus: "None", clearanceLevel: "None",
     eeoGender: "Decline to self-identify",
     eeoEthnicity: "Decline to self-identify",
@@ -206,6 +206,7 @@ export default function Profile({ user, userMeta }) {
         aiUsageDisclosure: userMeta.aiUsageDisclosure || "",
         currentlyH1B: userMeta.currentlyH1B || "",
         onStudentVisa: userMeta.onStudentVisa || (userMeta.visaStatus?.student ? "Yes" : ""),
+        optStage: userMeta.optStage || "",
         outsideActivities: userMeta.outsideActivities || "",
         willingToTravel: userMeta.willingToTravel || "",
         aiConsent: userMeta.aiConsent || "",
@@ -650,6 +651,17 @@ export default function Profile({ user, userMeta }) {
                 </div>
               ))}
             </div>
+
+            {formData.onStudentVisa === "Yes" && (
+              <div>
+                <label htmlFor="optStage" className="caps-label block mb-2">Which OPT are you on now?</label>
+                <Select
+                  id="optStage" name="optStage"
+                  value={formData.optStage} onChange={handleChange}
+                  options={[{ label: "Not set", value: "" }, "Initial OPT", "STEM OPT"]}
+                />
+              </div>
+            )}
 
             <div>
               <label htmlFor="otherNames" className="caps-label block mb-2">Other names you have used (leave empty if none)</label>

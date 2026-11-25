@@ -10,7 +10,7 @@ const { applicantNotes } = require("./applicantNotes.cjs");
 const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1", "addressLine2",
   "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
-  "clearanceStatus", "clearanceLevel", "usPersonExportControl", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
+  "clearanceStatus", "clearanceLevel", "usPersonExportControl", "optStage", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
 
 const SCHEMA = {
   type: "object",

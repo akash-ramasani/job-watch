@@ -459,6 +459,9 @@ function buildProfileForJob(user, resume, job, { appliedBefore = null, now = new
   if (!user.visaStatus && (user.onStudentVisa || user.currentlyH1B)) {
     p.visaStatus = { student: /^yes/i.test(user.onStudentVisa || ""), sponsored: /^yes/i.test(user.currentlyH1B || "") };
   }
+  // Which OPT the person is on now (Profile: "Initial OPT" / "STEM OPT"), so
+  // a list that offers both picks the right one.
+  if (p.visaStatus?.student && user.optStage) p.visaStatus = { ...p.visaStatus, stemOpt: /stem/i.test(user.optStage) };
   return p;
 }
 

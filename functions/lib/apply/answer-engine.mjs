@@ -112,6 +112,12 @@ function sponsorshipOption(field, req, auth, visa) {
     return findOnly(field, [
       // Category lists ("...via a non-immigrant visa (H-1B, F-1 OPT...)"): a
       // student visa holder picks the non-immigrant-visa category.
+      // Lists that split OPT from STEM OPT ("I currently hold OPT ..." / "I
+      // currently hold STEM OPT ..."): the one for the stage the Profile names.
+      // Without a stage the OPT patterns below hit both and the AI guessed
+      // STEM OPT for someone on initial OPT (Base Power, 2026-11-24).
+      ...(visa?.student && visa.stemOpt === true ? [/\bstem opt\b/] : []),
+      ...(visa?.student && visa.stemOpt === false ? [/^(?!.*\b(stem|cpt|curricular)\b).*\bopt\b/] : []),
       ...(visa?.student ? [/non.?immigrant visa|\bf-?1\b|\bopt\b|\bcpt\b/, /new (visa|petition|h-?1b)|cap.?subject|first.?time/] : []),
       ...(visa?.sponsored ? [/transfer|change of employer|already (hold|have|on)/] : []),
       /yes.{0,60}(future|will (need|require)|eventually)/, /sponsorship.{0,25}future/,
@@ -988,7 +994,9 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
   if (key === "conditionalFollowup" && ["requiresSponsorship", "authorizedWithoutSponsorship", "currentVisaStatus"].includes(ctx.prev?.key) && /^if (yes|so)\b/.test(norm(label))) {
     const prevAns = norm(ctx.prev.answers?.[0]?.value || "");
     if (/^yes\b/.test(prevAns) && ctx.prev.key === "requiresSponsorship" && norm(profile.requiresSponsorship) === "yes") {
-      const now = profile.visaStatus?.student ? "I am on F-1 OPT (STEM OPT) and authorized to work now" : "I am authorized to work now";
+      // The OPT stage the Profile names; plain "F-1 OPT" when it names none
+      // (this said "(STEM OPT)" for everyone, 2026-11-24).
+      const now = profile.visaStatus?.student ? `I am on F-1 ${profile.visaStatus.stemOpt === true ? "STEM OPT" : "OPT"} and authorized to work now` : "I am authorized to work now";
       return out([{ name, value: `${now}. I will need ${String(profile.visaType || "H-1B").trim()} sponsorship in the future.` }], SOURCE.PROFILE, 1, "sponsorship details");
     }
   }
