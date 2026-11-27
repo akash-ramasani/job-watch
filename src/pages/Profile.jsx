@@ -100,7 +100,7 @@ export default function Profile({ user, userMeta }) {
     availability: "", hourlyRate: "", salaryExpectation: "", visaType: "H-1B", citizenshipCountry: "", startupCompanies: "", gpa: "", satScore: "", actScore: "",
     workAuthorized: "Yes", requiresSponsorship: "No", smsConsent: "No", usPersonExportControl: "Yes",
     willingToRelocate: "No", willingToWorkHybrid: "Yes", driversLicense: "", pronouns: "", namePronunciation: "",
-    employmentAgreements: "", priorGovernmentEmployment: "", everTerminated: "", criminalHistory: "", aiUsageDisclosure: "", currentlyH1B: "", onStudentVisa: "", optStage: "", outsideActivities: "", willingToTravel: "", aiConsent: "", futureRolesConsent: "", otherNames: "",
+    employmentAgreements: "", priorGovernmentEmployment: "", everTerminated: "", criminalHistory: "", aiUsageDisclosure: "", currentlyH1B: "", onStudentVisa: "", optStage: "", hsMath: "", hsLanguage: "", hsEvidence: "", outsideActivities: "", willingToTravel: "", aiConsent: "", futureRolesConsent: "", otherNames: "",
     clearanceStatus: "None", clearanceLevel: "None",
     eeoGender: "Decline to self-identify",
     eeoEthnicity: "Decline to self-identify",
@@ -207,6 +207,9 @@ export default function Profile({ user, userMeta }) {
         currentlyH1B: userMeta.currentlyH1B || "",
         onStudentVisa: userMeta.onStudentVisa || (userMeta.visaStatus?.student ? "Yes" : ""),
         optStage: userMeta.optStage || "",
+        hsMath: userMeta.hsMath || "",
+        hsLanguage: userMeta.hsLanguage || "",
+        hsEvidence: userMeta.hsEvidence || "",
         outsideActivities: userMeta.outsideActivities || "",
         willingToTravel: userMeta.willingToTravel || "",
         aiConsent: userMeta.aiConsent || "",
@@ -666,6 +669,28 @@ export default function Profile({ user, userMeta }) {
             <div>
               <label htmlFor="otherNames" className="caps-label block mb-2">Other names you have used (leave empty if none)</label>
               <input id="otherNames" name="otherNames" value={formData.otherNames} onChange={handleChange} type="text" placeholder="For example a maiden name" className="input-standard" />
+            </div>
+
+            {/* High school results: some forms (Canonical) rank each subject and
+                ask for evidence. Answered only from here, never guessed. */}
+            <div className="space-y-4">
+              <p className="caps-label">High school results</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                {[["hsMath", "Mathematics"], ["hsLanguage", "Native language"]].map(([key, label]) => (
+                  <div key={key}>
+                    <label htmlFor={key} className="text-sm text-gray-700 block mb-2">{label}</label>
+                    <Select
+                      id={key} name={key}
+                      value={formData[key]} onChange={handleChange}
+                      options={[{ label: "Not set", value: "" }, "Top 0.01% in the region", "Top 0.1% in the region", "Top 1% in the region", "Top 5% at school", "Top 10% at school", "Top 20% at school", "Top 50% at school", "Not a strength"]}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div>
+                <label htmlFor="hsEvidence" className="text-sm text-gray-700 block mb-2">Evidence, in your own words (marks, board, ranks, entrance exams)</label>
+                <textarea id="hsEvidence" name="hsEvidence" rows={3} value={formData.hsEvidence} onChange={handleChange} className="input-standard" placeholder="For example: 12th grade, Board of Intermediate Education: 96%, 75/75 in mathematics. EAMCET rank 4,512 of about 200,000." />
+              </div>
             </div>
 
             {/* Security Clearance */}

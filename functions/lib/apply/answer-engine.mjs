@@ -231,6 +231,17 @@ function classify(label, kind = "") {
   if (choice && /\b(fluent|fluency|advanced|proficient|business.level)\b.{0,30}\b(in|with)\s+(german|japanese|french|spanish|mandarin|chinese|cantonese|korean|portuguese|italian|hindi|arabic|dutch|russian|hebrew|polish|turkish|swedish|vietnamese)\b/.test(l)) return "languageProficiency";
   if (choice && (/\bare you (comfortable|ok|okay|fine|happy|alright) with (that|this|it)\??$/.test(l) || /(comfortable|willing|open|able) (to |with )?(complet\w*|tak\w*|do\w*|participat\w*) .{0,50}(take.?home|assessment|assignment|exercise|coding (test|challenge)|technical (interview|screen))/.test(l))) return "comfortableYes";
 
+  // High school results (Canonical: "How did you perform in mathematics at
+  // high school?" and "Please share your rationale or evidence for the high
+  // school performance selections above"): Profile values only, never the AI.
+  // The AI picked "Cannot recall" and wrote "I do not have high school ranking
+  // or scoring records to cite" (2026-11-26).
+  if (/high ?school|secondary school|matriculation|\ba.?levels?\b|\b(10th|12th) (grade|class|standard)\b/.test(l) && /\b(rationale|evidence|justify|justification)\b/.test(l)) return "highSchoolEvidence";
+  if (choice && /how (well )?did you (perform|do|score)\b.{0,60}\b(at|in) (high ?school|secondary school|school)\b/.test(l)) return "highSchoolSubject";
+  // "What was your bachelor's university degree result ... include the grading
+  // system" (Canonical): the GPA from Profile > Education. The AI copied the
+  // form's "enter 'no degree'" (2026-11-26).
+  if (!choice && /\b(bachelor'?s?|undergraduate|master'?s?|first|university) (university )?degree (result|grade|classification|score)\b|^what (was|is) your degree (result|classification)\b/.test(l)) return "degreeResult";
   // Scores and grades: profile values only (gpa, satScore, actScore), never guessed.
   if (/^(cumulative |undergraduate |graduate |overall )?gpa\b|\bgpa\s*\(|\(gpa\)|what (was|is) your (\w+ ){0,3}gpa|\bgpa\b.{0,30}\b(each|every|all|both)\b.{0,15}\b(degrees?|schools?)|^(please )?(provide|list|enter|share|state) your (cumulative |overall )?gpa\b|^sat score|^act score|\b(sat|act) (score|result)/.test(l)) return "testScore";
   // "<Language> Proficiency", "What is your level of English proficiency?"
@@ -290,6 +301,9 @@ function classify(label, kind = "") {
   if (choice && /which (onsite |on-site |office )?locations? (would you|do you|are you) .{0,20}(apply|prefer|like|interested)|preferred work location|which office|((^|\b(select|indicate|choose|state|give|enter) )your (work )?location preference|^what is your (work )?location preference|^location preference)(?!.{0,30}(in relation|requirement))/.test(l)) return "preferredOffice";
   if (choice && /which (metro|metropolitan|city|area|region|location|state) .{0,30}(reside|live|based|located)|based in a location where|(support|able to) hir(e|ing) in the following|only (support|able to) hir/.test(l)) return "whereLocated";
   if (/country (do|are) you (currently )?(reside|residing|living|located)|which country (do you|are you) .{0,15}(reside|live|based|located)/.test(l)) return "country";
+  // "In which country do you currently work?" (Canonical, held for the person
+  // 7 times, 2026-11-26). Not "which countries are you authorized to work in".
+  if (/\bcountry (do|are) you (currently |presently )?(work|working)\b/.test(l) && !/authori|permit|eligible|legally|citizen|visa|sponsor/.test(l)) return "country";
   if (choice && /(offered|posted|listed) (compensation|salary|pay|range) (meet|align|match|work)|compensation meet your expectations/.test(l)) return "salaryRangeOk";
   if (choice && /\bclearance\b|polygraph|ts\/sci|top secret/.test(l) && !/physically|building|customs/.test(l)) return "securityClearance";
   if (choice && /(able|willing) to be in (the )?office|in the office .{0,25}(days|monday|tuesday|wednesday|thursday|friday)/.test(l)) return "willingToWorkHybrid";
@@ -512,7 +526,9 @@ const LONGTEXT_FACT_KEYS = new Set(["salaryExpectation", "fullAddress", "availab
   // "How many years of software engineering experience do you have?" as a paragraph box: the number, not prose.
   "yearsExperience",
   // "Please initial that you acknowledge…" in a paragraph box (Samsung).
-  "initials", "driversLicense", "unrestrictedAuth", "otherNames", "relatedToEmployee"]);
+  "initials", "driversLicense", "unrestrictedAuth", "otherNames", "relatedToEmployee",
+  // The person's own high school evidence and degree result, word for word.
+  "highSchoolEvidence", "degreeResult"]);
 
 // Programming languages, as the resume spells them. Names that are also
 // ordinary words or letters (Go, R, C) count only from the skills list.
@@ -1645,6 +1661,37 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
     const m = matchOption(primary, ans) || findOnly(primary, re);
     return m ? out([{ name, value: m.value }], src, conf, why) : unanswered(`no "${ans}" option`);
   };
+  // High school results: the Profile's tier per subject (hsMath, hsLanguage)
+  // and the person's own evidence (hsEvidence). Never guessed: without them
+  // the question waits for the person.
+  if (key === "highSchoolSubject") {
+    const ll = norm(label);
+    const subj = /\bmath/.test(ll) ? "hsMath" : /native language|mother tongue|first language|\benglish\b|\blanguage\b|literature/.test(ll) ? "hsLanguage" : null;
+    const tier = subj ? String(profile[subj] || "").trim() : "";
+    if (!tier) return unanswered(`Only you can answer: high school ${subj === "hsMath" ? "mathematics" : subj ? "language" : "results"} (Profile > High school results)`);
+    const m = matchOption(primary, tier) || findOnly(primary, [new RegExp("^" + escapeRe(norm(tier)))]);
+    return m ? out([{ name, value: m.value }], SOURCE.PROFILE, 1, "Profile: high school results") : unanswered(`Only you can answer: no "${tier}" option`);
+  }
+  if (key === "highSchoolEvidence") {
+    const ev = String(profile.hsEvidence || "").trim();
+    return ev && !isSelect ? out([{ name, value: ev }], SOURCE.PROFILE, 1, "Profile: high school evidence")
+      : unanswered("Only you can answer: high school results (Profile > High school results)");
+  }
+  // Degree result with its grading system: "4.0/4.0 GPA (Bachelor of
+  // Technology in Computer Science, KL University)".
+  if (key === "degreeResult") {
+    const ll = norm(label);
+    const edu = [...(Array.isArray(profile.applicationEducation) ? profile.applicationEducation : []), ...(Array.isArray(profile.education) ? profile.education : [])];
+    const isGrad = (e) => /master|m\.?s\.?\b|m\.?sc|m\.?tech|m\.?eng|mba|ph\.?d|doctor/i.test(`${e.degree || ""}`);
+    const wantGrad = /\bmaster|\bgraduate degree|post.?grad/.test(ll) && !/bachelor|undergrad/.test(ll);
+    const e = edu.find((x) => x.gpa && (wantGrad ? isGrad(x) : !isGrad(x)));
+    if (!e || isSelect) return unanswered("Only you can answer: degree result (no GPA in Profile > Education)");
+    const g = parseFloat(e.gpa);
+    const scale = /\//.test(String(e.gpa)) ? "" : g <= 4.0 ? "/4.0" : g <= 5 ? "/5.0" : g <= 10 ? "/10" : g <= 100 ? "%" : "";
+    const what = [[e.degree, e.field].filter(Boolean).join(" in "), e.institution || e.school].filter(Boolean).join(", ");
+    const grade = scale === "%" ? `${e.gpa}%` : `${e.gpa}${scale} GPA`;
+    return out([{ name, value: what ? `${grade} (${what})` : grade }], SOURCE.PROFILE, 1, "Profile: degree GPA");
+  }
   if (key === "testScore") {
     const ll = norm(label);
     // "Undergraduate GPA" / "graduate GPA": that school's GPA (Profile >
@@ -2098,6 +2145,12 @@ function answerQuestionCore(q, profile, ai, ctx = {}) {
         : key === "metroArea" ? { synonyms: [profile.metroArea, ...(profile.metroAreas || [])].filter(Boolean).map(norm) }
         : {};
       let m = matchOption(primary, desired, opts);
+      // Countries split by state ("United States of America - California",
+      // Canonical's 314-option list): the person's own state.
+      if (!m && key === "country" && profile.region) {
+        const cs = countryVariants(desired).map(escapeRe).join("|"), rs = regionVariants(profile.region).map(escapeRe).join("|");
+        m = findOnly(primary, [new RegExp(`^(${cs})\\s*[-–—,:/(]\\s*(${rs})\\)?$`)]);
+      }
       // Semantic fallbacks for phrased option lists — still deterministic.
       // When the question names a place the applicant actually lives near
       // ("...a Lyft Office located in San Francisco..."), "I already reside

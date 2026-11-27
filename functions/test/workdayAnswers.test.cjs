@@ -182,3 +182,35 @@ test("sponsorship 'If yes, details' names the OPT stage, plain OPT when none is 
   assert.equal(details({ student: true }), "I am on F-1 OPT and authorized to work now. I will need H-1B sponsorship in the future.");
   assert.equal(details({ student: true, stemOpt: true }), "I am on F-1 STEM OPT and authorized to work now. I will need H-1B sponsorship in the future.");
 });
+
+test("high school results come from the Profile, else wait for the person; degree result is the Profile GPA (Canonical, 2026-11-26)", () => {
+  const tiers = ["Cannot recall", "Not a strength", "Top 50% at school", "Top 20% at school", "Top 10% at school", "Top 5% at school", "Top 1% in the region", "Top 0.1% in the region", "Top 0.01% in the region"];
+  const math = sel("How did you perform in mathematics at high school?", tiers);
+  const lang = sel("How did you perform in your native language at high school?", tiers);
+  const why = txt("Please share your rationale or evidence for the high school performance selections above. Make reference to  provincial, state or nation-wide scoring systems, rankings, or recognition awards, or to competitive or selective college entrance results such as SAT or ACT scores, JAMB, matriculation results, IB results etc. We recognise every system is different but we will ask you to justify your selections above.");
+  const deg = { label: "What was your bachelor's university degree result, or expected result if you have not yet graduated? Please include the grading system to help us understand your result e.g. '85 out of 100', '2:1 (Grading system: first class, 2:1, 2:2, third class)' or 'GPA score of 3.8/4.0 (predicted)'. We have hired outstanding individuals who did not attend or complete university. If this describes you, please continue with your application and enter 'no degree'.", required: true, fields: [{ name: "q", type: "input_text" }] };
+  // Nothing saved: held for the person, never "Cannot recall" or made-up prose.
+  for (const q of [math, lang, why]) {
+    const a = ae.answerQuestion(q, P, null);
+    assert.equal(a.answers.length, 0);
+    assert.match(a.note, /^Only you can answer/);
+  }
+  const hs = { ...P, hsMath: "Top 1% in the region", hsLanguage: "Top 10% at school", hsEvidence: "12th grade: 96%, 75/75 in mathematics. EAMCET rank 4,512." };
+  assert.equal(val(math, hs), "Top 1% in the region");
+  assert.equal(val(lang, hs), "Top 10% at school");
+  assert.equal(val(why, hs), "12th grade: 96%, 75/75 in mathematics. EAMCET rank 4,512.");
+  const edu = { ...P, applicationEducation: [
+    { institution: "California State University, East Bay", degree: "Master of Science", field: "Computer Science", gpa: "3.9" },
+    { institution: "KL University", degree: "Bachelor of Technology", field: "Computer Science and Artificial Intelligence", gpa: "4.0" }] };
+  assert.equal(val(deg, edu), "4.0/4.0 GPA (Bachelor of Technology in Computer Science and Artificial Intelligence, KL University)");
+  assert.match(ae.answerQuestion(deg, { ...P, education: [] }, null).note, /^Only you can answer/);
+});
+
+test("'In which country do you currently work?' with countries split by state picks the person's state (Canonical, 2026-11-26)", () => {
+  const q = sel("In which country do you currently work?", ["Afghanistan", "United Kingdom", "United States of America - Alabama", "United States of America - California", "United States of America - New York", "United States Minor Outlying Islands"]);
+  assert.equal(ae.classifyQuestion(q), "country");
+  assert.equal(val(q, { ...P, country: "United States", region: "California" }), "United States of America - California");
+  assert.equal(val(q, { ...P, country: "United States", region: "CA" }), "United States of America - California");
+  assert.equal(val(sel("In which country do you currently work?", ["India", "United States", "Canada"]), { ...P, country: "United States" }), "United States");
+  assert.notEqual(ae.classifyQuestion(sel("Which country are you legally authorized to work in?", ["United States", "Canada"])), "country");
+});

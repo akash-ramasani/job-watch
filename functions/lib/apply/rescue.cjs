@@ -10,7 +10,7 @@ const { applicantNotes } = require("./applicantNotes.cjs");
 const PROFILE_KEYS = ["startupCompanies", "firstName", "lastName", "fullName", "preferredName", "email", "phone", "city", "region", "postalCode", "country", "addressLine1", "addressLine2",
   "linkedin", "github", "portfolio", "website", "university", "workAuthorized", "requiresSponsorship", "visaType", "citizenshipCountry", "hourlyRate", "salaryExpectation",
   "availability", "willingToRelocate", "willingToWorkHybrid", "remoteLocation", "pronouns", "eeoGender", "eeoEthnicity", "eeoVeteran", "eeoDisability",
-  "clearanceStatus", "clearanceLevel", "usPersonExportControl", "optStage", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
+  "clearanceStatus", "clearanceLevel", "usPersonExportControl", "optStage", "hsMath", "hsLanguage", "hsEvidence", "smsConsent", "employmentAgreements", "heardAboutUs", "noticePeriod"];
 
 const SCHEMA = {
   type: "object",
@@ -49,7 +49,7 @@ Rules:
 - The profile's "inTheirOwnWords" is the applicant's own answer to status, logistics, pay, history, connections, stories and motivation questions: use it first.
 - Answer only with facts from the profile and resume. Never invent experience, credentials, numbers or identity details.
 - A required question about experience, skills or background the resume does not show still gets an honest answer: in a text box, one or two plain first-person sentences that say so (for example "I have not done that myself.") and name the closest related work the resume shows; a Yes/No or option question gets the truthful option (No, None, Less than 1 year).
-- Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number or a reference's contact.
+- Use "cannot" (with no steps) only when the answer is a private fact the profile does not have and that cannot be answered honestly without it, such as a GPA, a salary number, an ID number or a reference's contact. High school grades, ranks and exam results are such facts: use the profile's hsMath, hsLanguage and hsEvidence word for word, else "cannot"; never pick "Cannot recall" or write that you have no records.
 - A signature, "Application Date Signed", "Date", "Today's Date" or similar signing date is today's date (given below), in the format the field asks for (MM/DD/YYYY when it does not say). An electronic signature or "type your full name" box is the applicant's full legal name.
 - A follow-up that asks for details only if an earlier answer applies ("Please provide details...", "If yes, explain") gets "N/A" when the form shows that earlier answer as No or None. The HTML may open with a comment giving the question just before this one and its answer: that is the question the follow-up belongs to. Explain only that question (not sponsorship or anything else from the profile); "If yes" after a No, or "If no" after a Yes, is "N/A".
 - Never put a security or verification code from an email into a question field.
